@@ -31,7 +31,7 @@ A free, open-source Adobe Premiere Pro plugin that generates stylized captions d
 ### Installation
 
 ```bash
-git clone https://github.com/<!-- YOUR_USERNAME -->/Better-Captions-Premiere.git
+git clone https://github.com/Paquette1111/Better-Captions-Premiere.git
 cd Better-Captions-Premiere
 npm install
 cd webview-ui && npm install && cd ..
