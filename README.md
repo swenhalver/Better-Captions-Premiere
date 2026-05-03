@@ -1,6 +1,6 @@
 # Better Captions for Premiere Pro
 
-<img src="https://pub-a03d6cd40ca348a4bd05d28b925aa8ed.r2.dev/Extension-Screenshot.png" alt="Better Captions for Premiere Pro" width="600" />
+<img src="https://pub-a03d6cd40ca348a4bd05d28b925aa8ed.r2.dev/Extension-Screenshot.png" alt="Better Captions for Premiere Pro" width="300" />
 
 A free, open-source Adobe Premiere Pro plugin that generates stylized captions directly inside your timeline — no subscriptions, no watermarks, no third-party services.
 
