@@ -72,7 +72,12 @@ export function validateCaptionPatch(value:unknown,current:CaptionItem[]):Captio
     object(item);if(typeof item.id!=='string'||!/^[\w-]{1,160}$/.test(item.id))throw new Error('Invalid caption identity.');
     if(typeof item.text!=='string'||item.text.length>10000)throw new Error('Invalid caption text.');
     if(!Array.isArray(item.words)||item.words.length>300)throw new Error('Invalid word list.');
-    const original=existing.get(item.id),next={...original,id:item.id,text:item.text,startTime:item.startTime,endTime:item.endTime,words:item.words.map(w=>{object(w);if(typeof w.text!=='string'||w.text.length>500)throw new Error('Invalid word text.');return {text:w.text,startTime:w.startTime,endTime:w.endTime,isActive:false};})} as CaptionItem;
+    const original=existing.get(item.id),next={...original,id:item.id,text:item.text,startTime:item.startTime,endTime:item.endTime,words:item.words.map(w=>{
+      object(w);if(typeof w.text!=='string'||w.text.length>500)throw new Error('Invalid word text.');
+      const endOfSentence=w.endOfSentence;
+      if(endOfSentence!==undefined)bool(endOfSentence);
+      return {text:w.text,startTime:w.startTime,endTime:w.endTime,isActive:false,...(typeof endOfSentence==='boolean'?{endOfSentence}:{})};
+    })} as CaptionItem;
     if(item.position!==undefined){object(item.position);number(item.position.x,0,1);number(item.position.y,0,1);next.position={x:item.position.x as number,y:item.position.y as number};}
     next.text=next.words.map(word=>word.text).join(' ');
     return next;
