@@ -594,7 +594,9 @@
           <TranscriptPreview frameRate={session.frameRate} {selectedWord} onSelectWord={(index) => selectedWord = index} sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxWords={session.style.maxWords} {selectedId} onSelect={(id) => { selectedId = id; selectedWord = 0; }} onSeek={seekCaption} onMaxWordsChange={(maxWords) => handleStyle({ maxWords })} onUpdate={updateCaptions} onShowInPremiere={seekCaption} isDemo={api.isDemo} />
         </div>
         <div id="workspace-panel-style" role="tabpanel" aria-labelledby="workspace-tab-style" tabindex="0" hidden={activeTab !== "style"}>
-          <StylePresets style={session.style} animation={session.animation} load={api.loadStylePresets} save={api.saveStylePresets} onApply={applyStylePreset} isDemo={api.isDemo} disabled={timelineBusy || isRefreshing || isSyncing || session.isLoading} />
+          {#key session.sequenceId}
+            <StylePresets style={session.style} animation={session.animation} load={api.loadStylePresets} save={api.saveStylePresets} onApply={applyStylePreset} isDemo={api.isDemo} disabled={timelineBusy || isRefreshing || isSyncing || session.isLoading} />
+          {/key}
           <div class="caption-app__section-intro"><h2>{selected ? `Caption ${session.captions.indexOf(selected)+1}` : 'Word appearance'}</h2>{#if selected}<p>{selected.text}</p>{/if}</div>
           <div class="caption-app__states" role="group" aria-label="Word appearance state">{#each [{value:'spoken',label:'Past words'},{value:'current',label:'Current word'},{value:'upcoming',label:'Next words'}] as state}<button class="caption-button" aria-pressed={wordState===state.value} onclick={()=>changeWordState(state.value)}>{state.label}</button>{/each}</div>
           {#if selected}
