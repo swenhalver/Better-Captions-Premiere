@@ -82,8 +82,11 @@ test('migrates the legacy source symlink itself, preserving its permanent source
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.destination, 'better-captions-install.json'))).version, currentVersion);
   assert.deepEqual(snapshot(f.old), before); assert.equal(fs.readFileSync(path.join(f.extensions, 'unrelated-extension/keep.txt'), 'utf8'), 'untouched');
   assert.equal(f.backups().length, 1); assert.ok(fs.lstatSync(f.backups()[0]).isSymbolicLink()); assert.equal(fs.readlinkSync(f.backups()[0]), f.old);
-  assert.equal(fs.statSync(path.dirname(f.backups()[0])).mode & 0o777, 0o700);
-  assert.equal(fs.statSync(path.join(f.destination, 'better-captions-install.json')).mode & 0o777, 0o600);
+  // The VM models macOS installation, but mode bits belong to the real host filesystem.
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(path.dirname(f.backups()[0])).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(path.join(f.destination, 'better-captions-install.json')).mode & 0o777, 0o600);
+  }
   assert.ok(!f.backups()[0].startsWith(f.extensions)); assert.deepEqual(f.stages(), []);
   assert.equal(f.calls.filter(call => call.exe === upia).length, 1);
   assert.ok(f.calls.every(call => call.options.timeout === 120000 && !call.options.shell));
