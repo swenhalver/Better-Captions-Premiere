@@ -10,7 +10,7 @@ export interface AgentHandler {
   patchAnimation?:(patch:Partial<AnimationConfig>)=>unknown|Promise<unknown>;
 }
 const styleNumbers:Record<string,[number,number]>={fontSize:[8,400],fontWeight:[100,1000],strokeOpacity:[0,1],strokeWidth:[0,30],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],backgroundOpacity:[0,1],backgroundPadding:[0,100],backgroundRadius:[0,200],positionX:[0,1],positionY:[0,1],maxWidth:[.1,1],lineHeight:[.6,3],maxWords:[1,30]};
-const stateNumbers:Record<string,[number,number]>={fontWeight:[100,1000],sizeScale:[.4,3],opacity:[0,1],bubbleOpacity:[0,1],padding:[0,100],radius:[0,200]};
+const stateNumbers:Record<string,[number,number]>={fontSize:[8,1200],letterSpacing:[-10,40],strokeWidth:[0,30],strokeOpacity:[0,1],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],fontWeight:[100,1000],sizeScale:[.4,3],opacity:[0,1],bubbleOpacity:[0,1],padding:[0,100],radius:[0,200]};
 function object(value:unknown):asserts value is Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Expected a JSON object.');for(const key of Object.keys(value))if(['__proto__','prototype','constructor'].includes(key))throw new Error('Invalid property name.');}
 function number(value:unknown,min:number,max:number){if(typeof value!=='number'||!Number.isFinite(value)||value<min||value>max)throw new Error(`Expected a finite number between ${min} and ${max}.`);}
 function font(value:unknown){if(typeof value!=='string'||value.length>160||/[\u0000-\u001f]/.test(value))throw new Error('Invalid font family.');}
@@ -19,8 +19,8 @@ function bool(value:unknown){if(typeof value!=='boolean')throw new Error('Expect
 export function validateStylePatch(value:unknown):Partial<StyleConfig>{
   object(value);
   for(const [key,v] of Object.entries(value)){
-    if(key==='activeWord'||key==='spokenWord'){
-      object(v);for(const [k,n] of Object.entries(v)){if(k in stateNumbers)number(n,...stateNumbers[k]);else if(k==='fontFamily')font(n);else if(k==='color'||k==='bubbleColor')color(n);else if(k==='bubble')bool(n);else throw new Error('Unknown word style: '+k);}
+    if(key==='activeWord'||key==='spokenWord'||key==='upcomingWord'){
+      object(v);for(const [k,n] of Object.entries(v)){if(k in stateNumbers)number(n,...stateNumbers[k]);else if(k==='fontFamily')font(n);else if(['color','bubbleColor','strokeColor','shadowColor'].includes(k))color(n);else if(['bubble','italic','strokeEnabled','shadowEnabled'].includes(k))bool(n);else if(k==='textTransform'){if(!['none','uppercase','lowercase'].includes(String(n)))throw new Error('Invalid word text transform.');}else throw new Error('Unknown word style: '+k);}
     }else if(key in styleNumbers)number(v,...styleNumbers[key]);
     else if(key==='fontFamily')font(v);
     else if(['textColor','strokeColor','shadowColor','backgroundColor'].includes(key))color(v);

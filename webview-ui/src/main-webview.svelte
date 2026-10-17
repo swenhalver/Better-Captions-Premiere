@@ -8,6 +8,8 @@
   import { retime, validateCaptions } from "./lib/transcript/edit";
   import { captionLinks, createCaptionSelectionSync, panelVisibilityMessage, startProgramMonitorWatcher, type CaptionLink, type MotionWatchContext, type ReflowStatus } from "./lib/program-monitor";
   import type { TranscriptJSON, SequenceInfo, SessionState, StyleConfig, CaptionItem, AnimationConfig } from "./lib/types";
+  import TextAreaControls from "./components/TextAreaControls.svelte";
+  import WordSample from "./components/WordSample.svelte";
   import PanelTabs from "./components/PanelTabs.svelte";
   import SequenceStatus from "./components/SequenceStatus.svelte";
   import TranscriptPreview from "./components/TranscriptPreview.svelte";
@@ -19,6 +21,7 @@
   const { api } = initWebview(webviewAPI);
   let activeTab = $state("transcript");
   let wordState = $state("current");
+  let selectedWord = $state(0);
   let contentEl: HTMLDivElement | undefined = $state();
   async function changeWorkspace(value: string) { activeTab = value; await tick(); if (contentEl) contentEl.scrollTop = 0; }
   async function changeWordState(value: string) { wordState = value; await tick(); if (contentEl) contentEl.scrollTop = 0; }
@@ -160,7 +163,7 @@
     if (!session) throw new Error("No active caption session.");
     const before = outputSignature(session);
     const updates = validateStylePatch(patch);
-    sessionManager.updateStyle({ ...updates, ...(updates.activeWord ? { activeWord: { ...session.style.activeWord, ...updates.activeWord } } : {}), ...(updates.spokenWord ? { spokenWord: { ...session.style.spokenWord, ...updates.spokenWord } } : {}) });
+    sessionManager.updateStyle({ ...updates, ...(updates.activeWord ? { activeWord: { ...session.style.activeWord, ...updates.activeWord } } : {}), ...(updates.spokenWord ? { spokenWord: { ...session.style.spokenWord, ...updates.spokenWord } } : {}), ...(updates.upcomingWord ? { upcomingWord: { ...session.style.upcomingWord, ...updates.upcomingWord } } : {}) });
     if (before !== outputSignature(session)) { editedSequences[session.sequenceId] = true; watchRevisionChanged(); }
   }
   function handleStyle(patch: Partial<StyleConfig>) { try { updateStyle(patch); } catch (problem) { error = message(problem); } }
@@ -202,7 +205,7 @@
     if (!session || timelineBusy) return;
     const caption = session.captions.find((item) => Math.abs(item.startTime - time) < .0001 || time >= item.startTime && time < item.endTime);
     const word = caption?.words[0];
-    const target = word ? (word.startTime + word.endTime) / 2 : time;
+    const target = word && Math.abs(time-caption!.startTime)<.0001 ? (word.startTime + word.endTime) / 2 : time;
     sessionManager.setCurrentTime(target);
     if (caption) selectedId = caption.id;
     if (api.isDemo) return;
@@ -214,6 +217,7 @@
       if (!caption?.clipNodeId) { await showInPremiere(target); return; }
       const selection = api as typeof api & { selectCaptionClip?: (caption: CaptionItem, sequenceId: string) => Promise<unknown> };
       if (!selection.selectCaptionClip) throw new Error("Update Better Captions to select the caption in the Program Monitor.");
+      await api.showInPremiere(target,session.sequenceId);
       const result = await selection.selectCaptionClip(plain(caption), session.sequenceId) as { time?: number } | undefined;
       if (sessionManager.current?.sequenceId === session.sequenceId && selectionRevision === request) {
         nativeSelection = { sequenceId: session.sequenceId, captionId: caption.id, clipNodeId: caption.clipNodeId };
@@ -226,6 +230,15 @@
     const session = sessionManager.current;
     const selected = session?.captions.find((caption) => caption.id === selectedId);
     if (selected?.clipNodeId) void seekCaption(selected.startTime);
+  }
+  async function areaChanged() {
+    const session = sessionManager.current;
+    const caption = session?.captions.find(item=>item.id===selectedId);
+    if (!api.isDemo && session && caption?.clipNodeId) {
+      await api.selectCaptionClip(plain(caption),session.sequenceId);
+      if (sessionManager.current?.sequenceId===session.sequenceId && selectedId===caption.id) nativeSelection={sequenceId:session.sequenceId,captionId:caption.id,clipNodeId:caption.clipNodeId};
+    }
+    watchRevisionChanged();
   }
   async function showInPremiere(time: number) {
     const id = sessionManager.current?.sequenceId;
@@ -358,6 +371,7 @@
       accept(selection, context) {
         if (selection.captionId === null || !selection.clipNodeId) { nativeSelection = null; return; }
         nativeSelection = { sequenceId: context.sequenceId, captionId: selection.captionId, clipNodeId: selection.clipNodeId };
+        if (selectedId !== selection.captionId) selectedWord = 0;
         selectedId = selection.captionId;
         if (sessionManager.current?.currentTime !== selection.time) sessionManager.setCurrentTime(selection.time);
       },
@@ -403,27 +417,27 @@
     {@const session = sessionManager.current}
     {@const selected = session.captions.find((caption) => caption.id === selectedId)}
     {@const position = locationScope === "caption" && selected?.position ? selected.position : { x: session.style.positionX, y: session.style.positionY }}
-    <PanelTabs name="workspace" label="Caption workspace" value={activeTab} options={[{value:"transcript",label:"Transcript"},{value:"style",label:"Style"},{value:"motion",label:"Motion"}]} onChange={changeWorkspace} />
+    <PanelTabs name="workspace" label="Caption workspace" value={activeTab} options={[{value:"transcript",label:"Transcript"},{value:"style",label:"Styling"}]} onChange={changeWorkspace} />
     <div class="caption-app__content" bind:this={contentEl}>
       <fieldset class="caption-app__editor" disabled={timelineBusy || session.isLoading} aria-label="Caption editing controls">
         <div id="workspace-panel-transcript" role="tabpanel" aria-labelledby="workspace-tab-transcript" tabindex="0" hidden={activeTab !== "transcript"}>
           {#if session.isLoading}<div class="caption-app__loading" role="status"><p>Transcribing in Premiere…</p><p class="caption-help">Timed words will appear here when Premiere finishes.</p><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div></div>{/if}
           {#if transcriptionBackup && transcriptionBackup.sequenceId === session.sequenceId}<div class="caption-app__backup"><button class="caption-button" onclick={restoreTranscription} disabled={session.captions.some((caption) => caption.clipNodeId)}>Restore previous transcription</button></div>{/if}
-          <TranscriptPreview sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxWords={session.style.maxWords} {selectedId} onSelect={(id) => selectedId = id} onSeek={seekCaption} onMaxWordsChange={(maxWords) => handleStyle({ maxWords })} onUpdate={updateCaptions} onShowInPremiere={seekCaption} isDemo={api.isDemo} />
+          <TranscriptPreview frameRate={session.frameRate} {selectedWord} onSelectWord={(index) => selectedWord = index} sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxWords={session.style.maxWords} {selectedId} onSelect={(id) => { selectedId = id; selectedWord = 0; }} onSeek={seekCaption} onMaxWordsChange={(maxWords) => handleStyle({ maxWords })} onUpdate={updateCaptions} onShowInPremiere={seekCaption} isDemo={api.isDemo} />
         </div>
         <div id="workspace-panel-style" role="tabpanel" aria-labelledby="workspace-tab-style" tabindex="0" hidden={activeTab !== "style"}>
-          <div class="caption-app__section-intro"><h2>Word appearance</h2></div>
-          <PanelTabs name="appearance" label="Word state" value={wordState} compact options={[{value:"upcoming",label:"Upcoming"},{value:"current",label:"Current"},{value:"spoken",label:"Spoken"}]} onChange={changeWordState} />
-          <div id="appearance-panel-upcoming" role="tabpanel" aria-labelledby="appearance-tab-upcoming" tabindex="0" hidden={wordState !== "upcoming"}><StylePanel style={session.style} {fonts} onUpdate={handleStyle} section="base" /></div>
-          <div id="appearance-panel-current" role="tabpanel" aria-labelledby="appearance-tab-current" tabindex="0" hidden={wordState !== "current"}><WordStates style={session.style} {fonts} onUpdate={handleStyle} stateKey="activeWord" /></div>
-          <div id="appearance-panel-spoken" role="tabpanel" aria-labelledby="appearance-tab-spoken" tabindex="0" hidden={wordState !== "spoken"}><WordStates style={session.style} {fonts} onUpdate={handleStyle} stateKey="spokenWord" /></div>
-          <StylePanel style={session.style} {fonts} onUpdate={handleStyle} section="effects" />
-        </div>
-        <div id="workspace-panel-motion" role="tabpanel" aria-labelledby="workspace-tab-motion" tabindex="0" hidden={activeTab !== "motion"}>
-          <div class="caption-app__section-intro"><h2>Motion & placement</h2><p>Captions appear on the main Program Monitor.</p></div>
+          <div class="caption-app__section-intro"><h2>{selected ? `Caption ${session.captions.indexOf(selected)+1}` : 'Word appearance'}</h2>{#if selected}<p>{selected.text}</p>{/if}</div>
+          <div class="caption-app__states" role="group" aria-label="Word appearance state">{#each [{value:'spoken',label:'Past words'},{value:'current',label:'Current word'},{value:'upcoming',label:'Next words'}] as state}<button class="caption-button" aria-pressed={wordState===state.value} onclick={()=>changeWordState(state.value)}>{state.label}</button>{/each}</div>
+          {#if selected}
+            <WordSample caption={selected} style={session.style} {selectedWord} onSelect={(index)=>{selectedWord=index;void seekCaption(selected.words[index].startTime);}}/>
+            <TextAreaControls caption={selected} sequenceId={session.sequenceId} frameRate={session.frameRate} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'} isDemo={api.isDemo} read={api.readCaptionArea} edit={api.editCaptionArea} onSeek={(time)=>{sessionManager.setCurrentTime(time);if(!api.isDemo)void showInPremiere(time);}} onBusy={setTimelineBusy} onChanged={areaChanged}/>
+          {/if}
+          <p class="caption-help caption-app__state-scope">Editing {wordState==='spoken'?'past words':wordState==='current'?'the current word':'next words'} · all captions</p>
+          <WordStates style={session.style} {fonts} onUpdate={handleStyle} stateKey={wordState==='spoken'?'spokenWord':wordState==='current'?'activeWord':'upcomingWord'} />
+          <StylePanel style={session.style} {fonts} onUpdate={handleStyle} section="base" />
           <AnimationPanel animation={session.animation} onUpdate={handleAnimation} />
-          <details class="caption-section" open>
-            <summary class="caption-section__heading">Frame position</summary>
+          <details class="caption-section">
+            <summary class="caption-section__heading">Initial placement</summary>
             <div class="caption-section__body">
               <div class="caption-controls">
                 <label class="caption-field caption-field--wide"><span>Apply position to</span><select bind:value={locationScope}><option value="global">All captions · default</option><option value="caption" disabled={!selected}>Selected caption</option></select></label>
@@ -432,7 +446,7 @@
                 {#if locationScope === "caption" && selected?.position}<button class="caption-button caption-field--wide" onclick={() => positionCaption(null, "caption")}>Reset to default position</button>{/if}
               </div>
               <button class="caption-button" onclick={moveSelectedCaption} disabled={api.isDemo || timelineBusy || !selected?.clipNodeId}>Move / resize in Program Monitor</button>
-              <details class="caption-disclosure"><summary>Resize & keyframe in Premiere</summary><p>Use native Motion controls. Width reflows text at the same font size; height is independent. Use the Position, Scale (height) and Scale Width stopwatches for keyframes.</p></details>
+              <p class="caption-help">Initial placement affects new caption media. For applied clips, use Position & size or drag handles in the Program Monitor.</p>
               {#if selected?.layoutOverflow}<p class="caption-message caption-message--error" role="status">Text exceeds this box. Enlarge it or split the caption.</p>{/if}
               {#if reflowStatus.message && (reflowStatus.phase === "working" || reflowStatus.phase === "error")}<p class="caption-message" class:caption-message--error={reflowStatus.phase === "error"} role={reflowStatus.phase === "error" ? "alert" : "status"}>{reflowStatus.message}</p>{/if}
             </div>
@@ -450,6 +464,10 @@
   .caption-app { display: flex; flex-direction: column; block-size: 100%; overflow: hidden; container-type: inline-size; }
   .caption-app__output { flex-shrink: 0; border-block-start: 1px solid var(--color-panel-border); background: var(--color-surface); max-block-size: 40%; overflow-y: auto; }
   .caption-app__editor { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
+  .caption-app__states { display:flex; gap:.4rem; padding:var(--caption-space-m) var(--caption-space-l); }
+  .caption-app__states button { flex:1; min-inline-size:0; padding-inline:.3rem; font-size:var(--caption-type-xs); }
+  .caption-app__states [aria-pressed=true] { background:var(--color-selection); border-color:var(--color-accent); color:var(--color-accent); }
+  .caption-app__state-scope { padding:var(--caption-space-m) var(--caption-space-l); }
   .caption-app__content { flex: 1; min-block-size: 0; overflow-y: auto; }
   .caption-app__error { display: flex; align-items: flex-start; gap: var(--caption-space-s); flex-shrink: 0; max-block-size: 8rem; overflow-y: auto; padding: var(--caption-space-s) var(--caption-space-l); background: #3a2927; color: var(--color-error); font-size: var(--caption-type-s); }
   .caption-app__error p { flex: 1; overflow-wrap: anywhere; }

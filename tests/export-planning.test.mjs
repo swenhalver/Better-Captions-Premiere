@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url), ts = require('../webview-ui/node
 const root = path.resolve(import.meta.dirname, '..');
 function loadTypeScript(file, replacements = {}, context = {}) {
   const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  const exports = {}, sandbox = { exports, console, setTimeout, ...context, require: name => replacements[name] ?? loadTypeScript(path.resolve(path.dirname(file), name + '.ts'), replacements, context) };
+  const exports = {}, sandbox = { exports, console, setTimeout, ...context, require: name => replacements[name] ?? loadTypeScript(path.resolve(path.dirname(file), name.endsWith('.ts') ? name : name + '.ts'), replacements, context) };
   vm.runInNewContext(code, sandbox, { filename: file }); return exports;
 }
 const planner = loadTypeScript(path.join(root, 'webview-ui/src/lib/export/exporter.ts'), { '../canvas/engine': { CaptionRenderer: class {} } });

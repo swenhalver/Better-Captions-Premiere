@@ -16,7 +16,7 @@ Transcribe in Premiere, correct timed words, group sentences, style captions and
 
 ## Operating Context
 
-One visible UXP panel and an invisible CEP renderer. The Svelte browser preview uses synthetic data; native actions require Premiere. The user subsequently authorized opening and using Premiere on this Windows PC and requested Windows/macOS support. Do not rearrange native workspaces. Premiere 26.5.2 now opens normally after the user resolved activation. Native paths, dependencies and installation now support both systems; Adobe's local UXP installation still needs confirmation before live Windows validation.
+One visible UXP panel and an invisible CEP renderer. The Svelte browser preview uses synthetic data; native actions require Premiere. The user subsequently authorized opening and using Premiere on this Windows PC and requested Windows/macOS support. Do not rearrange native workspaces. Premiere 26.5.2 now opens normally after the user resolved activation. Native paths, dependencies and installation now support both systems; Adobe's Windows installer returned -903, so installation and new host behavior have not been verified in the current native host. macOS runtime verification also remains outstanding.
 
 ## Capabilities and Constraints
 
@@ -25,7 +25,7 @@ One visible UXP panel and an invisible CEP renderer. The Svelte browser preview 
 - Captions appear on Premiere’s main Program Monitor. No plugin canvas, fake monitor or helper window.
 - Native Motion controls handle position and independent width/height. Width reflows without changing font size. Position and dimensions can be keyframed. Mac/Premiere runtime verification remains required.
 - Preserve agent hooks, style allowlists, protocol, identity/sequence checks, private file bridge, serialized bounded work, heartbeat, ownership and watcher pause/visibility protections. No network command endpoints, arbitrary shell/eval hooks or remote dependencies.
-- Design scope: Svelte controls, hierarchy, layout, tokens and accessibility, extended by the user's explicit request to port native installation, storage and tools to Windows/macOS. Preserve rendering, roll-up logic and session schemas; another checkout is adding roll-up/fade features.
+- Approved implementation scope (2026-10-17): replace the production interface with Transcript and Styling tabs; add the single-lane, non-overlapping word editor, independent past/current/next typography and effects, and native text-area keyframe controls. The user explicitly requested a functional Mac-compatible build and GitHub upload. Extend the renderer and optional style fields as needed while preserving existing saved-session appearance, roll-up behavior, clip identity and security protections.
 
 ## Brand Commitments
 

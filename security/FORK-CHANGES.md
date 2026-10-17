@@ -14,3 +14,9 @@ The upstream audit in `SECURITY-AUDIT.md` describes the pinned original source, 
 Threat boundary: another process already running as the same OS user (or a system administrator) can access that user's Premiere project and local agent state. These local hooks do not give an unauthenticated remote caller access to Premiere. The installed CEP panel necessarily has local filesystem/process capability for rendering, so keep its source and install folder under the user's control.
 
 Live mutation failures and recovery limits are explicitly reported. Tests simulate rollback failures; normal insertion/relink and collision protection were also tested in Premiere. No audit can guarantee the absence of every defect.
+
+## 0.5.0 native text-area controls
+
+The visible UXP panel adds only allowlisted `readCaptionArea` and `editCaptionArea` methods. The background service exposes a read-only `readCaptionAreaDescriptor` operation to resolve an existing caption link, with sequence, project, clip, media, track-lock and speed checks. Native writes use the existing bounded UXP serialization lane, captured clip timing/media identity, a complete Motion-state signature, a second identity/value check after asynchronous preparation, one Premiere transaction and readback verification. The request contains bounded pixel values and an enumerated edit operation; it does not accept code, file paths, executable names or arbitrary native methods.
+
+Word-style additions use the existing strict style validator. Optional state fields preserve old sessions. No network endpoints, remote fonts or new executable dependencies were added.

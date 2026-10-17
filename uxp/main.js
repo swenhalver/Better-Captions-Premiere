@@ -9,7 +9,7 @@ const HOST_METHODS = new Set([
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession',
   'transcribeSequence', 'getFonts', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'getColorScheme',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'editCaptionArea', 'getColorScheme',
 ]);
 const AGENT_METHODS = new Set(['getState', 'patchStyle', 'patchAnimation', 'setCaptions', 'refresh', 'apply']);
 const ID = /^(?:ui|host)-[a-zA-Z0-9_-]{1,100}$/;

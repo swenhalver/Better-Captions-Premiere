@@ -18,7 +18,7 @@ Each phrase is rendered as a transparent **ProRes 4444 text-area clip** at the s
 
 ## Requirements
 
-The installer supports **Windows and macOS (Apple Silicon or Intel), with Premiere Pro 26.3 or newer**. The same JavaScript plugin and platform-neutral package are used on both systems. See the [verification notes](docs/interface-review.md) for the current native installation status.
+The installer supports **Windows and macOS (Apple Silicon or Intel), with Premiere Pro 26.3 or newer**. The same JavaScript plugin and platform-neutral package are used on both systems. Download the complete [0.5.0 Windows/macOS package](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.5.0). See the [release verification notes](docs/release-0.5.0.md) for tested behavior and remaining native-runtime checks.
 
 - Node.js 24 LTS for building/development and the optional agent CLI.
 - Local FFmpeg and FFprobe. The plugin finds WinGet's user links on Windows, Apple Silicon/Intel Homebrew locations on macOS, and absolute directories in `PATH`.
@@ -50,10 +50,10 @@ Private queue and agent files live under `%APPDATA%\Better Captions` on Windows 
 1. Open **Window > UXP Plugins > Better Captions**. This is the only visible plugin panel.
 2. Open a saved sequence, then **Refresh sequence** in the caption editor.
 3. Click **Transcribe in Premiere**. The main plugin calls Adobe's native `Transcript.transcribeClipProjectItem` API for enabled audio clips missing a transcript, using Premiere's language preferences. Existing native transcripts are reused.
-4. Review/correct the transcript, word timing, styles, and frame position in the panel.
+4. In **Transcript**, select a sentence to open its single word lane. Select a word and drag an edge, use the arrow keys, or edit the seconds. Boundaries snap to frames and stop before they overlap another word; connected edges move together. In **Styling**, choose **Past words**, **Current word**, or **Next words** to edit each state’s typography, color, opacity, case, tracking, stroke, shadow and bubble.
 5. Choose an unlocked video track above the footage, with its output enabled, and click **Show captions in Program Monitor**.
 6. Choose a caption and click **Move / resize in Program Monitor**. Use Premiere's Selection tool and double-click the caption in the Program Monitor to show its native handles, or select **Motion** in Effect Controls. Drag the area to move it or drag its handles to resize it. Uniform Scale is disabled so width and height are independent.
-7. In Effect Controls, enable the Motion stopwatches for **Position**, **Scale Height**, and **Scale Width** as needed. Premiere may label the height control **Scale**. Their keyframes remain on the caption clip.
+7. In **Styling → Position & size**, enable a stopwatch for **Position**, **Width**, or **Height**, move the caption-frame playhead, then edit X/Y or the size in pixels. Previous/next controls visit keys; the diamond adds or removes a key; interpolation supports Linear, Bezier and Hold. Width and height are independent. **Undo area edit** restores the previous panel edit while the clip’s native state still matches; Premiere’s normal Undo history also records every transaction. Refresh the controls after editing Motion in Effect Controls.
 
 Keep Better Captions open while editing the box dimensions. After a resize settles for about 750 ms, the plugin rerenders only the selected caption, using Premiere's evaluated width and height at every output frame. Inverse scaling keeps the font size constant, including between size keyframes. The existing movie can briefly stretch during the drag while the replacement renders. Position changes display immediately without rerendering. An overflow notice means the text needs a taller or wider area; the plugin does not silently shrink its font. After other text, timing or style edits, click **Update Program Monitor**.
 
@@ -92,7 +92,7 @@ Use `--sequence <id>` or `--instance <id>` if several editors are open. Use `--f
 
 The preview opened by `npm run dev` uses a fictional transcript for UI evaluation. Its Transcribe and Apply buttons require the installed Premiere panel.
 
-The [online interface review](https://better-captions-premiere-review.swenhalver.chatgpt.site) provides the same interactive editor with browser-only panel-width controls (owner sign-in required). See [interface review and verification](docs/interface-review.md) for the new Transcript / Style / Motion workflow, test results and native runtime limits.
+The [online interface review](https://better-captions-premiere-review.swenhalver.chatgpt.site) provides the same interactive editor with browser-only panel-width controls (owner sign-in required). See [interface review and verification](docs/interface-review.md) for the two-tab workflow and [0.5.0 release notes](docs/release-0.5.0.md) for current verification. The older three concept studies remain available at `/concepts/`.
 
 Nested audio sequences, reversed speech, and variable time-remapping need a deliberate workflow; flatten/open the dialogue sequence before transcription. Simultaneously spoken overlapping audio is not a speaker-selection workflow. Transcript corrections in this panel affect generated captions; they are not written back into Premiere's native transcript. Linked captions cannot be deleted/regrouped silently; edit their timeline clips deliberately before replacing the set.
 

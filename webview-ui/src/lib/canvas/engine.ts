@@ -1,3 +1,4 @@
+import {resolveAppearance,effectPadding,type ResolvedAppearance} from '../appearance.ts';
 import type {CaptionItem,CaptionWord,StyleConfig,AnimationConfig,WordAppearance} from '../types';
 
 export function wordState(word:CaptionWord,time:number):'upcoming'|'active'|'spoken' {
@@ -13,9 +14,7 @@ function easeOutBounce(t:number){
   t-=2.625/d;return n*t*t+.984375;
 }
 function rgba(hex:string,opacity:number){const n=parseInt(hex.replace('#',''),16);return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${clamp(opacity,0,1)})`;}
-function appearance(style:StyleConfig,state:'upcoming'|'active'|'spoken'):WordAppearance {
-  return state==='upcoming'?{fontFamily:style.fontFamily,fontWeight:style.fontWeight,sizeScale:1,color:style.textColor,opacity:1,bubble:false,bubbleColor:'#000000',bubbleOpacity:0,padding:0,radius:0}:style[state==='active'?'activeWord':'spokenWord'];
-}
+function appearance(style:StyleConfig,state:'upcoming'|'active'|'spoken'):ResolvedAppearance { return resolveAppearance(style,state==='upcoming'?'upcomingWord':state==='active'?'activeWord':'spokenWord'); }
 export interface RenderArea { width:number; height:number; measureOnly?:boolean; }
 export interface RenderLayout { width:number; height:number; rowHeight:number; rows:CaptionWord[][]; }
 interface MeasuredWord { word:CaptionWord; text:string; width:number; continuation:boolean; gapBefore:number; }
@@ -26,16 +25,20 @@ export class CaptionRenderer {
   constructor(ctx:CanvasRenderingContext2D,width:number,height:number){this.ctx=ctx;this.width=width;this.height=height;}
   resize(width:number,height:number){this.width=width;this.height=height;}
   clear(){this.ctx.clearRect(0,0,this.width,this.height);}
-  private font(style:StyleConfig,a:WordAppearance){return `${a.fontWeight} ${style.fontSize*a.sizeScale}px "${a.fontFamily||style.fontFamily}"`;}
+  private font(style:StyleConfig,a:ResolvedAppearance){return `${a.italic?'italic ':''}${a.fontWeight} ${a.fontSize}px "${a.fontFamily||style.fontFamily}"`;}
+  private measureText(text:string,a:ResolvedAppearance){return this.ctx.measureText(text).width+Math.max(0,Array.from(text).length-1)*a.letterSpacing;}
+  private paintText(text:string,x:number,y:number,a:ResolvedAppearance,stroke=false){
+    const c=this.ctx; if(!a.letterSpacing){if(stroke)c.strokeText(text,x,y);else c.fillText(text,x,y);return;}
+    for(const glyph of Array.from(text)){if(stroke)c.strokeText(glyph,x,y);else c.fillText(glyph,x,y);x+=c.measureText(glyph).width+a.letterSpacing;}
+  }
   private roundRect(x:number,y:number,w:number,h:number,r:number){
     const c=this.ctx;r=Math.min(Math.max(0,r),w/2,h/2);c.beginPath();c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.quadraticCurveTo(x+w,y,x+w,y+r);c.lineTo(x+w,y+h-r);c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);c.lineTo(x+r,y+h);c.quadraticCurveTo(x,y+h,x,y+h-r);c.lineTo(x,y+r);c.quadraticCurveTo(x,y,x+r,y);c.closePath();
   }
   renderFrame(caption:CaptionItem|null,time:number,style:StyleConfig,animation:AnimationConfig,area?:RenderArea):RenderLayout|undefined{
     this.clear();if(!caption||time<caption.startTime||time>=caption.endTime||this.width<=0||this.height<=0)return;
     const c=this.ctx,all=['upcoming','active','spoken'] as const;
-    const maxSize=style.fontSize*Math.max(1,style.activeWord.sizeScale,style.spokenWord.sizeScale);
-    const bounceLift=animation.preset==='bounce'?style.fontSize*style.activeWord.sizeScale*.25:0;
-    const effects=(style.strokeEnabled?style.strokeWidth:0)+(style.shadowEnabled?Math.max(Math.abs(style.shadowOffsetX),Math.abs(style.shadowOffsetY))+style.shadowBlur*2:0);
+    const maxSize=Math.max(...all.map(state=>appearance(style,state).fontSize));
+    const bounceLift=animation.preset==='bounce'?appearance(style,'active').fontSize*.25:0;
     let rowHeight=maxSize*style.lineHeight;
     c.save();c.textAlign='left';c.textBaseline='middle';
     const maxWidth=Math.max(1,area?.width??this.width*style.maxWidth);
@@ -46,17 +49,17 @@ export class CaptionRenderer {
       // Reserve each word's largest possible appearance, including its bubble.
       // Changing the active word must never reflow or shift surrounding words.
       for(const state of all){
-        const a=appearance(style,state),pad=(a.bubble?a.padding:0)+effects;
-        c.font=this.font(style,a);const metrics=c.measureText(text);
-        width=Math.max(width,metrics.width+2*pad);
-        const halfHeight=Math.max(style.fontSize*a.sizeScale*.6,metrics.actualBoundingBoxAscent||0,metrics.actualBoundingBoxDescent||0);
+        const a=appearance(style,state),pad=(a.bubble?a.padding:0)+effectPadding(a);
+        c.font=this.font(style,a);const transformed=transformText(text,a.textTransform),metrics=c.measureText(transformed);
+        width=Math.max(width,this.measureText(transformed,a)+2*pad);
+        const halfHeight=Math.max(a.fontSize*.6,metrics.actualBoundingBoxAscent||0,metrics.actualBoundingBoxDescent||0);
         rowHeight=Math.max(rowHeight,2*(halfHeight+pad));
       }
       return {word,text,width,continuation,gapBefore:0};
     };
     const measured:MeasuredWord[]=[];
     for(const word of caption.words){
-      const text=transformText(word.text,style.textTransform),whole=measure(word,text);
+      const text=word.text,whole=measure(word,text);
       if(!area||whole.width<=contentWidth){measured.push(whole);continue;}
       // Break long words at grapheme boundaries, keeping one spoken-word state
       // across the pieces. A narrow text area must never reduce the font size.
@@ -101,7 +104,7 @@ export class CaptionRenderer {
       for(const wm of r){
         x+=wm.gapBefore;
         const state=wordState(wm.word,time),a=appearance(style,state);c.save();c.font=this.font(style,a);
-        const actualWidth=c.measureText(wm.text).width,tx=x+(wm.width-actualWidth)/2;
+        const visibleText=transformText(wm.text,a.textTransform),actualWidth=this.measureText(visibleText,a),tx=x+(wm.width-actualWidth)/2;
         c.globalAlpha=clamp(alpha,0,1)*clamp(a.opacity,0,1);
         const started=time>=wm.word.startTime;
         if((animation.preset==='typewriter'||animation.preset==='pop'||animation.preset==='bounce')&&!started){c.restore();x+=wm.width;continue;}
@@ -114,10 +117,10 @@ export class CaptionRenderer {
           if(animation.preset==='bounce')c.translate(0,-bounceLift*(1-easeOutBounce(p)));
         }
         // Both text and its highlight use the same local animation transform.
-        if(a.bubble){c.fillStyle=rgba(a.bubbleColor,a.bubbleOpacity);this.roundRect(tx-a.padding,y-style.fontSize*a.sizeScale*.6-a.padding,actualWidth+2*a.padding,style.fontSize*a.sizeScale*1.2+2*a.padding,a.radius);c.fill();}
-        if(style.shadowEnabled){c.shadowColor=rgba(style.shadowColor,style.shadowOpacity);c.shadowBlur=style.shadowBlur;c.shadowOffsetX=style.shadowOffsetX;c.shadowOffsetY=style.shadowOffsetY;}
-        if(style.strokeEnabled&&style.strokeWidth>0){c.strokeStyle=rgba(style.strokeColor,style.strokeOpacity);c.lineWidth=style.strokeWidth*2;c.lineJoin='round';c.strokeText(wm.text,tx,y);c.shadowBlur=0;}
-        c.fillStyle=a.color;c.fillText(wm.text,tx,y);c.restore();x+=wm.width;
+        if(a.bubble){c.fillStyle=rgba(a.bubbleColor,a.bubbleOpacity);this.roundRect(tx-a.padding,y-a.fontSize*.6-a.padding,actualWidth+2*a.padding,a.fontSize*1.2+2*a.padding,a.radius);c.fill();}
+        if(a.shadowEnabled){c.shadowColor=rgba(a.shadowColor,a.shadowOpacity);c.shadowBlur=a.shadowBlur;c.shadowOffsetX=a.shadowOffsetX;c.shadowOffsetY=a.shadowOffsetY;}
+        if(a.strokeEnabled&&a.strokeWidth>0){c.strokeStyle=rgba(a.strokeColor,a.strokeOpacity);c.lineWidth=a.strokeWidth*2;c.lineJoin='round';this.paintText(visibleText,tx,y,a,true);c.shadowBlur=0;}
+        c.fillStyle=a.color;this.paintText(visibleText,tx,y,a);c.restore();x+=wm.width;
       }
     });c.restore();return layout;
   }

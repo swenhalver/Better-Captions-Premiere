@@ -36,6 +36,15 @@ function motionPayload(f,clip,patch={},options={}){
   f.files.set('/motion.json',JSON.stringify({sequenceId:f.sequence.sequenceID,projectPath:f.project.path,cues:[{id:'caption',clipNodeId:clip.nodeId,projectItemId:clip.projectItem.nodeId,mediaPath:clip.projectItem.media,startTime:clip.start.seconds,endTime:clip.end.seconds,...patch}],...options}));return '/motion.json';
 }
 const bounds=(x=480,y=648,width=960,height=432)=>({x,y,width,height,frameWidth:1920,frameHeight:1080});
+test('text-area descriptor reads exact clip/source geometry and refuses mismatched or locked links',()=>{
+ const f=hostFixture(),clip=f.addClip(f.item('/caption.mov'),2,4);clip.inPoint=new Time(1);
+ const payload=()=>motionPayload(f,clip,{renderBounds:bounds()});
+ let result=JSON.parse(f.host.readCaptionAreaDescriptor(payload()));
+ assert.equal(result.ok,true);assert.equal(result.startTicks,clip.start.ticks);assert.equal(result.inTicks,clip.inPoint.ticks);assert.equal(result.track,0);assert.equal(result.bounds.width,960);
+ result=JSON.parse(f.host.readCaptionAreaDescriptor(motionPayload(f,clip,{renderBounds:bounds(),projectItemId:'other'})));assert.match(result.error,/link changed/);
+ f.track.isLocked=()=>true;assert.match(JSON.parse(f.host.readCaptionAreaDescriptor(payload())).error,/Unlock/);
+ assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);
+});
 function geometryCue(f,clip,renderBounds=bounds(),extra={}) { return f.cue('caption',0,30,{clipNodeId:clip.nodeId,projectItemId:clip.projectItem.nodeId,previousPath:clip.projectItem.media,renderBounds,...extra}); }
 function currentMotion(params,time=0){const values={};for(const [name,param]of Object.entries(params))values[name]=param.getValueAtTime(new Time(time));return values;}
 function worldPoint(logical,sourceBounds,motion){

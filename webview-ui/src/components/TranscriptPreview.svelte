@@ -1,14 +1,16 @@
 <script lang="ts">
+  import WordTimeline from "./WordTimeline.svelte";
   import type { CaptionItem, CaptionWord } from "../lib/types";
   import { formatTime, groupCaptionWords } from "../lib/transcript/parser";
   import { replaceText, retime, split, validateCaptions } from "../lib/transcript/edit";
   interface Props {
+    frameRate: number; selectedWord?: number; onSelectWord?: (index:number)=>void;
     sequenceId: string; captions: CaptionItem[]; currentTime: number; maxWords: number; selectedId?: string | null;
     onSeek: (time: number) => void; onSelect: (id: string) => void;
     onMaxWordsChange: (maxWords: number) => void; onUpdate: (captions: CaptionItem[]) => void;
     onShowInPremiere?: (time: number) => void; isDemo?: boolean;
   }
-  let { sequenceId, captions, currentTime, maxWords, selectedId = null, onSeek, onSelect, onMaxWordsChange, onUpdate, onShowInPremiere, isDemo = false }: Props = $props();
+  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxWords, selectedId = null, onSeek, onSelect, onMaxWordsChange, onUpdate, onShowInPremiere, isDemo = false }: Props = $props();
   let activeId = $derived(captions.find((caption) => currentTime >= caption.startTime && currentTime < caption.endTime)?.id ?? null);
   let selected = $derived(captions.find((caption) => caption.id === selectedId) ?? captions[0]);
   let query = $state("");
@@ -34,8 +36,9 @@
     splitIndex = 1;
   });
   $effect(() => {
-    if (!activeId || !listEl) return;
-    const el = [...listEl.querySelectorAll<HTMLElement>("[data-caption-id]")].find((node) => node.dataset.captionId === activeId);
+    const visibleId = selectedId ?? activeId;
+    if (!visibleId || !listEl) return;
+    const el = [...listEl.querySelectorAll<HTMLElement>("[data-caption-id]")].find((node) => node.dataset.captionId === visibleId);
     el?.scrollIntoView({ block: "nearest" });
   });
   function commit(next: CaptionItem[], message: string) {
@@ -94,7 +97,7 @@
       if (next[0]) onSelect(next[0].id);
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
   }
-  function choose(caption: CaptionItem) { onSelect(caption.id); onSeek(caption.startTime); error = ""; notice = ""; }
+  function choose(caption: CaptionItem) { onSelectWord(0); onSelect(caption.id); onSeek(caption.startTime); error = ""; notice = ""; }
   function undo() {
     if (!previous || !canUndo) return;
     const restore = previous.map((caption) => { const current = captions.find((item) => item.id === caption.id); return current?.clipNodeId ? { ...caption, clipNodeId: current.clipNodeId, projectItemId: current.projectItemId, mediaPath: current.mediaPath } : caption; });
@@ -130,24 +133,17 @@
       {#if selected}
         <div class="transcript-editor__edit">
           <div class="transcript-editor__edit-heading"><h3>Caption {captions.findIndex((caption) => caption.id === selected.id) + 1}</h3><button class="caption-button" disabled={isDemo} onclick={() => onShowInPremiere?.(selected.startTime)} title={isDemo ? "Available in the installed Premiere panel" : "Select caption in Premiere"}>Show in Premiere</button></div>
+          <WordTimeline caption={selected} fps={frameRate} {currentTime} {selectedWord} {onSelectWord} onSeek={onSeek} onChange={(caption) => updateCaption(caption,"Word timing saved. Connected edges stay together.")} />
+          <details class="transcript-editor__detail"><summary>Edit sentence text</summary>
           <label class="caption-field"><span>Transcription</span><textarea rows="3" bind:value={draftText} spellcheck="true" onkeydown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); saveText(); } }}></textarea></label>
           <div class="transcript-editor__save"><span class="caption-help">{draftText !== selected.text ? "Unsaved text" : "Text is up to date"}</span><button class="caption-button" onclick={saveText} disabled={draftText === selected.text}>Save text</button></div>
+          </details>
           {#if error}<p class="caption-message caption-message--error" role="alert">{error}</p>{/if}
           {#if notice}<p class="caption-message" role="status">{notice}</p>{/if}
           {#if selected.timingEstimated}<p class="transcript-editor__estimated">Word timings are estimated. Review and save them below.</p>{/if}
           <details class="transcript-editor__detail">
             <summary>Caption timing <span>{formatTime(selected.startTime)} — {formatTime(selected.endTime)}</span></summary>
             <div class="transcript-editor__detail-body"><div class="caption-controls"><label class="caption-field"><span>Caption start, seconds</span><input type="number" min="0" step=".001" bind:value={draftStart} /></label><label class="caption-field"><span>Caption end, seconds</span><input type="number" min="0" step=".001" bind:value={draftEnd} /></label></div><button class="caption-button" onclick={saveTiming}>Save caption timing</button></div>
-          </details>
-          <details class="transcript-editor__words transcript-editor__detail">
-            <summary>Word text & timing <span>{selected.words.length} words</span></summary>
-            <div class="transcript-editor__detail-body">
-              <div class="transcript-editor__word-labels" aria-hidden="true"><span>Word</span><span>Start, s</span><span>End, s</span></div>
-              {#each draftWords as word, index}
-                <div class="transcript-editor__word"><input aria-label="Word {index + 1} text" type="text" bind:value={word.text} /><input aria-label="Word {index + 1} start in seconds" type="number" min="0" step=".001" bind:value={word.startTime} /><input aria-label="Word {index + 1} end in seconds" type="number" min="0" step=".001" bind:value={word.endTime} /></div>
-              {/each}
-              <button class="caption-button" onclick={saveWords}>Save word timings</button>
-            </div>
           </details>
           <details class="transcript-editor__detail">
             <summary>Split & merge</summary>
@@ -195,9 +191,6 @@
   .transcript-editor__detail summary { font-size: var(--caption-type-s); cursor: pointer; font-weight: 600; padding-block: var(--caption-space-m); }
   .transcript-editor__detail summary span { display: block; margin-block-start: .2rem; padding-inline-start: 1rem; color: var(--color-panel-secondary); font-size: var(--caption-type-xs); font-weight: 400; font-variant-numeric: tabular-nums; }
   .transcript-editor__detail-body { display: flex; flex-direction: column; gap: var(--caption-space-s); padding-block-end: var(--caption-space-m); }
-  .transcript-editor__word-labels, .transcript-editor__word { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); gap: var(--caption-space-s); }
-  .transcript-editor__word-labels { font-size: var(--caption-type-xs); color: var(--color-panel-secondary); }
-  .transcript-editor__word input { inline-size: 100%; min-inline-size: 0; border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); color: var(--color-panel-text); background: var(--color-input); font-size: var(--caption-type-s); padding: .4rem; }
   .transcript-editor__split { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--caption-space-s); }
   .transcript-editor__empty { padding: var(--caption-space-l); color: var(--color-panel-secondary); font-size: var(--caption-type-s); }
   .transcript-editor__empty h3 { color: var(--color-panel-text); font-weight: 600; margin-block-end: var(--caption-space-s); }

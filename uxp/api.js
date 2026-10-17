@@ -7,8 +7,8 @@ const { localPath, parentPath } = require('./paths.js');
 const key = id => String(id).replace(/[{}]/g, '').toLowerCase();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
-const READ_METHODS = new Set(['getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection']);
-const SERVICE_READS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection']);
+const READ_METHODS = new Set(['getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea']);
+const SERVICE_READS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor']);
 
 function createHostAPI(options = {}) {
   const contexts = new Map();
@@ -157,6 +157,14 @@ function createHostAPI(options = {}) {
     async readCaptionMotion(captions, id = currentId, options) { return backend('readCaptionMotion', options?.includeDiagnostics === true ? [captions, { includeDiagnostics: true }] : [captions], id); },
     async readCaptionGeometry(captions, id = currentId) { return backend('readCaptionGeometry', [captions], id); },
     async readCaptionSelection(captions, id = currentId) { return backend('readCaptionSelection', [captions], id); },
+    async readCaptionArea(caption,id=currentId,frame=0) {
+      const descriptor=await backend('readCaptionAreaDescriptor',[caption],id), {sequence}=await sequenceContext(id);
+      return require('./text-area.js').readArea(ppro,sequence,descriptor,frame);
+    },
+    async editCaptionArea(caption,id=currentId,request) {
+      const descriptor=await backend('readCaptionAreaDescriptor',[caption],id), {project,sequence}=await sequenceContext(id);
+      return require('./text-area.js').editArea(ppro,project,sequence,descriptor,request);
+    },
     async getColorScheme() { return { theme: 'darkest', colors: {} }; },
     async startAgentBridge(proxy) { return require('./agent.js').startAgentBridge(proxy); },
   };
@@ -166,7 +174,7 @@ function createHostAPI(options = {}) {
       // Resolve implicit identities when requested, before a queued refresh
       // can change currentId. File saves already carry their own identity.
       if (['fetchTranscriptJSON', 'transcribeSequence', 'loadSession'].includes(method) && args[0] === undefined) args[0] = currentId;
-      if (['showInPremiere', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'selectCaptionClip'].includes(method) && args[1] === undefined) args[1] = currentId;
+      if (['showInPremiere', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'selectCaptionClip', 'readCaptionArea', 'editCaptionArea'].includes(method) && args[1] === undefined) args[1] = currentId;
       return serial(method, () => nativeAPI[method](...args));
     };
   }

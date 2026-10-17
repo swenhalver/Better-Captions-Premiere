@@ -59,6 +59,20 @@ export interface CaptionWord {
 export type AnimationPreset = "fade" | "pop" | "typewriter" | "karaoke" | "bounce";
 
 export interface WordAppearance {
+  fontSize?: number;
+  italic?: boolean;
+  letterSpacing?: number;
+  textTransform?: "none" | "uppercase" | "lowercase";
+  strokeEnabled?: boolean;
+  strokeColor?: string;
+  strokeOpacity?: number;
+  strokeWidth?: number;
+  shadowEnabled?: boolean;
+  shadowColor?: string;
+  shadowOpacity?: number;
+  shadowBlur?: number;
+  shadowOffsetX?: number;
+  shadowOffsetY?: number;
   fontFamily: string;
   fontWeight: number;
   sizeScale: number;
@@ -100,6 +114,7 @@ export interface StyleConfig {
   maxWords: number;
   activeWord: WordAppearance;
   spokenWord: WordAppearance;
+  upcomingWord?: Partial<WordAppearance>;
 }
 
 export interface AnimationConfig {

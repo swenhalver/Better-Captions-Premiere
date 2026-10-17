@@ -7,9 +7,9 @@ const HOST_METHODS = [
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession',
   'transcribeSequence', 'getFonts', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'getColorScheme',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'editCaptionArea', 'getColorScheme',
 ] as const;
-const READ_METHODS = new Set(['getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection']);
+const READ_METHODS = new Set(['getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea']);
 interface UXPMessageHost {
   postMessage: (message: unknown) => void;
 }

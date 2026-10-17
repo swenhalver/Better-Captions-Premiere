@@ -64,6 +64,12 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
       cues: captions.map(c => ({ id: c.id, text: c.text, startFrame: Math.round(c.startTime * context.fps), endFrame: Math.round(c.endTime * context.fps), path: c.mediaPath, previousPath: previous.find(old => old.id === c.id)?.mediaPath ?? c.mediaPath, clipNodeId: c.clipNodeId, projectItemId: c.projectItemId,renderBounds:c.renderBounds,previousRenderBounds:previous.find(old=>old.id===c.id)?.renderBounds,motionProfile:c.motionProfile })) };
   }
   const api = {
+    async readCaptionAreaDescriptor(caption:CaptionItem,sequenceId=currentId){
+      const context=await checkSequence(sequenceId);
+      return readJob('readCaptionAreaDescriptor',{sequenceId:context.id,projectPath:context.projectPath,cues:[{id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,renderBounds:caption.renderBounds}]});
+    },
+    async readCaptionArea(_caption:CaptionItem,_sequenceId:string,_frame:number):Promise<import('./lib/text-area').TextAreaState>{throw new Error('Native text-area editing requires the UXP panel.');},
+    async editCaptionArea(_caption:CaptionItem,_sequenceId:string,_request:import('./lib/text-area').TextAreaEdit):Promise<import('./lib/text-area').TextAreaState>{throw new Error('Native text-area editing requires the UXP panel.');},
     isDemo: !cep,
     async getActiveSequenceInfo(sequenceId?: string): Promise<SequenceInfo | null> {
       if (!cep) return { id: 'demo', name: 'Better Captions · interactive preview', duration: 6, frameRate: 24, frameWidth: 720, frameHeight: 1280, tracks: [] };

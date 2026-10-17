@@ -10,7 +10,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 function loadTypeScript(file, replacements = {}) {
   const exports = {};
   const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  vm.runInNewContext(code, { exports, require: name => replacements[name] ?? loadTypeScript(path.resolve(path.dirname(file), name + '.ts'), replacements) });
+  vm.runInNewContext(code, { exports, require: name => replacements[name] ?? loadTypeScript(path.resolve(path.dirname(file), name.endsWith('.ts') ? name : name + '.ts'), replacements) });
   return exports;
 }
 const planner = loadTypeScript(path.join(root, 'webview-ui/src/lib/export/exporter.ts'), { '../canvas/engine': { CaptionRenderer: class {} } });

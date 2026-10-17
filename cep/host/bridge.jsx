@@ -394,6 +394,20 @@ var BetterCaptionsHost = (function () {
             return reply({ ok: true, cues: out });
         } catch (e) { return reply({ error: e.toString() }); }
     }
+    function readCaptionAreaDescriptor(file) {
+        try {
+            var p = readPayload(file), c = p.cues && p.cues.length === 1 ? p.cues[0] : null;
+            if (!c || !c.id || !c.clipNodeId || !c.projectItemId || !c.mediaPath) throw new Error('Apply this caption before editing native keyframes.');
+            var s = sequence(p.sequenceId, p.projectPath), found = findClip(s,c.clipNodeId);
+            if (!found || !sameNode(found.clip.projectItem.nodeId,c.projectItemId) || found.clip.projectItem.getMediaPath() !== c.mediaPath) throw new Error('The caption timeline link changed. Sync timing from Premiere.');
+            var clip = found.clip, track = s.videoTracks[found.track];
+            if (track.isLocked()) throw new Error('Unlock the caption video track before editing its text area.');
+            assertNormalSpeed(clip);
+            var b = renderBounds(c.renderBounds,s);
+            if (!b) throw new Error('Update Program Monitor once to create the caption text area.');
+            return reply({ok:true,sequenceId:p.sequenceId,projectPath:p.projectPath,clipNodeId:String(clip.nodeId),projectItemId:String(clip.projectItem.nodeId),path:c.mediaPath,track:found.track,startTicks:String(clip.start.ticks),endTicks:String(clip.end.ticks),inTicks:String(clip.inPoint.ticks),ticksPerFrame:Number(s.timebase),frameWidth:s.frameSizeHorizontal,frameHeight:s.frameSizeVertical,bounds:b});
+        } catch (e) { return reply({error:e.toString()}); }
+    }
     function readCaptionMotion(file) {
         try {
             var p = readPayload(file);
@@ -682,5 +696,5 @@ var BetterCaptionsHost = (function () {
             return reply({ ok: true, cues: out });
         } catch (e) { return reply({ error: e.toString() }); }
     }
-    return { context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, preflight: preflight, apply: apply, readTimeline: readTimeline };
+    return { context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, readCaptionAreaDescriptor: readCaptionAreaDescriptor, preflight: preflight, apply: apply, readTimeline: readTimeline };
 })();

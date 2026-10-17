@@ -1,3 +1,4 @@
+import {resolveAppearance} from '../appearance.ts';
 import type { CaptionItem, StyleConfig, AnimationConfig, MotionProfile } from '../types';
 import { CaptionRenderer } from '../canvas/engine';
 import { validateCaptions } from '../transcript/edit';
@@ -74,8 +75,8 @@ export async function exportFrames(
   if (!ctx) throw new Error('Could not create a transparent caption canvas.');
   // Wait for the three requested font variants before measuring or rendering words.
   if (document.fonts) {
-    const variants = [{ fontFamily: style.fontFamily, fontWeight: style.fontWeight, sizeScale: 1 }, style.activeWord, style.spokenWord];
-    await Promise.all(variants.map(v => document.fonts.load(`${v.fontWeight} ${style.fontSize * v.sizeScale}px "${v.fontFamily || style.fontFamily}"`)));
+    const variants = (['upcomingWord','activeWord','spokenWord'] as const).map(key=>resolveAppearance(style,key));
+    await Promise.all(variants.map(v => document.fonts.load(`${v.italic ? "italic " : ""}${v.fontWeight} ${v.fontSize}px "${v.fontFamily}"`)));
     await document.fonts.ready;
   }
   const renderer = new CaptionRenderer(ctx, width, height), total = plan.reduce((sum, cue) => sum + cue.frames, 0);
