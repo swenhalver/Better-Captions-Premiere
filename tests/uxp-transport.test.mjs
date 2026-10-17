@@ -90,6 +90,13 @@ function harness(t, nativeOverrides = {}) {
   };
 }
 
+test('preset library reads and writes round trip through the bounded UXP allowlist', async t => {
+  const library = { version: 1, revision: 3, presets: [] };
+  const app = harness(t, { async loadStylePresets() { return library; }, async saveStylePresets(value) { assert.equal(value.revision, 3); return { ...value, revision: 4 }; } });
+  assert.deepEqual(await app.api.loadStylePresets(), library);
+  assert.equal((await app.api.saveStylePresets(library)).revision, 4);
+});
+
 test('native UXP transport runs with only uxpHost.postMessage and preserves request arguments/errors', async t => {
   const app = harness(t);
   assert.equal(app.api.isDemo, false);

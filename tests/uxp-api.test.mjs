@@ -16,7 +16,7 @@ function harness(t, options = {}) {
   const folders=new Map();
   function folder(path) {
     if(folders.has(path))return folders.get(path);
-    const entries=new Map(),value={nativePath:path,getEntry:async name=>{if(path==='/private/service'&&name==='service.json')serviceReads++;if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
+    const entries=new Map(),value={nativePath:path,getEntries:async()=>[...entries].map(([name,file])=>({...file,name})),getEntry:async name=>{if(path==='/private/service'&&name==='service.json')serviceReads++;if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
     folders.set(path,value);return value;
   }
   const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues']});
@@ -47,7 +47,8 @@ function harness(t, options = {}) {
   const module={exports:{}};
   const context={module,exports:module.exports,setTimeout,clearTimeout,Date:{now:()=>Date.now()+clockOffset},Map,Set,require:name=>{
     if(name==='premierepro')return {Project:{getActiveProject:async()=>{projectReads++;return project;}},Constants:{TrackItemType:{CLIP:1}}};
-    if(name==='uxp')return {storage:{localFileSystem:{}}};
+    if(name==='uxp')return {storage:{localFileSystem:{getDataFolder:async()=>folder('/plugin-data')}}};
+    if(name==='./style-presets.js')return require('../uxp/style-presets.js');
     if(name==='./storage.js')return storage;
     if(name==='./transcript.js')return native;
     if(name==='./paths.js')return require('../uxp/paths.js');
@@ -58,6 +59,19 @@ function harness(t, options = {}) {
   const api=module.exports.createHostAPI({readTimeoutMs:options.readTimeoutMs??12000,serviceStartupGraceMs:options.serviceStartupGraceMs??0,serviceStartupPollMs:options.serviceStartupPollMs??5});t.after(()=>api.dispose());
   return {api,writes,requests,respond,setService,healthyService,advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},get projectReads(){return projectReads;},get serviceReads(){return serviceReads;}};
 }
+
+test('style preset storage works without a project or renderer and serializes stale writers', async t => {
+  const h = harness(t, { service: null });
+  const initial = await h.api.loadStylePresets();
+  assert.equal(initial.revision, 0); assert.equal(initial.presets.length, 0);
+  const results = await Promise.allSettled([h.api.saveStylePresets(initial), h.api.saveStylePresets(initial)]);
+  assert.equal(results[0].status, 'fulfilled'); assert.equal(results[1].status, 'rejected');
+  assert.match(results[1].reason.message, /another panel/);
+  assert.equal((await h.api.loadStylePresets()).revision, 1);
+  assert.equal(h.writes.length, 1); assert.equal(h.writes[0].path, '/plugin-data');
+  assert.equal(h.writes[0].name, 'style-presets.json');
+  assert.equal(h.projectReads, 0); assert.equal(h.serviceReads, 0); assert.equal(h.requests.length, 0);
+});
 
 test('direct native requests and slow saves retain the captured sequence after selection changes',async t=>{
   const h=harness(t);assert.equal((await h.api.getActiveSequenceInfo()).playhead,2.5);h.select('two');assert.equal((await h.api.getActiveSequenceInfo()).playhead,7);

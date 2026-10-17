@@ -6,7 +6,7 @@ const { createHostAPI } = require('./api.js');
 const CHANNEL = 'better-captions';
 const PANEL_ID = 'betterCaptions';
 const HOST_METHODS = new Set([
-  'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession',
+  'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession', 'loadStylePresets', 'saveStylePresets',
   'transcribeSequence', 'getFonts', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
   'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'editCaptionArea', 'getColorScheme',

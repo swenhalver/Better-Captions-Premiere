@@ -16,6 +16,8 @@
   import StylePanel from "./components/StylePanel.svelte";
   import WordStates from "./components/WordStates.svelte";
   import AnimationPanel from "./components/AnimationPanel.svelte";
+  import StylePresets from "./components/StylePresets.svelte";
+  import { applyPresetLook, type PresetLook } from "./lib/style-presets";
   import ExportButton from "./components/ExportButton.svelte";
 
   const { api } = initWebview(webviewAPI);
@@ -190,6 +192,19 @@
     if (before !== outputSignature(session)) { editedSequences[session.sequenceId] = true; watchRevisionChanged(); }
   }
   function handleStyle(patch: Partial<StyleConfig>) { try { updateStyle(patch); } catch (problem) { error = message(problem); } }
+  async function applyStylePreset(look: PresetLook) {
+    if (timelineBusy || isRefreshing || isSyncing || sessionManager.current?.isLoading) throw new Error("Wait for the current caption operation to finish.");
+    const session = sessionManager.current;
+    if (!session) throw new Error("No active caption session.");
+    const before = outputSignature(session);
+    const next = applyPresetLook(session.style, look);
+    session.style = next.style;
+    session.animation = next.animation;
+    sessionManager.persist();
+    if (before !== outputSignature(session)) { editedSequences[session.sequenceId] = true; watchRevisionChanged(); }
+    await flushSave();
+    if (sessionManager.current?.sequenceId !== session.sequenceId) throw new Error("The preset was applied to the previous sequence. Return to that sequence to review it.");
+  }
   function updateCaptions(captions: CaptionItem[], markEdited = true) {
     if (captions.length) validateCaptions(captions);
     sessionManager.updateCaptions(captions);
@@ -579,6 +594,7 @@
           <TranscriptPreview frameRate={session.frameRate} {selectedWord} onSelectWord={(index) => selectedWord = index} sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxWords={session.style.maxWords} {selectedId} onSelect={(id) => { selectedId = id; selectedWord = 0; }} onSeek={seekCaption} onMaxWordsChange={(maxWords) => handleStyle({ maxWords })} onUpdate={updateCaptions} onShowInPremiere={seekCaption} isDemo={api.isDemo} />
         </div>
         <div id="workspace-panel-style" role="tabpanel" aria-labelledby="workspace-tab-style" tabindex="0" hidden={activeTab !== "style"}>
+          <StylePresets style={session.style} animation={session.animation} load={api.loadStylePresets} save={api.saveStylePresets} onApply={applyStylePreset} isDemo={api.isDemo} disabled={timelineBusy || isRefreshing || isSyncing || session.isLoading} />
           <div class="caption-app__section-intro"><h2>{selected ? `Caption ${session.captions.indexOf(selected)+1}` : 'Word appearance'}</h2>{#if selected}<p>{selected.text}</p>{/if}</div>
           <div class="caption-app__states" role="group" aria-label="Word appearance state">{#each [{value:'spoken',label:'Past words'},{value:'current',label:'Current word'},{value:'upcoming',label:'Next words'}] as state}<button class="caption-button" aria-pressed={wordState===state.value} onclick={()=>changeWordState(state.value)}>{state.label}</button>{/each}</div>
           {#if selected}

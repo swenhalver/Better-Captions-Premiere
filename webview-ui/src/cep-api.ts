@@ -1,4 +1,5 @@
 import type { CaptionItem, SequenceInfo, RenderBounds } from './lib/types';
+import { emptyPresetLibrary, validatePresetLibrary, PRESET_STORAGE_KEY, type PresetLibrary } from './lib/style-presets.ts';
 declare const window: Window & { __adobe_cep__?: any; require?: any };
 const demoWords = 'Every word has its own style. Move captions anywhere in the frame.'.split(' ').map((text, i) => ({ text, start: i * .42, duration: .36, confidence: 1, eos: /[.!?]$/.test(text), type: 'word' as const, tags: [] }));
 export interface CapturedContext { id: string; name: string; projectPath: string; width: number; height: number; fps: number; duration: number; dir: string; }
@@ -64,6 +65,24 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
       cues: captions.map(c => ({ id: c.id, text: c.text, startFrame: Math.round(c.startTime * context.fps), endFrame: Math.round(c.endTime * context.fps), path: c.mediaPath, previousPath: previous.find(old => old.id === c.id)?.mediaPath ?? c.mediaPath, clipNodeId: c.clipNodeId, projectItemId: c.projectItemId,renderBounds:c.renderBounds,previousRenderBounds:previous.find(old=>old.id===c.id)?.renderBounds,motionProfile:c.motionProfile })) };
   }
   const api = {
+    async loadStylePresets(): Promise<PresetLibrary> {
+      if (cep) throw new Error('Style presets require the Better Captions UXP panel.');
+      const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+      return raw === null ? emptyPresetLibrary() : validatePresetLibrary(JSON.parse(raw));
+    },
+    async saveStylePresets(library: PresetLibrary): Promise<PresetLibrary> {
+      if (cep) throw new Error('Style presets require the Better Captions UXP panel.');
+      const input = validatePresetLibrary(library);
+      const write = () => {
+        const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+        const current = raw === null ? emptyPresetLibrary() : validatePresetLibrary(JSON.parse(raw));
+        if (input.revision !== current.revision) throw new Error('Presets changed in another tab. Reload presets before saving again.');
+        const next = validatePresetLibrary({ ...input, revision: input.revision + 1 });
+        localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(next));
+        return next;
+      };
+      return window.navigator?.locks ? window.navigator.locks.request(PRESET_STORAGE_KEY, write) : write();
+    },
     async readCaptionAreaDescriptor(caption:CaptionItem,sequenceId=currentId){
       const context=await checkSequence(sequenceId);
       return readJob('readCaptionAreaDescriptor',{sequenceId:context.id,projectPath:context.projectPath,cues:[{id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,renderBounds:caption.renderBounds}]});

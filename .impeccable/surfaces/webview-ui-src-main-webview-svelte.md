@@ -26,3 +26,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 ## Approved production implementation, 2026-10-17
 
 The user combined concepts 1 and 2 into Transcript and designated concept 3 as Styling, then requested native keyframe controls and a functional Mac-compatible GitHub build. This implements that confirmed composition in the Svelte UXP panel. Browser-only keyframes are explicitly labeled sample controls. Native operations use bounded, identity-checked Premiere transactions and readback. This is an extension of the user-pinned Premiere world; no new direction choice or raster comp is required.
+
+## Reusable style presets, 2026-10-17
+
+Local extension: add a compact preset picker above the existing Styling controls. Save a named snapshot of all three resolved word appearances, shared layout/background and animation. Apply, rename, replace and delete use the existing native-style fields, buttons and inline feedback. Presets live in plugin user data across projects on the same computer; the hosted preview uses browser storage and says so. Applying a look preserves placement, grouping, timing and native area/keyframes. Save errors stay visible and stale revisions require a reload. The existing design system and two-tab structure remain authoritative.

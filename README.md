@@ -13,12 +13,13 @@ This fork adds independent upcoming, currently spoken, and previously spoken wor
 - Caption placement and independent box width/height directly in Premiere's Program Monitor. Width changes reflow the words without changing their font size. Edit native Position, Width and Height keyframes in the plugin's lanes, including exact frame/value controls and supported Undo/Redo.
 - Shared or phrase-specific starting placement from numeric frame coordinates in the panel.
 - Fade, Pop, Bounce, Typewriter, and word highlighting. Enlarged words reserve space so surrounding words do not jump as the highlight moves.
+- Named style presets: save all three word appearances, shared layout/background, animation and fades for reuse across projects on the same computer. Apply, rename, replace and delete them from the top of Styling.
 
 Each phrase is rendered as a transparent **ProRes 4444 text-area clip** at the sequence's exact frame rate, then placed on a chosen video track. It is hardcoded into the final video when you export the sequence. The Program Monitor is the caption preview; the plugin has no separate caption canvas. Edit text/style/timing in the panel and update the Program Monitor. These are rendered clips, so Premiere's Text tool does not edit their letters directly.
 
 ## Requirements
 
-The installer supports **Windows and macOS (Apple Silicon or Intel), with Premiere Pro 26.3 or newer**. The same JavaScript plugin and platform-neutral package are used on both systems. Download the complete [0.6.0 Windows/macOS package](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.6.0). See the [release verification notes](docs/release-0.6.0.md) for tested behavior and remaining native-runtime limits.
+The installer supports **Windows and macOS (Apple Silicon or Intel), with Premiere Pro 26.3 or newer**. The same JavaScript plugin and platform-neutral package are used on both systems. Download the complete [0.7.0 Windows/macOS package](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.0). See the [release verification notes](docs/release-0.7.0.md) for tested behavior and remaining native-runtime limits.
 
 - Node.js 24 LTS for building/development and the optional agent CLI.
 - Local FFmpeg and FFprobe. The plugin finds WinGet's user links on Windows, Apple Silicon/Intel Homebrew locations on macOS, and absolute directories in `PATH`.
@@ -94,7 +95,13 @@ Use `--sequence <id>` or `--instance <id>` if several editors are open. Use `--f
 
 The preview opened by `npm run dev` uses a fictional transcript for UI evaluation. Its Transcribe and Apply buttons require the installed Premiere panel.
 
-The [online interface review](https://better-captions-premiere-review.swenhalver.chatgpt.site) provides the original 0.5.0 interface review with browser-only panel-width controls (owner sign-in required). Run the local preview for the current editor. See [interface review and verification](docs/interface-review.md) for the two-tab workflow and [0.6.0 release notes](docs/release-0.6.0.md) for current verification. The older three concept studies remain available at `/concepts/`.
+The [online interface review](https://better-captions-premiere-review.swenhalver.chatgpt.site) provides the 0.7.0 editor with browser-only panel-width controls (owner sign-in required). Preview presets are saved in that browser; they do not synchronize with the installed plugin or other computers. See [interface review and verification](docs/interface-review.md) for the two-tab workflow and [0.7.0 release notes](docs/release-0.7.0.md) for current verification. The older three concept studies remain available at `/concepts/`.
+
+## Reusable style presets
+
+In **Styling**, choose **Save preset…**, enter a name, and save. To reuse the look in another sequence or project, select it under **Style preset** and choose **Apply**, then update the Program Monitor to render the captions. **Manage…** lets you rename a preset, replace it with the current look, or delete it after confirmation. Deleting a preset leaves captions already using that look unchanged.
+
+Presets include past/current/next typography, stroke, shadow, word bubbles, shared caption layout/background, and animation/fades. They preserve the destination's word timing, grouping, starting placement, and existing native Position/Width/Height animation. The installed panel writes an atomic, revision-checked `style-presets.json` in its UXP user-data folder, independent of the Premiere project. Keep the same plugin identity when upgrading to retain that library; clearing plugin data removes it. Fonts remain installed locally.
 
 Nested audio sequences, reversed speech, and variable time-remapping need a deliberate workflow; flatten/open the dialogue sequence before transcription. Simultaneously spoken overlapping audio is not a speaker-selection workflow. Transcript corrections in this panel affect generated captions; they are not written back into Premiere's native transcript. Linked captions cannot be deleted/regrouped silently; edit their timeline clips deliberately before replacing the set.
 

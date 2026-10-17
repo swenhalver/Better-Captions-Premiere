@@ -7,11 +7,13 @@ const { localPath, parentPath } = require('./paths.js');
 const key = id => String(id).replace(/[{}]/g, '').toLowerCase();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
-const READ_METHODS = new Set(['getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea']);
+const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea']);
 const SERVICE_READS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor']);
 
 function createHostAPI(options = {}) {
   const contexts = new Map();
+  let presetStore;
+  function presets() { return presetStore ?? (presetStore = require('./style-presets.js').createPresetStore({ getFolder: () => fs.getDataFolder(), readJSON, writeJSON })); }
   let currentId = '';
   const readTimeout = options.readTimeoutMs ?? 12000;
   const startupGrace = Math.min(5000, Math.max(0, Number.isFinite(options.serviceStartupGraceMs) ? options.serviceStartupGraceMs : 5000));
@@ -149,6 +151,8 @@ function createHostAPI(options = {}) {
       contexts.set(id, info); currentId = id;
       return info;
     },
+    async loadStylePresets() { return presets().load(); },
+    async saveStylePresets(library) { return presets().save(library); },
     async fetchTranscriptJSON(id = currentId) { const { sequence } = await sequenceContext(id); return native.fetchTranscript(sequence); },
     async transcribeSequence(id = currentId) { const { sequence } = await sequenceContext(id); return native.transcribe(sequence); },
     async loadSession(id = currentId) {
