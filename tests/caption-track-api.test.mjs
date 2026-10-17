@@ -7,14 +7,16 @@ import { createRequire } from 'node:module';
 const require=createRequire(import.meta.url),ts=require('../webview-ui/node_modules/typescript');
 const source=fs.readFileSync(new URL('../webview-ui/src/cep-api.ts',import.meta.url),'utf8');
 function fixture(options={}){
- const context={id:'seq-a',projectPath:'/project/edit.prproj',width:720,height:1280,fps:24},directory='/project/Better Captions/seq-a',jobs=new Map(),calls=[],probes=[];
- const media=directory+'/caption-bundle-run/caption.mov';
+ const nativePath=options.platform==='win32'?path.win32:options.platform==='darwin'?path.posix:path;
+ const prefix=options.platform==='win32'?'C:\\Project':'/project';
+ const context={id:'seq-a',projectPath:options.platform?nativePath.join(prefix,'edit.prproj'):'/project/edit.prproj',width:720,height:1280,fps:24},directory=options.platform?nativePath.join(prefix,'Better Captions','seq-a'):'/project/Better Captions/seq-a',jobs=new Map(),calls=[],probes=[];
+ const media=options.platform?nativePath.join(directory,'caption-bundle-run','caption.mov'):directory+'/caption-bundle-run/caption.mov';
  let current={...context};
- const runtime={path,directory:()=>directory,writeJSON:(file,data)=>jobs.set(file,data),readJob(data){const file='/private/read-'+jobs.size+'.json';jobs.set(file,data);return file;},disposeReadJob:file=>jobs.delete(file),
+ const runtime={path:nativePath,directory:()=>directory,writeJSON:(file,data)=>jobs.set(file,data),readJob(data){const file='/private/read-'+jobs.size+'.json';jobs.set(file,data);return file;},disposeReadJob:file=>jobs.delete(file),
   fs:{lstatSync:()=>({isFile:()=>true,isSymbolicLink:()=>options.symlink===true}),realpathSync:file=>file},
   platform:{resolveTool:name=>'/trusted/'+name},
   async run(...args){probes.push(args);if(options.afterProbe)current=options.afterProbe(current);return options.probe??JSON.stringify({streams:[{codec_type:'video'}]});}};
- const window={require:name=>name==='node:path'?path:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript(expression,callback){
+ const window={require:name=>name==='node:path'?nativePath:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript(expression,callback){
   const method=expression.slice('BetterCaptionsHost.'.length,expression.indexOf('(')),args=JSON.parse('['+expression.slice(expression.indexOf('(')+1,-1)+']');
   calls.push({method,args});
   if(method==='context')return callback(JSON.stringify(current));
@@ -93,4 +95,13 @@ test('legacy conversion adapters keep captured identities, use private read jobs
  const outside=[previous[0],{...previous[1],mediaPath:'/project/unrelated.mov'}],before=native.length;
  await assert.rejects(f.api.stageCaptionConsolidation(caption,2,outside,plan,'seq-a'),/generated/);
  assert.equal(f.calls.filter(call=>call.method!=='context').length,before);
+});
+test('Windows and macOS adapters retain exact deleted-link receipts at every timeline preparation boundary',async()=>{
+ for(const platform of ['win32','darwin']){
+  const f=fixture({platform}),oldPath=platform==='win32'?'C:\\Project\\old caption.mov':'/project/old caption.mov',deleted=[{id:'bundle',clipNodeId:'deleted-node',projectItemId:'old-item',mediaPath:oldPath}];await f.api.getActiveSequenceInfo();
+  await f.api.preflightCaptionClips([f.caption],-1,'seq-a',deleted);await f.api.prepareCaptionTrack([f.caption],-1,'seq-a',[f.caption],deleted);await f.api.applyCaptionClips([f.caption],1,'seq-a',[f.caption],deleted);
+  const native=f.calls.filter(call=>['preflight','prepareCaptionTrack','apply'].includes(call.method));assert.equal(native.length,3);
+  for(const call of native){assert.deepEqual(call.payload.deletedLinks,deleted);assert.equal(call.payload.sequenceId,'seq-a');assert.equal(call.payload.projectPath,f.context.projectPath);assert.equal(call.payload.cues[0].path,f.media);assert.equal(call.payload.cues[0].clipNodeId,undefined);}
+  await assert.rejects(f.api.preflightCaptionClips([f.caption],-1,'seq-a','other-sequence'),/Invalid deleted/);
+ }
 });

@@ -140,6 +140,67 @@ test('a seed already referenced by a timeline clip cannot be reused to create an
  const result=JSON.parse(f.host.prepareCaptionTrack(file));assert.match(result.error,/already used/);assert.equal(f.imports.length,1);assert.equal(f.overwrites.length,0);assert.equal(imported.nodeId,first.seed.projectItemId);
 });
 
+function deletedCaptionFixture() {
+ const f=hostFixture(),footage=f.addClip(f.item('/footage.mov'),0,10),top=addVideoTrack(f),old=f.addClip(f.item('/caption-old.mov'),0,1,top.clips);
+ const link={id:'bundle',clipNodeId:old.nodeId,projectItemId:old.projectItem.nodeId,mediaPath:old.projectItem.media};
+ const read=(patch={})=>{f.files.set('/read-deleted.json',JSON.stringify({sequenceId:f.sequence.sequenceID,projectPath:f.project.path,cues:[link],...patch}));return JSON.parse(f.host.readTimeline('/read-deleted.json'));};
+ const job=(cues=[f.cue('bundle')],links=[link])=>{const file=automaticPayload(f,cues),payload=JSON.parse(f.files.get(file));payload.deletedLinks=links;f.files.set(file,JSON.stringify(payload));return file;};
+ return {...f,footage,top,old,link,read,job};
+}
+test('timeline absence receipts include exact native identities for deleted clips and whole deleted tracks',()=>{
+ for(const wholeTrack of [false,true]){
+  const f=deletedCaptionFixture(),live=f.read();assert.equal(live.ok,true);assert.equal(live.cues[0].clipNodeId,f.link.clipNodeId);assert.equal(live.cues[0].projectItemId,f.link.projectItemId);assert.equal(live.cues[0].path,f.link.mediaPath);
+  if(wholeTrack)f.sequence.videoTracks.pop();else f.old.remove();
+  const missing=f.read();assert.equal(missing.ok,true);assert.deepEqual(missing.cues,[{id:f.link.id,clipNodeId:f.link.clipNodeId,projectItemId:f.link.projectItemId,path:f.link.mediaPath,missing:true}]);
+  const file=f.job(),preflight=JSON.parse(f.host.preflight(file));assert.equal(preflight.ok,true);assert.equal(preflight.destination.mode,wholeTrack?'create':'reuse');
+  const prepared=JSON.parse(f.host.prepareCaptionTrack(file));assert.equal(prepared.ok,true);assert.equal(f.overwrites.length,0);
+  if(wholeTrack)addVideoTrack(f);
+  const result=JSON.parse(f.host.apply(file));assert.equal(result.ok,true,JSON.stringify(result));assert.notEqual(result.cues[0].clipNodeId,f.link.clipNodeId);assert.notEqual(result.cues[0].projectItemId,f.link.projectItemId);assert.equal(result.cues[0].track,1);assert.deepEqual(f.clips,[f.footage]);
+ }
+});
+test('remaining fragments, copies, reimported media, audio references and reused node ids prevent absence receipts',()=>{
+ for(const survivor of ['fragment','copy','media-copy','audio','node-id','windows-path-case']){
+  const f=deletedCaptionFixture();f.old.remove();
+  let item=f.old.projectItem,target=f.top.clips;
+  if(survivor==='media-copy')item=f.item(f.link.mediaPath);
+  if(survivor==='node-id')item=f.item('/different-source.mov');
+  if(survivor==='audio'){const audio={clips:collection()};f.sequence.audioTracks.push(audio);target=audio.clips;}
+  if(survivor==='windows-path-case'){f.link.mediaPath='C:\\Project\\Caption.mov';item=f.item('c:/project/caption.MOV');}
+  const clip=f.addClip(item,1,2,target);if(survivor==='node-id')clip.nodeId=f.link.clipNodeId;
+  if(survivor==='fragment')clip.inPoint=new Time(1);
+  const read=f.read();assert.match(read.error,/still has|link changed/,survivor);
+  assert.match(JSON.parse(f.host.prepareCaptionTrack(f.job())).error,/still has/,survivor);assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);
+ }
+});
+test('recreating deleted active-sequence captions does not modify copies in another sequence',()=>{
+ const f=deletedCaptionFixture(),otherClips=collection(),other=f.addClip(f.old.projectItem,5,6,otherClips);f.old.remove();
+ f.project.sequences.push({sequenceID:'other',videoTracks:collection([{clips:otherClips}],'numTracks'),audioTracks:collection([],'numTracks')});
+ assert.equal(f.read().ok,true);const result=JSON.parse(f.host.apply(f.job()));assert.equal(result.ok,true);assert.deepEqual(otherClips,[other]);assert.equal(other.projectItem.media,f.link.mediaPath);assert.equal(other.start.seconds,5);assert.notEqual(result.cues[0].projectItemId,other.projectItem.nodeId);
+});
+test('Undo or re-add after rendering or automatic track preparation is rejected before another import or native write',()=>{
+ for(const stage of ['preflight','prepared']){
+  const f=deletedCaptionFixture();f.old.remove();f.sequence.videoTracks.pop();const file=f.job();assert.equal(f.read().ok,true);
+  if(stage==='prepared')assert.equal(JSON.parse(f.host.prepareCaptionTrack(file)).ok,true);else assert.equal(JSON.parse(f.host.preflight(file)).ok,true);
+  const imports=f.imports.length,top=addVideoTrack(f);top.clips.push(f.old);
+  const result=JSON.parse(stage==='prepared'?f.host.apply(file):f.host.prepareCaptionTrack(file));assert.match(result.error,/still has/);assert.equal(f.imports.length,imports);assert.equal(f.overwrites.length,0);assert.deepEqual(top.clips,[f.old]);
+ }
+});
+test('one deleted clip can be recreated while surviving linked captions retain exact identity and Motion',()=>{
+ const f=deletedCaptionFixture(),survivor=f.addClip(f.item('/surviving-caption.mov'),1,2,f.top.clips),motion=structuredClone(survivor.motion);f.old.remove();
+ const top=addVideoTrack(f),newCue=f.cue('bundle'),linked=f.cue('survivor',30,60,{clipNodeId:survivor.nodeId,projectItemId:survivor.projectItem.nodeId,previousPath:survivor.projectItem.media});
+ const result=JSON.parse(f.host.apply(f.job([newCue,linked])));assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.cues[0].track,2);assert.equal(result.cues[1].track,1);assert.equal(result.cues[1].clipNodeId,survivor.nodeId);assert.equal(f.top.clips[0],survivor);assert.deepEqual(survivor.motion,motion);assert.equal(top.clips.length,1);assert.deepEqual(f.clips,[f.footage]);
+});
+test('ambiguous, incomplete and stale deletion receipts fail closed before imports',()=>{
+ const variations=[links=>[links[0],links[0]],()=>null,()=>({}),()=>[{id:'bundle'}],links=>[{...links[0],mediaPath:'../caption.mov'}],links=>[{...links[0],clipNodeId:42}]];
+ for(const change of variations){const f=deletedCaptionFixture();f.old.remove();const result=JSON.parse(f.host.prepareCaptionTrack(f.job(undefined,change([f.link]))));assert.match(result.error,/Invalid|incomplete|Duplicate/);assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);}
+ for(const context of [{sequenceId:'other'},{projectPath:'/different.prproj'}]){const f=deletedCaptionFixture();f.old.remove();assert.match(f.read(context).error,/changed/);assert.equal(f.imports.length,0);}
+ const f=deletedCaptionFixture();f.old.remove();assert.match(f.read({cues:[f.link,f.link]}).error,/identities/);
+});
+test('absence inspection never treats an unreadable, oversized or malformed timeline as empty',()=>{
+ const changes=[f=>{f.sequence.videoTracks=collection(Array.from({length:257},()=>({clips:collection()})),'numTracks');},f=>{f.top.clips=collection(Array.from({length:2001},()=>f.footage));},f=>{f.top.clips={numItems:NaN};},f=>{f.top.clips.push({nodeId:'unreadable'});},f=>{f.footage.projectItem.getMediaPath=()=>{throw new Error('native read failed');};}];
+ for(const change of changes){const f=deletedCaptionFixture();f.old.remove();change(f);assert.ok(f.read().error);assert.ok(JSON.parse(f.host.prepareCaptionTrack(f.job())).error);assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);}
+});
+
 function razorFixture(){
  const f=hostFixture(),media=f.item('/caption-bundle-old.mov'),first=f.addClip(media,30/FPS,60/FPS),second=f.addClip(media,60/FPS,120/FPS);
  first.outPoint=frameTimeForTest(30);second.inPoint=frameTimeForTest(30);second.outPoint=frameTimeForTest(90);

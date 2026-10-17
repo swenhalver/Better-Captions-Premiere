@@ -11,7 +11,7 @@ const READ_ACTIONS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', '
 const ARG_COUNTS: Record<string, number[]> = {
   readCaptionConsolidation:[1], stageCaptionConsolidation:[4], verifyCaptionConsolidation:[3], rollbackCaptionConsolidation:[3],
   getFonts: [0], beginCaption: [1], saveCaptionFrames: [3], finishCaption: [3, 4],
-  preflightCaptionClips: [2], prepareCaptionTrack: [2, 3], applyCaptionClips: [2, 3], readTimeline: [1], showInPremiere: [1],
+  preflightCaptionClips: [2, 3], prepareCaptionTrack: [2, 3, 4], applyCaptionClips: [2, 3, 4], readTimeline: [1], showInPremiere: [1],
   selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1], readCaptionAreaDescriptor: [1], patchCaptionKeyValues: [2],
 };
 interface Request { version: number; id: string; createdAt: number; expiresAt?: number; sequenceId: string; projectPath: string; action: string; args: any[]; }
@@ -26,6 +26,8 @@ export function validateServiceRequest(value: unknown, filename: string, now = D
   if (typeof request.sequenceId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(request.sequenceId) || !localProject || project.length > 4096) throw new Error('Invalid captured Premiere sequence or project.');
   if (!SERVICE_ACTIONS.includes(request.action as typeof SERVICE_ACTIONS[number])) throw new Error('Unsupported caption service action.');
   if (!Array.isArray(request.args) || !ARG_COUNTS[request.action].includes(request.args.length)) throw new Error('Invalid caption service arguments.');
+  const deletionIndex = request.action === 'preflightCaptionClips' ? 2 : ['prepareCaptionTrack', 'applyCaptionClips'].includes(request.action) ? 3 : -1;
+  if (deletionIndex >= 0 && request.args.length > deletionIndex && !Array.isArray(request.args[deletionIndex])) throw new Error('Invalid caption service arguments.');
   if(request.action==='readCaptionMotion'&&request.args.length===2){
     const options=request.args[1];
     if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).length!==1||options.includeDiagnostics!==true)throw new Error('Invalid caption service arguments.');
@@ -51,9 +53,9 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
     case 'beginCaption': return api.beginCaption(a, id);
     case 'saveCaptionFrames': return api.saveCaptionFrames(a, b, c, id);
     case 'finishCaption': return api.finishCaption(a, b, c, id, d);
-    case 'preflightCaptionClips': return api.preflightCaptionClips(a, b, id);
-    case 'prepareCaptionTrack': return api.prepareCaptionTrack(a, b, id, c);
-    case 'applyCaptionClips': return api.applyCaptionClips(a, b, id, c);
+    case 'preflightCaptionClips': return api.preflightCaptionClips(a, b, id, ...(request.args.length > 2 ? [c] : []));
+    case 'prepareCaptionTrack': return api.prepareCaptionTrack(a, b, id, c, ...(request.args.length > 3 ? [d] : []));
+    case 'applyCaptionClips': return api.applyCaptionClips(a, b, id, c, ...(request.args.length > 3 ? [d] : []));
     case 'readTimeline': return api.readTimeline(a, id);
     case 'showInPremiere': return api.showInPremiere(a, id);
     case 'selectCaptionClip': return api.selectCaptionClip(a, id);

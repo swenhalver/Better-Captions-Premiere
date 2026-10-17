@@ -64,6 +64,16 @@ test('legacy conversion service endpoints preserve the captured sequence and bou
  assert.equal(calls.length,4);
  for(const action of ['readCaptionConsolidation','verifyCaptionConsolidation']){const data=request(action,examples.find(([name])=>name===action)[1]);data.expiresAt=data.createdAt+11000;assert.throws(()=>service.validateServiceRequest(data,data.id+'.json'),/expired/);}
 });
+test('deletion receipts cross fixed service endpoints without becoming injected sequence arguments',async()=>{
+ const captions=[{id:'bundle'}],previous=[{id:'before'}],deleted=[{id:'bundle',clipNodeId:'old-node',projectItemId:'old-item',mediaPath:'/generated/old.mov'}],calls=[];
+ const api={getActiveSequenceInfo:info,...Object.fromEntries(['preflightCaptionClips','prepareCaptionTrack','applyCaptionClips'].map(name=>[name,(...args)=>calls.push([name,...args])]))};
+ for(const action of ['preflightCaptionClips','prepareCaptionTrack','applyCaptionClips']){
+  const args=action==='preflightCaptionClips'?[captions,-1,deleted]:[captions,-1,previous,deleted],data=request(action,args);service.validateServiceRequest(data,data.id+'.json');await service.dispatchServiceRequest(api,data);
+  assert.deepEqual(calls.at(-1),[action,captions,-1,'seq-a',...(action==='preflightCaptionClips'?[]:[previous]),deleted]);
+  for(const injected of ['other-sequence',{},null]){const bad=request(action,[...args.slice(0,-1),injected]);assert.throws(()=>service.validateServiceRequest(bad,bad.id+'.json'),/arguments/);}
+  const extra=request(action,[...args,'other-sequence']);assert.throws(()=>service.validateServiceRequest(extra,extra.id+'.json'),/arguments/);
+ }
+});
 test('text-box rendering and selection use captured identity without accepting a caller-supplied sequence', async () => {
   const calls = [], caption = { id: 'cue', clipNodeId: 'node', projectItemId: 'item', mediaPath: '/generated/caption.mov' };
   const bounds = { x: 100, y: 500, width: 400, height: 300, frameWidth: 720, frameHeight: 1280 };

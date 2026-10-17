@@ -107,6 +107,8 @@ In **Transcript → Caption grouping** (**Sentence grouping** in 0.7.2), set **C
 
 Regroup splits or rejoins sentences while preserving word timings, sentence markers, pauses, speaker/placement boundaries and readable durations. Undo restores the previous grouping. Linked Premiere clips keep their physical boundaries and native keyframes while their rendered sentence groups change. Older sessions adopt the 56-character default instead of interpreting their old word count as characters; existing captions remain unchanged until regrouping. Style presets preserve the destination character limit.
 
+If you delete a generated caption clip or its whole video track in Premiere, click **Update Program Monitor** to recreate it from the saved transcript and style. The replacement uses an automatic track above footage. Deliberate transcript splits remain separate, and surviving linked clips retain their native identities and Motion. Recreated clips start with the saved panel placement; native keyframes deleted with the old clips are no longer available. A remaining Razor fragment or media copy in the active sequence is protected, and automatic single-caption reflow does not recreate deleted clips.
+
 ## Reusable style presets
 
 In **Styling**, choose **Save preset…**, enter a name, and save. To reuse the look in another sequence or project, select it under **Style preset** and choose **Apply**, then update the Program Monitor to render the captions. **Manage…** lets you rename a preset, replace it with the current look, or delete it after confirmation. Deleting a preset leaves captions already using that look unchanged.

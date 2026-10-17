@@ -932,10 +932,62 @@ var BetterCaptionsHost = (function () {
             return reply({ ok: true, rolledBack: true });
         } catch (e) { return reply({ error: e.toString() }); }
     }
+    function linkIdentity(cue) {
+        function identity(value) { return typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f]/.test(value); }
+        if (!cue || !identity(cue.id) || !identity(cue.clipNodeId) || !identity(cue.projectItemId) || typeof cue.mediaPath !== 'string' || cue.mediaPath.length > 4096 || !/^(?:\/(?!\/)|[a-z]:[\\/])/i.test(cue.mediaPath) || /[\u0000-\u001f]/.test(cue.mediaPath) || /(?:^|[\\/])\.{1,2}(?:[\\/]|$)/.test(cue.mediaPath)) throw new Error('A caption timeline link is incomplete. Sync timing from Premiere before updating it.');
+    }
+    function comparableMediaPath(path) {
+        // Drive paths are case-insensitive on supported Windows installs;
+        // macOS/POSIX paths retain case to avoid identifying unrelated media.
+        return /^[a-z]:[\\/]/i.test(path) ? path.replace(/\\/g, '/').toLowerCase() : path;
+    }
+    function activeReferences(s) {
+        var references = [], sets = [s.videoTracks, s.audioTracks], inspected = 0;
+        for (var k = 0; k < sets.length; k++) {
+            var tracks = sets[k];
+            if (!tracks || typeof tracks.numTracks !== 'number' || !isFinite(tracks.numTracks) || tracks.numTracks < 0 || tracks.numTracks !== Math.floor(tracks.numTracks) || tracks.numTracks > 256) throw new Error('Premiere could not safely inspect every caption track.');
+            for (var t = 0; t < tracks.numTracks; t++) {
+                var clips = tracks[t].clips;
+                if (!clips || typeof clips.numItems !== 'number' || !isFinite(clips.numItems) || clips.numItems < 0 || clips.numItems !== Math.floor(clips.numItems) || inspected + clips.numItems > 2000) throw new Error('This sequence is too large to confirm deleted caption clips automatically.');
+                for (var c = 0; c < clips.numItems; c++) {
+                    inspected++;
+                    var clip = clips[c], item = clip && clip.projectItem;
+                    if (!clip || clip.nodeId === undefined || clip.nodeId === null || !item || item.nodeId === undefined || item.nodeId === null || typeof item.getMediaPath !== 'function') throw new Error('Premiere could not confirm every timeline media reference.');
+                    var path = item.getMediaPath();
+                    if (typeof path !== 'string') throw new Error('Premiere could not confirm every timeline media path.');
+                    references.push({ clip: clip, video: k === 0, track: t, clipNodeId: String(clip.nodeId), projectItemId: String(item.nodeId), path: comparableMediaPath(path) });
+                }
+            }
+        }
+        return references;
+    }
+    function confirmAbsent(cue, references) {
+        linkIdentity(cue);
+        var path = comparableMediaPath(cue.mediaPath);
+        for (var i = 0; i < references.length; i++) {
+            var ref = references[i];
+            if (ref.clipNodeId === cue.clipNodeId || ref.projectItemId === cue.projectItemId || ref.path === path) throw new Error('A deleted caption still has a clip, split fragment or media copy in this sequence. Sync timing from Premiere before applying again.');
+        }
+    }
+    function confirmDeletedLinks(p, s) {
+        if (p.deletedLinks === undefined) return;
+        if (!(p.deletedLinks instanceof Array) || p.deletedLinks.length > 10000) throw new Error('Invalid deleted caption links.');
+        if (!p.deletedLinks.length) return;
+        var references = activeReferences(s), ids = {}, nodes = {};
+        for (var i = 0; i < p.deletedLinks.length; i++) {
+            var cue = p.deletedLinks[i]; linkIdentity(cue);
+            if (ids['$' + cue.id] || nodes['$' + cue.clipNodeId]) throw new Error('Duplicate deleted caption links.');
+            ids['$' + cue.id] = true; nodes['$' + cue.clipNodeId] = true;
+            confirmAbsent(cue, references);
+        }
+    }
     function prepare(p, requireMedia) {
         var s = sequence(p.sequenceId, p.projectPath), tpf = Number(s.timebase), fps = TICKS / tpf;
         if (!p.sequenceId || !p.projectPath || !p.cues || !p.cues.length || p.cues.length > 10000) throw new Error('Invalid caption job.');
         if (p.width !== s.frameSizeHorizontal || p.height !== s.frameSizeVertical || Math.abs(p.fps - fps) > 0.000001) throw new Error('Sequence dimensions or frame rate changed. Refresh and render again.');
+        // Recheck the positive deletion receipt after rendering and again after
+        // UXP creates an automatic track. Undo/re-add must never duplicate clips.
+        confirmDeletedLinks(p, s);
         var destination = captionDestination(s, p.track);
         var planned = [], ids = {}, nodes = {}, i, j, geometryFrames = 0;
         for (i = 0; i < p.cues.length; i++) {
@@ -1117,19 +1169,33 @@ var BetterCaptionsHost = (function () {
     function readTimeline(file) {
         try {
             var p = readPayload(file), s = sequence(p.sequenceId, p.projectPath), out = [];
+            if (!p.sequenceId || !p.projectPath || !(p.cues instanceof Array) || p.cues.length > 10000) throw new Error('Invalid caption timeline read.');
+            var references = activeReferences(s), ids = {};
             for (var i = 0; i < p.cues.length; i++) {
-                var cue = p.cues[i], found = cue.clipNodeId ? findClip(s, cue.clipNodeId) : null;
+                var cue = p.cues[i], found = null;
+                if (!cue || typeof cue.id !== 'string' || !cue.id || ids['$' + cue.id]) throw new Error('Invalid caption timeline identities.');
+                ids['$' + cue.id] = true;
+                if (!cue.clipNodeId) { out.push({ id: cue.id, missing: true }); continue; }
+                linkIdentity(cue);
+                for (var r = 0; r < references.length; r++) if (references[r].video && references[r].clipNodeId === cue.clipNodeId) {
+                    if (found) throw new Error('Premiere returned an ambiguous caption timeline link.');
+                    found = references[r];
+                }
                 if (found) {
                     var fragments = null;
+                    if (!sameNode(found.clip.projectItem.nodeId, cue.projectItemId)) throw new Error('A caption timeline link changed. Sync timing from Premiere before updating it.');
                     if (cue.captionBundle === true) {
                         if (!cue.projectItemId || !cue.mediaPath || !sameNode(found.clip.projectItem.nodeId, cue.projectItemId) || found.clip.projectItem.getMediaPath() !== cue.mediaPath) throw new Error('The caption bundle timeline link changed.');
                         fragments = captionFragments(s, cue, cue.mediaPath, found);
                     }
-                    var result = { id: cue.id, start: fragments ? fragments[0].clip.start.seconds : found.clip.start.seconds, end: fragments ? fragments[fragments.length - 1].clip.end.seconds : found.clip.end.seconds, track: found.track, projectItemId: String(found.clip.projectItem.nodeId), path: found.clip.projectItem.getMediaPath() };
+                    var result = { id: cue.id, clipNodeId: String(found.clip.nodeId), start: fragments ? fragments[0].clip.start.seconds : found.clip.start.seconds, end: fragments ? fragments[fragments.length - 1].clip.end.seconds : found.clip.end.seconds, track: found.track, projectItemId: String(found.clip.projectItem.nodeId), path: found.clip.projectItem.getMediaPath() };
                     if (fragments) result.bundleFragments = fragmentReceipt(fragments);
                     out.push(result);
                 }
-                else out.push({ id: cue.id, missing: true });
+                else {
+                    confirmAbsent(cue, references);
+                    out.push({ id: cue.id, clipNodeId: cue.clipNodeId, projectItemId: cue.projectItemId, path: cue.mediaPath, missing: true });
+                }
             }
             return reply({ ok: true, cues: out });
         } catch (e) { return reply({ error: e.toString() }); }

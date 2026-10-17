@@ -98,6 +98,23 @@ function conversionFixture(t,mode='success'){
  return {...h,previous,caption,plan,started,release};
 }
 
+test('deleted-link recovery stays frozen through automatic destination preparation and final Apply',async t=>{
+ let entered,release;const started=new Promise(resolve=>{entered=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+ const h=harness(t,{serviceResult:async request=>{
+  if(request.action==='preflightCaptionClips')return {ok:true};
+  if(request.action==='prepareCaptionTrack'){entered();await gate;return {ok:true,sequenceId:'one',projectPath:'/projects/edit.prproj',destination:{mode:'reuse',trackIndex:2}};}
+  if(request.action==='applyCaptionClips')return {ok:true,cues:[{id:'bundle',clipNodeId:'new-node'}]};
+  assert.fail('Unexpected recovery action '+request.action);
+ }});
+ const captions=[{id:'bundle',mediaPath:'/generated/new.mov'}],previous=[{id:'bundle'}],deleted=[{id:'bundle',clipNodeId:'old-node',projectItemId:'old-item',mediaPath:'/generated/old.mov'}];
+ await h.api.getActiveSequenceInfo();await h.api.preflightCaptionClips(captions,-1,'one',deleted);
+ const pending=h.api.applyCaptionClips(captions,-1,'one',previous,deleted);await started;deleted[0].clipNodeId='edited-later';captions[0].id='edited-later';previous[0].id='edited-later';release();assert.equal((await pending).cues[0].clipNodeId,'new-node');
+ assert.deepEqual(h.requests.map(request=>request.action),['preflightCaptionClips','prepareCaptionTrack','applyCaptionClips']);
+ for(const request of h.requests.slice(1)){assert.equal(request.sequenceId,'one');assert.equal(request.args[0][0].id,'bundle');assert.equal(request.args[2][0].id,'bundle');assert.equal(request.args[3][0].clipNodeId,'old-node');assert.equal(request.args[3][0].mediaPath,'/generated/old.mov');}
+ assert.equal(h.requests.at(-1).args[1],2);
+ await assert.rejects(h.api.preflightCaptionClips(captions,-1,'one','injected'),/Invalid deleted/);await assert.rejects(h.api.applyCaptionClips(captions,-1,'one',previous,{}),/Invalid deleted/);assert.equal(h.requests.length,3);
+});
+
 test('legacy conversion keeps one serial native lane and freezes its identities through verified replacement',async t=>{
  const h=conversionFixture(t,'gated');await h.api.getActiveSequenceInfo();
  const pending=h.api.applyConsolidatedCaption(h.caption,h.previous,h.plan,'one');await h.started;

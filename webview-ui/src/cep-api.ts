@@ -1,4 +1,5 @@
 import type { CaptionItem, SequenceInfo, RenderBounds } from './lib/types';
+import type { DeletedCaptionLink } from './lib/export/deleted-links';
 import { emptyPresetLibrary, validatePresetLibrary, PRESET_STORAGE_KEY, type PresetLibrary } from './lib/style-presets.ts';
 declare const window: Window & { __adobe_cep__?: any; require?: any };
 const demoWords = 'Every word has its own style. Move captions anywhere in the frame.'.split(' ').map((text, i) => ({ text, start: i * .42, duration: .36, confidence: 1, eos: /[.!?]$/.test(text), type: 'word' as const, tags: [] }));
@@ -60,8 +61,9 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     const stat = runtime.fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || runtime.fs.realpathSync(file) !== file) throw new Error('Caption media must be a generated movie, not a symbolic link.');
   }
-  function timelinePayload(context: CapturedContext, captions: CaptionItem[], track: number, previous: CaptionItem[]) {
-    return { sequenceId: context.id, projectPath: context.projectPath, track, width: context.width, height: context.height, fps: context.fps,
+  function timelinePayload(context: CapturedContext, captions: CaptionItem[], track: number, previous: CaptionItem[], deletedLinks: DeletedCaptionLink[] = []) {
+    if (!Array.isArray(deletedLinks)) throw new Error('Invalid deleted caption links.');
+    return { sequenceId: context.id, projectPath: context.projectPath, track, width: context.width, height: context.height, fps: context.fps, ...(deletedLinks.length ? { deletedLinks } : {}),
       cues: captions.map(c => ({ id: c.id, text: c.text, startFrame: Math.round(c.startTime * context.fps), endFrame: Math.round(c.endTime * context.fps), path: c.mediaPath, previousPath: previous.find(old => old.id === c.id)?.mediaPath ?? c.mediaPath, clipNodeId: c.clipNodeId, projectItemId: c.projectItemId,captionBundle:c.captionBundle,renderBounds:c.renderBounds,previousRenderBounds:previous.find(old=>old.id===c.id)?.renderBounds,motionProfile:c.motionProfile })) };
   }
   function legacyCues(context: CapturedContext, captions: CaptionItem[]) {
@@ -155,9 +157,9 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
       await checkSequence(sequenceId);
       return media;
     },
-    async preflightCaptionClips(captions: CaptionItem[], track: number, sequenceId: string) {
+    async preflightCaptionClips(captions: CaptionItem[], track: number, sequenceId: string, deletedLinks: DeletedCaptionLink[] = []) {
       const context = await checkSequence(sequenceId);
-      return host('preflight', [jobFile(context, 'preflight', timelinePayload(context, captions, track, captions))]);
+      return host('preflight', [jobFile(context, 'preflight', timelinePayload(context, captions, track, captions, deletedLinks))]);
     },
     async readCaptionConsolidation(captions: CaptionItem[], sequenceId: string) {
       const context=await checkSequence(sequenceId);
@@ -175,7 +177,7 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
       const context=await checkSequence(sequenceId);generatedMedia(context,caption.mediaPath);
       return host('rollbackCaptionConsolidation',[jobFile(context,'consolidation-rollback',{sequenceId:context.id,projectPath:context.projectPath,cues:[caption],legacyCues:legacyCues(context,previous),plan})]);
     },
-    async prepareCaptionTrack(captions: CaptionItem[], track: number, sequenceId: string, previous: CaptionItem[] = captions) {
+    async prepareCaptionTrack(captions: CaptionItem[], track: number, sequenceId: string, previous: CaptionItem[] = captions, deletedLinks: DeletedCaptionLink[] = []) {
       const context = await checkSequence(sequenceId);
       captions.forEach(caption => generatedMedia(context, caption.mediaPath));
       previous.filter(caption => caption.clipNodeId).forEach(caption => generatedMedia(context, caption.mediaPath));
@@ -185,18 +187,18 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
         if (!Array.isArray(probe.streams) || probe.streams.length !== 1 || probe.streams[0]?.codec_type !== 'video') throw new Error('Creating a caption track requires a generated video-only caption movie. No timeline changes were made.');
         await checkSequence(sequenceId);
       }
-      const result = await host('prepareCaptionTrack', [jobFile(context, 'caption-track-job', timelinePayload(context, captions, track, previous))]);
+      const result = await host('prepareCaptionTrack', [jobFile(context, 'caption-track-job', timelinePayload(context, captions, track, previous, deletedLinks))]);
       if (result.seed) {
         if (!firstNew || result.seed.id !== firstNew.id || result.seed.path !== firstNew.mediaPath) throw new Error('Premiere returned a different temporary caption source. No track was created.');
         result.seed.videoOnly = true;
       }
       return result;
     },
-    async applyCaptionClips(captions: CaptionItem[], track: number, sequenceId: string, previous: CaptionItem[] = captions) {
+    async applyCaptionClips(captions: CaptionItem[], track: number, sequenceId: string, previous: CaptionItem[] = captions, deletedLinks: DeletedCaptionLink[] = []) {
       const context = await checkSequence(sequenceId);
       captions.forEach(caption => generatedMedia(context, caption.mediaPath));
       previous.filter(caption => caption.clipNodeId).forEach(caption => generatedMedia(context, caption.mediaPath));
-      return host('apply', [jobFile(context, 'timeline-job', timelinePayload(context, captions, track, previous))]);
+      return host('apply', [jobFile(context, 'timeline-job', timelinePayload(context, captions, track, previous, deletedLinks))]);
     },
     async readTimeline(captions: CaptionItem[], sequenceId = currentId) {
       const context = await checkSequence(sequenceId);

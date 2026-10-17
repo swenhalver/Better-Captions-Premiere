@@ -128,9 +128,9 @@ function createHostAPI(options = {}) {
       for (const file of [input, output]) if (file) try { await file.delete(); } catch {}
     }
   }
-  async function captionDestination(captions, track, id, previous) {
+  async function captionDestination(captions, track, id, previous, deletedLinks = []) {
     if(track!==-1 || !captions.some(caption=>!caption.clipNodeId))return track;
-    const prepared=await backend('prepareCaptionTrack',[captions,track,previous],id),context=captured(id);
+    const prepared=await backend('prepareCaptionTrack',[captions,track,previous,...(deletedLinks.length?[deletedLinks]:[])],id),context=captured(id);
     if(!record(prepared) || prepared.ok!==true || !record(prepared.destination) || prepared.sequenceId!==context.id || prepared.projectPath!==context.projectPath)throw new Error('Premiere could not confirm the automatic caption track for this project and sequence.');
     if(prepared.destination.mode==='create'){
       const {project,sequence}=await sequenceContext(id);
@@ -186,10 +186,15 @@ function createHostAPI(options = {}) {
     async beginCaption(captionId, id) { return backend('beginCaption', [captionId], id); },
     async saveCaptionFrames(folder, frames, start, id) { return backend('saveCaptionFrames', [folder, frames, start], id); },
     async finishCaption(folder, fps, count, id, bounds) { return backend('finishCaption', bounds ? [folder, fps, count, bounds] : [folder, fps, count], id); },
-    async preflightCaptionClips(captions, track, id) { return backend('preflightCaptionClips', [captions, track], id); },
-    async applyCaptionClips(captions, track, id, previous = captions) {
-      const destination=await captionDestination(captions,track,id,previous);
-      return backend('applyCaptionClips', [captions, destination, previous], id);
+    async preflightCaptionClips(captions, track, id, deletedLinks = []) {
+      if(!Array.isArray(deletedLinks))throw new Error('Invalid deleted caption links.');
+      return backend('preflightCaptionClips', [captions, track, ...(deletedLinks.length?[deletedLinks]:[])], id);
+    },
+    async applyCaptionClips(captions, track, id, previous = captions, deletedLinks = []) {
+      if(!Array.isArray(deletedLinks))throw new Error('Invalid deleted caption links.');
+      [captions,previous,deletedLinks]=JSON.parse(JSON.stringify([captions,previous,deletedLinks]));
+      const destination=await captionDestination(captions,track,id,previous,deletedLinks);
+      return backend('applyCaptionClips', [captions, destination, previous, ...(deletedLinks.length?[deletedLinks]:[])], id);
     },
     async readCaptionConsolidation(captions,id) { return backend('readCaptionConsolidation',[captions],id); },
     async applyConsolidatedCaption(caption,previous,plan,id) {
