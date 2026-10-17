@@ -7,8 +7,8 @@ const { localPath, parentPath } = require('./paths.js');
 const key = id => String(id).replace(/[{}]/g, '').toLowerCase();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
-const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea']);
-const SERVICE_READS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor']);
+const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation']);
+const SERVICE_READS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 
 function createHostAPI(options = {}) {
   const contexts = new Map();
@@ -33,7 +33,7 @@ function createHostAPI(options = {}) {
     if (disposed) return Promise.reject(new Error('The Better Captions plugin is closed.'));
     if (unresolved) return Promise.reject(new Error('A previous Premiere read has not finished. Native requests are paused until it returns; the timeout did not cancel that operation.'));
     if (waiting.length >= 8) return Promise.reject(new Error('Better Captions is busy. Wait for the current operation before requesting more native work.'));
-    const timeout = READ_METHODS.has(method) ? readTimeout : method === 'transcribeSequence' ? 60 * 60 * 1000 : method === 'finishCaption' || method === 'applyCaptionClips' ? 30 * 60 * 1000 : 60000;
+    const timeout = READ_METHODS.has(method) ? readTimeout : method === 'transcribeSequence' ? 60 * 60 * 1000 : ['finishCaption','applyCaptionClips','applyConsolidatedCaption'].includes(method) ? 30 * 60 * 1000 : 60000;
     return new Promise((resolve, reject) => {
       const job = { run, resolve, reject, timer: null, deadline: Date.now() + timeout };
       job.timer = setTimeout(() => {
@@ -128,6 +128,17 @@ function createHostAPI(options = {}) {
       for (const file of [input, output]) if (file) try { await file.delete(); } catch {}
     }
   }
+  async function captionDestination(captions, track, id, previous) {
+    if(track!==-1 || !captions.some(caption=>!caption.clipNodeId))return track;
+    const prepared=await backend('prepareCaptionTrack',[captions,track,previous],id),context=captured(id);
+    if(!record(prepared) || prepared.ok!==true || !record(prepared.destination) || prepared.sequenceId!==context.id || prepared.projectPath!==context.projectPath)throw new Error('Premiere could not confirm the automatic caption track for this project and sequence.');
+    if(prepared.destination.mode==='create'){
+      const {project,sequence}=await sequenceContext(id);
+      return require('./caption-track.js').createCaptionTrack(ppro,project,sequence,prepared);
+    }
+    if(prepared.destination.mode==='reuse' && Number.isInteger(prepared.destination.trackIndex) && prepared.destination.trackIndex>=0)return prepared.destination.trackIndex;
+    throw new Error('Premiere did not confirm a safe automatic caption track.');
+  }
   const nativeAPI = {
     isDemo: false,
     async getActiveSequenceInfo() {
@@ -177,20 +188,36 @@ function createHostAPI(options = {}) {
     async finishCaption(folder, fps, count, id, bounds) { return backend('finishCaption', bounds ? [folder, fps, count, bounds] : [folder, fps, count], id); },
     async preflightCaptionClips(captions, track, id) { return backend('preflightCaptionClips', [captions, track], id); },
     async applyCaptionClips(captions, track, id, previous = captions) {
-      let destination = track;
-      if (track === -1 && captions.some(caption => !caption.clipNodeId)) {
-        const prepared = await backend('prepareCaptionTrack', [captions, track, previous], id);
-        if (!record(prepared) || prepared.ok !== true || !record(prepared.destination)) throw new Error('Premiere could not plan an automatic caption track.');
-        const context = captured(id);
-        if (prepared.sequenceId !== context.id || prepared.projectPath !== context.projectPath) throw new Error('The caption-track plan belongs to another project or sequence.');
-        if (prepared.destination.mode === 'create') {
-          const { project, sequence } = await sequenceContext(id);
-          destination = await require('./caption-track.js').createCaptionTrack(ppro, project, sequence, prepared);
-        } else if (prepared.destination.mode === 'reuse' && Number.isInteger(prepared.destination.trackIndex) && prepared.destination.trackIndex >= 0) {
-          destination = prepared.destination.trackIndex;
-        } else throw new Error('Premiere did not confirm a safe automatic caption track.');
-      }
+      const destination=await captionDestination(captions,track,id,previous);
       return backend('applyCaptionClips', [captions, destination, previous], id);
+    },
+    async readCaptionConsolidation(captions,id) { return backend('readCaptionConsolidation',[captions],id); },
+    async applyConsolidatedCaption(caption,previous,plan,id) {
+      // Freeze the identities used by this multi-step native operation. Later
+      // editor changes must not redirect verification or cleanup to other clips.
+      [caption,previous,plan]=JSON.parse(JSON.stringify([caption,previous,plan]));
+      const fresh=await backend('readCaptionConsolidation',[previous],id);
+      if(!plan || JSON.stringify(fresh)!==JSON.stringify(plan))throw new Error('Legacy caption geometry changed while rendering. Apply again.');
+      const destination=await captionDestination([caption],-1,id,[caption]);
+      const result=await backend('stageCaptionConsolidation',[caption,destination,previous,plan],id);
+      if(!result?.ok || result.cues?.length!==1)throw new Error('Premiere did not confirm the combined caption replacement.');
+      const cue=result.cues[0],linked={...caption,clipNodeId:cue.clipNodeId,projectItemId:cue.projectItemId,mediaPath:cue.path,startTime:cue.start,endTime:cue.end};
+      const verify=()=>backend('verifyCaptionConsolidation',[linked,previous,plan],id);
+      try {
+        const {project,sequence}=await sequenceContext(id);
+        await require('./consolidation.js').removeLegacyClips(ppro,project,sequence,plan,verify);
+      } catch (error) {
+        // A host transaction can return an uncertain result after committing.
+        // Preserve the replacement when all originals were actually removed.
+        const status=await verify();
+        if(status?.ok && status.complete===true)return result;
+        if(status?.ok && status.complete===false){
+          await backend('rollbackCaptionConsolidation',[linked,previous,plan],id);
+          throw new Error(String(error.message||error)+' Original clips were preserved.');
+        }
+        throw error;
+      }
+      return result;
     },
     async readTimeline(captions, id = currentId) { return backend('readTimeline', [captions], id); },
     async selectCaptionClip(caption, id = currentId) { return backend('selectCaptionClip', [caption], id); },

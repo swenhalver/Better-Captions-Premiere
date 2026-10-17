@@ -149,6 +149,53 @@ function razorFixture(){
  return {...f,media,first,second,a,b,caption,readFile};
 }
 function frameTimeForTest(frame){const time=new Time();time.ticks=String(frame*TPF);return time;}
+function consolidationFixture(){
+ const f=hostFixture(),a=f.addClip(f.item('/legacy-a.mov'),0,1),b=f.addClip(f.item('/legacy-b.mov'),1,2);
+ const pa=attachNativeMotion(a,{uniform:{value:false},position:{value:[364.8160457611084/720,1066.3050842285156/1280]},height:{value:331.22640625/512*100}}),pb=attachNativeMotion(b,{uniform:{value:false},position:{value:[.5,.85]}});
+ const legacy=[a,b].map((clip,index)=>({id:'old-'+index,clipNodeId:clip.nodeId,projectItemId:clip.projectItem.nodeId,mediaPath:clip.projectItem.media,startTime:clip.start.seconds,endTime:clip.end.seconds,renderBounds:bounds()}));
+ const top=addVideoTrack(f),overwrite=top.overwriteClip;top.overwriteClip=function(...args){const clip=overwrite.apply(this,args),params=attachNativeMotion(clip);for(const p of Object.values(params)){
+  p.setTimeVarying=()=>0;p.addKey=time=>{p.keys.push({time:time.seconds,value:structuredClone(p.value)});p.keys.sort((a,b)=>a.time-b.time);return 0;};
+  p.setInterpolationTypeAtKey=()=>{p.mode='hold';return 0;};
+ }return clip;};
+ const planFile=()=>{f.files.set('/legacy.json',JSON.stringify({sequenceId:f.sequence.sequenceID,projectPath:f.project.path,cues:legacy}));return '/legacy.json';};
+ const plan=()=>JSON.parse(f.host.readCaptionConsolidation(planFile()));
+ const stage=(proof=plan())=>{const data={sequenceId:f.sequence.sequenceID,projectPath:f.project.path,width:1920,height:1080,fps:FPS,track:1,legacyCues:legacy,plan:proof,cues:[f.cue('combined',0,Math.round(2*FPS),{captionBundle:true,renderBounds:bounds()})]};f.files.set('/stage.json',JSON.stringify(data));return {data,result:JSON.parse(f.host.stageCaptionConsolidation('/stage.json'))};};
+ // Align to exact sequence frames, matching native exported captions.
+ const cut=30*TPF/TICKS,end=60*TPF/TICKS;a.end=new Time(cut);a.outPoint=new Time(cut);b.start=new Time(cut);b.end=new Time(end);b.outPoint=new Time(cut);
+ legacy[0].endTime=cut;legacy[1].startTime=cut;legacy[1].endTime=end;
+ return {...f,a,b,pa,pb,legacy,top,plan,stage};
+}
+
+test('legacy conversion stages one hold-keyed replacement while preserving the two original static geometries',()=>{
+ const f=consolidationFixture(),before=[nativeSnapshot(f.a),nativeSnapshot(f.b)],proof=f.plan();assert.equal(proof.ok,true);
+ assert.equal(proof.clips[0].motion.height.value,331.22640625/512*100);assert.deepEqual(proof.clips[0].motion.position.value,[364.8160457611084/720,1066.3050842285156/1280]);
+ const {data,result}=f.stage(proof);assert.equal(result.ok,true,JSON.stringify(result));assert.equal(f.clips.length,2);assert.equal(f.top.clips.length,1);
+ assert.deepEqual([nativeSnapshot(f.a),nativeSnapshot(f.b)],before);
+ const replacement=result.cues[0],params=f.top.clips[0].components[0].properties;
+ assert.equal(params.find(p=>p.displayName==='Position').keys.length,2);assert.equal(params.find(p=>p.displayName==='Scale').keys[0].value,331.22640625/512*100);
+ const verifyData={...data,cues:[{...data.cues[0],clipNodeId:replacement.clipNodeId,projectItemId:replacement.projectItemId,mediaPath:replacement.path}]};f.files.set('/verify.json',JSON.stringify(verifyData));
+ assert.equal(JSON.parse(f.host.verifyCaptionConsolidation('/verify.json')).complete,false);
+ f.a.remove();f.b.remove();assert.equal(JSON.parse(f.host.verifyCaptionConsolidation('/verify.json')).complete,true);assert.equal(f.top.clips.length,1);
+});
+
+test('legacy conversion rejects changed geometry, animation, reuse, effects and explicit cuts before staging',()=>{
+ for(const reason of ['changed','animated','shared','effect','split','trim']){
+  const f=consolidationFixture(),proof=f.plan();
+  if(reason==='changed')f.pa.position.value=[.1,.2];
+  if(reason==='animated')f.pa.width.keys=[{time:0,value:100}];
+  if(reason==='shared')f.addClip(f.a.projectItem,3,4);
+  if(reason==='effect')f.a.components.push({matchName:'Custom Blur',properties:collection([])});
+  if(reason==='split')f.legacy[0].manualSplit=true;
+  if(reason==='trim')f.a.inPoint=new Time(.1);
+  const result=f.stage(proof).result;assert.ok(result.error,reason);assert.equal(f.top.clips.length,0,reason);assert.equal(f.overwrites.length,0,reason);assert.ok(f.clips.includes(f.a)&&f.clips.includes(f.b),reason);
+ }
+});
+
+test('failed hold readback removes only the staged replacement and retains legacy clips and values',()=>{
+ const f=consolidationFixture(),before=[nativeSnapshot(f.a),nativeSnapshot(f.b)],overwrite=f.top.overwriteClip;
+ f.top.overwriteClip=function(...args){const clip=overwrite.apply(this,args);for(const p of clip.components[0].properties)p.setInterpolationTypeAtKey=()=>0;return clip;};
+ const result=f.stage().result;assert.match(result.error,/hold geometry/);assert.equal(result.rolledBack,true);assert.equal(f.top.clips.length,0);assert.deepEqual([nativeSnapshot(f.a),nativeSnapshot(f.b)],before);
+});
 function nativeSnapshot(clip){return {node:clip.nodeId,start:clip.start.ticks,end:clip.end.ticks,in:clip.inPoint.ticks,out:clip.outPoint.ticks,keys:clip.components[0].properties.map(param=>({name:param.displayName,value:structuredClone(param.value),keys:structuredClone(param.keys),mode:param.mode}))};}
 test('a Razor bundle samples each fragment on its source clock and fingerprints every slice without merging cuts',()=>{
  const f=razorFixture(),before=[nativeSnapshot(f.first),nativeSnapshot(f.second)],result=JSON.parse(f.host.readCaptionMotion(f.readFile()));
@@ -170,6 +217,19 @@ test('a Razor bundle refuses stale Motion in another fragment before relinking i
  f.b.width.keys[1].value=175;
  const result=JSON.parse(f.host.apply(automaticPayload(f,[{...f.caption,motionProfile:profile}])));
  assert.match(result.error,/changed during rendering/);assert.equal(f.media.media,'/caption-bundle-old.mov');assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);assert.equal(f.b.width.keys[1].value,175);
+});
+
+test('Apply rediscovers global bundle references after relink instead of trusting captured fragments',()=>{
+ for(const change of ['copy','cut']){
+  const f=razorFixture(),before=[nativeSnapshot(f.first),nativeSnapshot(f.second)],original=f.media.changeMediaPath;
+  f.media.changeMediaPath=function(path){const status=original.call(this,path);if(path==='/render/bundle.mov'){
+   if(change==='copy')f.project.sequences.push({sequenceID:'other',videoTracks:collection([{clips:collection([{projectItem:f.media}])}],'numTracks'),audioTracks:collection([],'numTracks')});
+   else {const part=f.addClip(f.media,90/FPS,120/FPS);part.inPoint=frameTimeForTest(60);part.outPoint=frameTimeForTest(90);attachNativeMotion(part);f.second.end=frameTimeForTest(90);f.second.outPoint=frameTimeForTest(60);}
+  }return status;};
+  const result=JSON.parse(f.host.apply(automaticPayload(f,[f.caption])));
+  assert.match(result.error,/outside|splits or references changed/);assert.equal(result.rolledBack,true);assert.equal(f.media.media,'/caption-bundle-old.mov');
+  assert.deepEqual([nativeSnapshot(f.first),nativeSnapshot(f.second)],before);assert.equal(f.overwrites.length,0);
+ }
 });
 test('a failed Razor geometry migration restores all fragment Motion and source timing without recreating clips',()=>{
  const f=razorFixture(),before=[nativeSnapshot(f.first),nativeSnapshot(f.second)];f.b.anchor.ignoreNext=true;

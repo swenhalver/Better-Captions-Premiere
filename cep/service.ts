@@ -2,12 +2,14 @@ import { createHostAPI } from '../webview-ui/src/cep-api';
 
 /** Local-only transport for the single visible UXP Better Captions panel. */
 export const SERVICE_ACTIONS = [
+  'readCaptionConsolidation', 'stageCaptionConsolidation', 'verifyCaptionConsolidation', 'rollbackCaptionConsolidation',
   'getFonts', 'beginCaption', 'saveCaptionFrames', 'finishCaption',
   'preflightCaptionClips', 'prepareCaptionTrack', 'applyCaptionClips', 'readTimeline', 'showInPremiere',
   'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'patchCaptionKeyValues',
 ] as const;
-const READ_ACTIONS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor']);
+const READ_ACTIONS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 const ARG_COUNTS: Record<string, number[]> = {
+  readCaptionConsolidation:[1], stageCaptionConsolidation:[4], verifyCaptionConsolidation:[3], rollbackCaptionConsolidation:[3],
   getFonts: [0], beginCaption: [1], saveCaptionFrames: [3], finishCaption: [3, 4],
   preflightCaptionClips: [2], prepareCaptionTrack: [2, 3], applyCaptionClips: [2, 3], readTimeline: [1], showInPremiere: [1],
   selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1], readCaptionAreaDescriptor: [1], patchCaptionKeyValues: [2],
@@ -41,6 +43,10 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
   if (!info || info.id !== request.sequenceId || info.projectPath !== request.projectPath) throw new Error('The active Premiere sequence or project changed. Refresh Better Captions.');
   const [a, b, c, d] = request.args, id = info.id;
   switch (request.action) {
+    case 'readCaptionConsolidation': return api.readCaptionConsolidation(a,id);
+    case 'stageCaptionConsolidation': return api.stageCaptionConsolidation(a,b,c,d,id);
+    case 'verifyCaptionConsolidation': return api.verifyCaptionConsolidation(a,b,c,id);
+    case 'rollbackCaptionConsolidation': return api.rollbackCaptionConsolidation(a,b,c,id);
     case 'getFonts': return api.getFonts();
     case 'beginCaption': return api.beginCaption(a, id);
     case 'saveCaptionFrames': return api.saveCaptionFrames(a, b, c, id);

@@ -15,6 +15,25 @@ function compareTicks(a,b) { return a.length===b.length ? (a===b?0:a<b?-1:1) : a
 const orderKeys = (a,b) => validTicks(a.ticks)&&validTicks(b.ticks)?compareTicks(a.ticks,b.ticks):Number(a.ticks)-Number(b.ticks);
 function addTicks(a,b) { let result='',carry=0;for(let i=a.length-1,j=b.length-1;i>=0||j>=0||carry;i--,j--){const n=Number(a[i]||0)+Number(b[j]||0)+carry;result=String(n%10)+result;carry=Math.floor(n/10);}return result.replace(/^0+(?=\d)/,''); }
 function subtractTicks(a,b) { if(compareTicks(a,b)<0)throw new Error('Invalid caption source timing.');let result='',borrow=0;for(let i=a.length-1,j=b.length-1;i>=0;i--,j--){let n=Number(a[i])-Number(b[j]||0)-borrow;borrow=n<0?1:0;if(borrow)n+=10;result=String(n)+result;}return result.replace(/^0+(?=\d)/,''); }
+function verifiedFragments(d) {
+  if (d.bundleSourceContiguous === undefined && d.bundleFragments === undefined) return false;
+  const parts=d.bundleFragments, invalid=()=>{throw new Error('The native caption split receipt changed or is incomplete. Refresh Position & size.');};
+  if (d.bundleSourceContiguous!==true || !Array.isArray(parts) || parts.length<2 || parts.length>64) invalid();
+  const nodes=new Set(); let selected=0;
+  for (let i=0;i<parts.length;i++) {
+    const p=parts[i];
+    if (!p || typeof p.clipNodeId!=='string' || !p.clipNodeId || p.clipNodeId.length>256 || nodes.has(p.clipNodeId) || p.track!==d.track || !Number.isInteger(p.track) || p.track<0 || ![p.startTicks,p.endTicks,p.inTicks,p.outTicks].every(validTicks)) invalid();
+    nodes.add(p.clipNodeId);
+    if (compareTicks(p.endTicks,p.startTicks)<=0 || compareTicks(p.outTicks,p.inTicks)<=0 || subtractTicks(p.endTicks,p.startTicks)!==subtractTicks(p.outTicks,p.inTicks)
+      || i===0 && p.inTicks!=='0' || i>0 && (p.startTicks!==parts[i-1].endTicks || p.inTicks!==parts[i-1].outTicks)) invalid();
+    if (p.clipNodeId===d.clipNodeId) {
+      if (!['startTicks','endTicks','inTicks','outTicks'].every(key=>p[key]===d[key])) invalid();
+      selected++;
+    }
+  }
+  if (selected!==1) invalid();
+  return true;
+}
 function frameTicks(d,frame) { let result='',carry=0;const digits=String(d.ticksPerFrame);for(let i=digits.length-1;i>=0||carry;i--){const n=Number(digits[i]||0)*frame+carry;result=String(n%10)+result;carry=Math.floor(n/10);}return addTicks(d.inTicks,result||'0'); }
 function visibleKey(d,ticks) { const end=validTicks(d.outTicks)?d.outTicks:addTicks(d.inTicks,subtractTicks(d.endTicks,d.startTicks));return compareTicks(ticks,d.inTicks)>=0 && compareTicks(ticks,end)<0; }
 function point(value) { const v = unwrap(value); if (Array.isArray(v) && v.length === 2) return v.map(x => number(x, -100, 100)); if (v && typeof v.x === 'number' && typeof v.y === 'number') return [v.x,v.y]; throw new Error('Premiere returned an invalid Position.'); }
@@ -51,11 +70,13 @@ async function unnamedUniform(entries, indices, descriptor, matchName) {
 
 async function resolve(ppro, sequence, descriptor) {
   if (!descriptor || !Number.isInteger(descriptor.track) || descriptor.track < 0 || !Number.isSafeInteger(descriptor.ticksPerFrame) || descriptor.ticksPerFrame <= 0 || ![descriptor.frameWidth,descriptor.frameHeight,descriptor.bounds?.width,descriptor.bounds?.height].every(n=>typeof n==='number'&&Number.isFinite(n)&&n>0) || ![descriptor.startTicks,descriptor.endTicks,descriptor.inTicks].every(validTicks) || compareTicks(descriptor.endTicks,descriptor.startTicks)<=0) throw new Error('Premiere returned invalid text-area geometry.');
+  const split=verifiedFragments(descriptor);
   const track = await sequence.getVideoTrack(descriptor.track);
   const candidates = [];
   for (const item of await track.getTrackItems(ppro.Constants.TrackItemType.CLIP, false)) {
     const start = await item.getStartTime(), end = await item.getEndTime(), source = await item.getInPoint();
     if (String(start.ticks) !== descriptor.startTicks || String(end.ticks) !== descriptor.endTicks || String(source.ticks) !== descriptor.inTicks) continue;
+    if (split && String((await item.getOutPoint()).ticks)!==descriptor.outTicks) continue;
     const projectItem = ppro.ClipProjectItem.cast(await item.getProjectItem());
     if (await projectItem.getMediaFilePath() === descriptor.path) candidates.push(item);
   }
@@ -100,12 +121,13 @@ async function curve(param, name) {
   return { animated, value: animated ? null : convert((await param.getStartValue()).value), keys };
 }
 async function rawState(params) { const state = {}; for (const name of motionFields) state[name] = await curve(params[name],name); return state; }
-function identity(d, includePath=true) { return JSON.stringify([d.sequenceId,d.projectPath,d.clipNodeId,d.projectItemId,includePath?d.path:null,d.track,d.startTicks,d.endTicks,d.inTicks,d.outTicks,d.ticksPerFrame,d.frameWidth,d.frameHeight,d.bounds,bindingIdentity(d.motionBinding)]); }
+function identity(d, includePath=true) { return JSON.stringify([d.sequenceId,d.projectPath,d.clipNodeId,d.projectItemId,includePath?d.path:null,d.track,d.startTicks,d.endTicks,d.inTicks,d.outTicks,d.ticksPerFrame,d.frameWidth,d.frameHeight,d.bounds,bindingIdentity(d.motionBinding),d.bundleSourceContiguous,d.bundleFragments]); }
 function signature(d, raw) { return JSON.stringify([identity(d),raw]); }
 async function verifyDescriptor(descriptor, revalidate, uniform) {
   if (typeof revalidate !== 'function') throw new Error('Native text-area edits require a fresh Premiere timeline identity check.');
   const fresh = await revalidate();
   if (!fresh || fresh.ok !== true || identity(fresh) !== identity(descriptor)) throw new Error('The caption timeline link changed. Refresh Position & size before continuing.');
+  verifiedFragments(fresh);
   if (descriptor.motionBinding && (!validMotionBinding(fresh.motionBinding) || fresh.motionBinding.componentMatchName!==descriptor.motionBinding.componentMatchName || uniform && (uniform.animated || fresh.motionBinding.uniform.value!==uniform.value))) throw new Error('Uniform Scale changed or its exact CEP Motion binding could not be confirmed. Refresh Position & size.');
   return fresh;
 }
@@ -124,7 +146,7 @@ function guardRenderSupport(descriptor, before, target, params) {
   const recovery = isAnimationRecovery(before,target);
   if (target.uniform.value && (target.height.animated || target.width.animated) && !recovery) throw new Error('Turn off Uniform Scale in Effect Controls before editing animated width or height. Existing unsupported animation can still be removed.');
   const otherAnimation = ['rotation','anchor'].some(name=>params[name]?.isTimeVarying());
-  if (Number(descriptor.inTicks) > 2 && (fields.some(name=>target[name].animated) || otherAnimation) && !recovery) throw new Error('Caption box reflow cannot preserve animated Motion on a trimmed source. Restore the caption source in point to zero, or remove its existing animation before adding or changing keyframes.');
+  if (Number(descriptor.inTicks) > 2 && !verifiedFragments(descriptor) && (fields.some(name=>target[name].animated) || otherAnimation) && !recovery) throw new Error('Caption box reflow cannot preserve animated Motion on a trimmed source. Restore the caption source in point to zero, or remove its existing animation before adding or changing keyframes.');
 }
 function sameNativeNumber(actual,expected) {
   // Premiere stores Motion values as Float32. A round-to-nearest conversion
@@ -297,7 +319,7 @@ async function editArea(ppro, project, sequence, descriptor, request, revalidate
     } else track.value=value;
   }
   guardRenderSupport(descriptor,before,target,params);
-  const recovery=isAnimationRecovery(before,target) && (Number(descriptor.inTicks)>2 || before.uniform.value && (before.height.animated||before.width.animated));
+  const recovery=isAnimationRecovery(before,target) && (Number(descriptor.inTicks)>2 && !verifiedFragments(descriptor) || before.uniform.value && (before.height.animated||before.width.animated));
   guardStructuralChanges(ppro,before,target,recovery);
   for (const n of [...fields,'uniform']) if (!equal(before[n],target[n])) actions.push(...await replaceActions(ppro,params[n],n,target[n],before[n],patches,isUndo||isRedo));
   if(patches.length && (typeof options.patchKeyValues!=='function' || actions.length || patches.length>32)) throw new Error('This existing-key edit requires the compatible in-place Premiere keyframe service. No native changes were made.');

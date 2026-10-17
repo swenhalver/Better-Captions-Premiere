@@ -97,6 +97,21 @@ test('preset library reads and writes round trip through the bounded UXP allowli
   assert.equal((await app.api.saveStylePresets(library)).revision, 4);
 });
 
+test('legacy conversion round trips through the panel while internal stage and removal endpoints remain private',async t=>{
+ const previous=[{id:'old-a'},{id:'old-b'}],caption={id:'bundle'},plan={ok:true,version:1,signature:'native-proof'};
+ const app=harness(t,{
+  async readCaptionConsolidation(captions,id){assert.deepEqual(captions,previous);assert.equal(id,'native-sequence');return plan;},
+  async applyConsolidatedCaption(c,old,proof,id){assert.deepEqual(c,caption);assert.deepEqual(old,previous);assert.deepEqual(proof,plan);assert.equal(id,'native-sequence');return {ok:true,cues:[{id:'bundle'}]};},
+ });
+ assert.deepEqual(await app.api.readCaptionConsolidation(previous,'native-sequence'),plan);
+ assert.equal((await app.api.applyConsolidatedCaption(caption,previous,plan,'native-sequence')).ok,true);
+ for(const method of ['stageCaptionConsolidation','rollbackCaptionConsolidation','verifyCaptionConsolidation']){
+  assert.equal(typeof app.api[method],'undefined');
+  const id='ui-blocked-'+method;app.hostWindow.emit('message',{data:{channel:'better-captions',id,method,args:[]},source:app.frame});await tick();
+  assert.match(app.replies.find(reply=>reply.id===id)?.error?.message,/Unsupported/i);
+ }
+});
+
 test('native UXP transport runs with only uxpHost.postMessage and preserves request arguments/errors', async t => {
   const app = harness(t);
   assert.equal(app.api.isDemo, false);

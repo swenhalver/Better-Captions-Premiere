@@ -1,5 +1,11 @@
-# Better Captions 0.7.3 — work in progress
+# Better Captions 0.7.3
 
-This branch implements automatic caption-track creation, Regroup after Apply and one rendered caption clip containing editable sentence groups. Explicit splits remain separate. Source and automated checks are ready for remote continuation; native acceptance of these new behaviors is pending. Do not treat this file as a published release or successful native verification.
+Unreleased development build. Source tests and packaging pass; Adobe's Windows installer blocks installed-plugin acceptance. See [verification and remaining work](windows-verification-0.7.3.md). The published and installed Mac 0.7.2 package remains unchanged.
 
-See [remote handoff](remote-handoff-0.7.3.md) for remaining integration, migration and verification work. The installed and fully Mac-tested release remains [0.7.2](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.2).
+Apply automatically chooses an empty track above footage or creates a new one. New captions share one physical timeline clip, with individually editable sentences and a character limit that can be regrouped after Apply. Deliberate transcript splits and contiguous native Razor cuts retain separate physical clips, identities, source times and native Motion curves.
+
+Compatible legacy caption clips are converted to one clip. Static positions and independent sizes are represented by native hold keys. A replacement is staged and its geometry checked before all originals are removed in one non-ripple transaction. Unsupported legacy animation, effects, different source bounds, custom anchors/rotation, gaps, trims and reused media stop conversion with originals preserved.
+
+Native Razor updates require forward 1x contiguous slices in original source order on one track. External/audio reuse, reordered, duplicated, gapped, trimmed or moved slices remain protected. Automatic discovery is bounded to 64 fragments and 2,000 project clips; geometry polling is bounded to 256 native Motion keys.
+
+For development testing, build the complete Windows/macOS ZIP with `npm run package`, extract to a permanent folder, run `node scripts/install.cjs`, and restart Premiere after upgrading. The CCX alone does not include the companion render service. Existing plugin user data and presets remain under the same plugin identity. No 0.7.3 release should be published until the native checks below are complete.

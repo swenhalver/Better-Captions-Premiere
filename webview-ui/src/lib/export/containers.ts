@@ -20,3 +20,15 @@ export function bundleCaptionContainers(captions: CaptionItem[], maxChars: numbe
     timingEstimated: captions.some(caption => caption.timingEstimated),
   }], maxChars);
 }
+
+export function needsLegacyConsolidation(captions:CaptionItem[]):boolean {
+  return captions.length>1 && captions.every(caption=>caption.clipNodeId && !caption.captionBundle && !caption.manualSplit);
+}
+
+/** Native links are cleared only in the render draft; old clips survive until verified replacement. */
+export function consolidationDraft(captions:CaptionItem[],maxChars:number,plan:{bounds:NonNullable<CaptionItem['renderBounds']>;motionProfile:NonNullable<CaptionItem['motionProfile']>}):CaptionItem[] {
+  if(!needsLegacyConsolidation(captions))throw new Error('These captions are not an unmodified legacy clip set.');
+  const draft=captions.map(({clipNodeId,projectItemId,mediaPath,position,renderBounds,motionProfile,...caption})=>caption);
+  const [bundle]=bundleCaptionContainers(draft,maxChars),b=plan.bounds;
+  return [{...bundle,renderBounds:{...b},motionProfile:plan.motionProfile,position:{x:(b.x+b.width/2)/b.frameWidth,y:(b.y+b.height/2)/b.frameHeight}}];
+}

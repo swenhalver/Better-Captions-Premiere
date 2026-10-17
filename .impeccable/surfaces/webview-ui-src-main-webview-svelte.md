@@ -34,3 +34,7 @@ Local extension: add a compact preset picker above the existing Styling controls
 ## Character grouping correction, 2026-10-17
 
 The user requires a character limit instead of a word limit. Preserve the existing Transcript grouping disclosure and control treatment; label the numeric field Characters per caption and show the character count in its summary. Count spaces/punctuation and explain whole-word exceptions. Regroup may split or rejoin unlinked captions across earlier automatic boundaries, preserving timings, sentence/placement/speaker boundaries and native linked-clip protections. Saved legacy word limits become the 56-character default without silently regrouping captions. No visual-system change is authorized or needed.
+
+## One physical clip and linked grouping, 2026-10-17
+
+The remote 0.7.3 continuation extends the same two-tab interface. Apply defaults to Automatic above footage. A new transcript uses one physical clip; sentence rows still open individual word timelines. Regroup works after Apply by changing internal rendered groups without replacing clip identities or keys. Deliberate transcript splits and supported native Razor cuts remain physical splits. Keep the character field readable at 280px even when its summary wraps. The design system is unchanged. Browser review covers the visible controls; native installation is blocked on this Windows PC and 0.7.3 remains unreleased.

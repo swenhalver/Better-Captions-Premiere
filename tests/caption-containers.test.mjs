@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bundleCaptionContainers } from '../webview-ui/src/lib/export/containers.ts';
+import { bundleCaptionContainers, needsLegacyConsolidation, consolidationDraft } from '../webview-ui/src/lib/export/containers.ts';
 import { captionSentenceCount, regroupCaptions } from '../webview-ui/src/lib/transcript/parser.ts';
 import { split, validateCaptions } from '../webview-ui/src/lib/transcript/edit.ts';
 import { captionAtRenderTime } from '../webview-ui/src/lib/canvas/engine.ts';
@@ -47,4 +47,13 @@ test('bundling retains speaker boundaries and refuses to discard differing capti
   const input = words('one two three four'), captions = [cue('a', input.slice(0, 2), { speaker: 'A' }), cue('b', input.slice(2), { speaker: 'B' })];
   assert.equal(captionSentenceCount(bundleCaptionContainers(captions, 100)), 2);
   assert.throws(() => bundleCaptionContainers([captions[0], { ...captions[1], position: { x: .2, y: .4 } }], 100), /different frame positions/);
+});
+
+test('legacy render drafts leave all original links untouched and retain the verified source bounds and samples',()=>{
+ const input=words('one two three four'),captions=[cue('a',input.slice(0,2),{clipNodeId:'old-a',position:{x:.3,y:.4}}),cue('b',input.slice(2),{clipNodeId:'old-b',position:{x:.5,y:.8}})],before=structuredClone(captions);
+ const plan={bounds:{x:72,y:832,width:576,height:512,frameWidth:720,frameHeight:1280},motionProfile:{signature:'verified',samples:[{time:0,scaleX:1,scaleY:.64}]}};
+ assert.equal(needsLegacyConsolidation(captions),true);const [draft]=consolidationDraft(captions,18,plan);
+ assert.equal(draft.clipNodeId,undefined);assert.equal(draft.captionBundle,true);assert.deepEqual(draft.position,{x:.5,y:.85});assert.deepEqual(draft.renderBounds,plan.bounds);assert.deepEqual(draft.motionProfile,plan.motionProfile);assert.deepEqual(captions,before);
+ assert.equal(needsLegacyConsolidation([{...captions[0],manualSplit:true},captions[1]]),false);
+ assert.equal(needsLegacyConsolidation([{...captions[0],captionBundle:true},captions[1]]),false);
 });

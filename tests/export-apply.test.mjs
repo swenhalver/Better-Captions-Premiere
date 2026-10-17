@@ -29,6 +29,13 @@ function harness({ changeDuringRender = false, changeSelection = false, unlinked
   if (differentPositions) source[1].position = { x:.1,y:.2 };
   let currentProfile = profile('native-resized-60', .6), applied = false;
   const hostApi = {
+    readCaptionConsolidation:async items=>{events.push('plan');return {ok:true,bounds:items[0].renderBounds,motionProfile:currentProfile};},
+    applyConsolidatedCaption:async (item,previous,plan)=>{
+      events.push('consolidate');assert.deepEqual(plain(previous),source);assert.equal(item.clipNodeId,undefined);assert.equal(item.captionBundle,true);
+      if(currentProfile.signature!==plan.motionProfile.signature)throw new Error('Legacy caption geometry changed while rendering.');
+      applied=true;currentProfile=profile('native-consolidated-60',.6);
+      return {ok:true,cues:[{id:item.id,clipNodeId:'combined-clip',projectItemId:'combined-item',path:item.mediaPath,start:item.startTime,end:item.endTime,motionProfile:currentProfile}]};
+    },
     readCaptionMotion: async items => {
       events.push('read');
       return { ok: true, cues: items.map(item => ({ id: item.id, clipNodeId: item.clipNodeId, projectItemId: item.projectItemId, path: item.mediaPath, motionProfile: currentProfile })) };
@@ -93,4 +100,16 @@ test('bundle validation failure releases the actual Apply busy gate before any n
   const h=harness({unlinked:true,differentPositions:true});
   await assert.rejects(h.apply(),/different frame positions/);
   assert.equal(h.applied,false); assert.equal(h.events.length,0); assert.deepEqual(h.busy,[true,false]);
+});
+
+test('full Apply converts legacy captions only through verified native consolidation and saves the resulting single link',async()=>{
+ const h=harness({differentPositions:true}),before=structuredClone(h.source),updated=await h.apply();
+ assert.equal(updated.length,1);assert.equal(updated[0].clipNodeId,'combined-clip');assert.equal(updated[0].captionBundle,true);
+ assert.deepEqual(h.source,before);assert.equal(h.saved.at(-1).length,1);assert.equal(h.saved.at(-1)[0].motionProfile.signature,'native-consolidated-60');
+ assert.deepEqual(h.events,['plan','preflight','render','consolidate','read','refresh','select-first']);assert.deepEqual(h.busy,[true,false]);
+});
+
+test('legacy geometry changed while rendering cannot persist a replacement or discard the original links',async()=>{
+ const h=harness({changeDuringRender:true});await assert.rejects(h.apply(),/Legacy caption geometry changed/);
+ assert.equal(h.applied,false);assert.equal(h.saved.length,0);assert.ok(h.source.every(item=>item.clipNodeId.startsWith('clip-')));assert.deepEqual(h.busy,[true,false]);
 });

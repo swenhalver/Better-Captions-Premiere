@@ -2,7 +2,7 @@
   import type { CaptionItem, StyleConfig, AnimationConfig, SequenceInfo,MotionProfile } from '../lib/types';
   import { exportFrames, planCaptionFrames,motionScaleAt, type ExportProgress } from '../lib/export/exporter';
   import { refreshProgramMonitor } from '../lib/export/program-monitor';
-  import { bundleCaptionContainers } from '../lib/export/containers';
+  import { bundleCaptionContainers, needsLegacyConsolidation, consolidationDraft } from '../lib/export/containers';
 
   interface Props {
     captions: CaptionItem[]; style: StyleConfig; animation: AnimationConfig;
@@ -54,13 +54,18 @@
     const id = sequenceId, track = selectedTrack, key = sourceKey(), notify = onUpdated;
     isExporting = true; onBusy?.(true); error = null; progress = null; controller = new AbortController();
     try {
-      const source = clone(bundleCaptionContainers(captions, exportStyle.maxChars));
+      const previous=clone(captions);
+      const consolidate=!options.captionIds && needsLegacyConsolidation(previous);
+      const plan=consolidate?await hostApi.readCaptionConsolidation(previous,id):null;
+      if(consolidate && (!plan?.ok || !plan.bounds || !plan.motionProfile))throw new Error('Premiere could not verify the legacy caption positions and sizes.');
+      const source = clone(consolidate?consolidationDraft(previous,exportStyle.maxChars,plan):bundleCaptionContainers(previous, exportStyle.maxChars));
+      if(consolidate)exportStyle.maxWidth=plan.bounds.width/frameWidth;
       const requested=options.captionIds?new Set(options.captionIds):null;
       if(requested&&(!requested.size||[...requested].some(captionId=>!source.some(caption=>caption.id===captionId))))throw new Error('Choose an existing caption to update.');
       const aligned = planCaptionFrames(source, frameRate, duration).map(cue => cue.caption).filter(caption=>!requested||requested.has(caption.id));
       const captured=await captureProfiles(aligned,id);
       status = 'Checking timeline space…';
-      await hostApi.preflightCaptionClips(captured, track, id);
+      await hostApi.preflightCaptionClips(captured, consolidate?-1:track, id);
       status = 'Rendering transparent caption clips…';
       const rendered = await exportFrames(captured, exportStyle, exportAnimation, frameWidth, frameHeight, frameRate, duration, {
         begin: captionId => hostApi.beginCaption(captionId, id),
@@ -73,7 +78,7 @@
       if(checked.some(caption=>caption.motionProfile?.signature!==captured.find(old=>old.id===caption.id)?.motionProfile?.signature))throw new Error('The caption box size or its keyframes changed while rendering. Stop resizing, then update again.');
       if(controller.signal.aborted)throw new Error('Caption generation cancelled before timeline changes.');
       status = 'Applying clips to Premiere…'; progress = null;
-      const applied = await hostApi.applyCaptionClips(rendered, track, id, source);
+      const applied = consolidate?await hostApi.applyConsolidatedCaption(rendered[0],previous,plan,id):await hostApi.applyCaptionClips(rendered, track, id, source);
       if (!applied?.ok || applied.cues?.length !== rendered.length) throw new Error('Premiere did not confirm every caption clip. Review the timeline before retrying.');
       let changed = rendered.map(caption => {
         const clip = applied.cues.find((entry: any) => entry.id === caption.id);

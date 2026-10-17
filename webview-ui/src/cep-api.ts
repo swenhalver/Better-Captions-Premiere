@@ -64,6 +64,13 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     return { sequenceId: context.id, projectPath: context.projectPath, track, width: context.width, height: context.height, fps: context.fps,
       cues: captions.map(c => ({ id: c.id, text: c.text, startFrame: Math.round(c.startTime * context.fps), endFrame: Math.round(c.endTime * context.fps), path: c.mediaPath, previousPath: previous.find(old => old.id === c.id)?.mediaPath ?? c.mediaPath, clipNodeId: c.clipNodeId, projectItemId: c.projectItemId,captionBundle:c.captionBundle,renderBounds:c.renderBounds,previousRenderBounds:previous.find(old=>old.id===c.id)?.renderBounds,motionProfile:c.motionProfile })) };
   }
+  function legacyCues(context: CapturedContext, captions: CaptionItem[]) {
+    if (!Array.isArray(captions) || captions.length < 2 || captions.length > 64) throw new Error('Invalid legacy caption conversion.');
+    return captions.map(c => {
+      generatedMedia(context, c.mediaPath);
+      return { id:c.id, clipNodeId:c.clipNodeId, projectItemId:c.projectItemId, mediaPath:c.mediaPath, startTime:c.startTime, endTime:c.endTime, renderBounds:c.renderBounds, manualSplit:c.manualSplit, captionBundle:c.captionBundle };
+    });
+  }
   const api = {
     async loadStylePresets(): Promise<PresetLibrary> {
       if (cep) throw new Error('Style presets require the Better Captions UXP panel.');
@@ -151,6 +158,22 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     async preflightCaptionClips(captions: CaptionItem[], track: number, sequenceId: string) {
       const context = await checkSequence(sequenceId);
       return host('preflight', [jobFile(context, 'preflight', timelinePayload(context, captions, track, captions))]);
+    },
+    async readCaptionConsolidation(captions: CaptionItem[], sequenceId: string) {
+      const context=await checkSequence(sequenceId);
+      return readJob('readCaptionConsolidation',{sequenceId:context.id,projectPath:context.projectPath,cues:legacyCues(context,captions)});
+    },
+    async stageCaptionConsolidation(caption: CaptionItem, track:number, previous:CaptionItem[], plan:unknown, sequenceId:string) {
+      const context=await checkSequence(sequenceId);generatedMedia(context,caption.mediaPath);
+      return host('stageCaptionConsolidation',[jobFile(context,'consolidation-stage',{...timelinePayload(context,[caption],track,[caption]),legacyCues:legacyCues(context,previous),plan})]);
+    },
+    async verifyCaptionConsolidation(caption:CaptionItem, previous:CaptionItem[], plan:unknown, sequenceId:string) {
+      const context=await checkSequence(sequenceId);generatedMedia(context,caption.mediaPath);
+      return readJob('verifyCaptionConsolidation',{sequenceId:context.id,projectPath:context.projectPath,cues:[caption],legacyCues:legacyCues(context,previous),plan});
+    },
+    async rollbackCaptionConsolidation(caption:CaptionItem, previous:CaptionItem[], plan:unknown, sequenceId:string) {
+      const context=await checkSequence(sequenceId);generatedMedia(context,caption.mediaPath);
+      return host('rollbackCaptionConsolidation',[jobFile(context,'consolidation-rollback',{sequenceId:context.id,projectPath:context.projectPath,cues:[caption],legacyCues:legacyCues(context,previous),plan})]);
     },
     async prepareCaptionTrack(captions: CaptionItem[], track: number, sequenceId: string, previous: CaptionItem[] = captions) {
       const context = await checkSequence(sequenceId);

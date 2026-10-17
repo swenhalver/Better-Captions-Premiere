@@ -141,10 +141,13 @@ var BetterCaptionsHost = (function () {
         return findClip(s, node, 2000);
     }
     function referenceCount(itemId) {
-        var count = 0, seqs = app.project.sequences;
+        var count = 0, inspected = 0, seqs = app.project.sequences;
+        if (seqs.numSequences > 256) throw new Error('This project is too large to verify caption media references.');
         for (var s = 0; s < seqs.numSequences; s++) {
             var sets = [seqs[s].videoTracks, seqs[s].audioTracks];
+            if (sets[0].numTracks > 256 || sets[1].numTracks > 256) throw new Error('This project has too many tracks to verify caption media references.');
             for (var k = 0; k < sets.length; k++) for (var t = 0; t < sets[k].numTracks; t++) for (var c = 0; c < sets[k][t].clips.numItems; c++) {
+                if (++inspected > 2000) throw new Error('This project is too large to verify caption media references automatically.');
                 var item = sets[k][t].clips[c].projectItem;
                 if (item && String(item.nodeId) === String(itemId)) count++;
             }
@@ -195,6 +198,13 @@ var BetterCaptionsHost = (function () {
     }
     function assertFragmentRange(parts, firstFrame, count, tpf) {
         if (Math.abs(Number(parts[0].clip.start.ticks) - firstFrame * tpf) > 2 || Math.abs(Number(parts[parts.length - 1].clip.end.ticks) - (firstFrame + count) * tpf) > 2) throw new Error('Keep the native split caption bundle timing unchanged. Sync timing from Premiere before applying.');
+    }
+    function verifyBundleReferences(s, entry) {
+        if (!entry.bundleReceipt) return;
+        var found = findClip(s, entry.cue.clipNodeId);
+        if (!found || !sameNode(found.clip.projectItem.nodeId, entry.item.nodeId) || found.clip.projectItem.getMediaPath() !== entry.cue.path) throw new Error('The caption bundle link changed while refreshing media.');
+        var parts = captionFragments(s, entry.cue, entry.cue.path, found) || [found];
+        if (stringify(fragmentReceipt(parts)) !== stringify(entry.bundleReceipt)) throw new Error('Native caption splits or references changed while refreshing media.');
     }
     function preferredFragment(s, parts, fallback) {
         var current = Number(s.getPlayerPosition().ticks), selected = null, selectedCount = 0, at = null;
@@ -761,6 +771,167 @@ var BetterCaptionsHost = (function () {
         if (top && !top.isLocked() && !(typeof top.isMuted === 'function' && top.isMuted()) && top.clips.numItems === 0) return { mode: 'reuse', trackIndex: count - 1, expectedVideoTrackCount: count, newCaptionCount: 0 };
         return { mode: 'create', trackIndex: count, expectedVideoTrackCount: count, newCaptionCount: 0 };
     }
+    function otherEffects(clip) {
+        var result = [], components = clip.components;
+        if (!components || components.numItems > 32) throw new Error('This legacy caption has unsupported effects. Its existing clip was preserved.');
+        for (var i = 0; i < components.numItems; i++) {
+            var c = components[i];
+            if (c.matchName === 'AE.ADBE Motion' || c.matchName === 'ADBE Motion') continue;
+            if (c.matchName !== 'AE.ADBE Opacity' && c.matchName !== 'ADBE Opacity' && c.matchName !== 'AE.ADBE Time Remapping' && c.matchName !== 'ADBE Time Remapping') throw new Error('Remove custom effects from legacy captions before combining them. Existing clips were preserved.');
+            if (!c.properties || c.properties.numItems > 32) throw new Error('Premiere could not verify legacy caption effects.');
+            var properties = [];
+            for (var j = 0; j < c.properties.numItems; j++) {
+                var prop = c.properties[j];
+                if (typeof prop.isTimeVarying !== 'function' || prop.isTimeVarying()) throw new Error('Animated legacy caption effects cannot be combined without losing their native keys. Existing clips were preserved.');
+                var value = prop.getValue();
+                if (typeof value !== 'number' && typeof value !== 'boolean' && typeof value !== 'string') throw new Error('Premiere could not verify a legacy caption effect value.');
+                properties.push({ name: prop.displayName, value: value });
+            }
+            result.push({ matchName: c.matchName, properties: properties });
+        }
+        return result;
+    }
+    function legacyPlan(p) {
+        var cues = p.legacyCues || p.cues, s = sequence(p.sequenceId, p.projectPath), tpf = Number(s.timebase), clips = [], samples = [], ids = {}, bounds = null;
+        if (!cues || cues.length < 2 || cues.length > 64) throw new Error('Combine between two and 64 legacy caption clips at once.');
+        for (var i = 0; i < cues.length; i++) {
+            var cue = cues[i], found = cue.clipNodeId ? findClip(s, cue.clipNodeId, 2000) : null;
+            if (cue.manualSplit || cue.captionBundle || !cue.id || !cue.projectItemId || !found || !sameNode(found.clip.projectItem.nodeId, cue.projectItemId) || found.clip.projectItem.getMediaPath() !== cue.mediaPath || ids[String(found.clip.nodeId)]) throw new Error('A legacy caption link changed or contains a deliberate split. Existing clips were preserved.');
+            var clip = found.clip, b = renderBounds(cue.renderBounds, s), motion = motionState(clip);
+            ids[String(clip.nodeId)] = true; assertNormalSpeed(clip);
+            if (s.videoTracks[found.track].isLocked() || s.videoTracks[found.track].transitions && s.videoTracks[found.track].transitions.numItems) throw new Error('Unlock the legacy caption track and remove its transitions before combining clips.');
+            if (referenceCount(clip.projectItem.nodeId) !== 1) throw new Error('Legacy caption media is reused. Make copied captions independent before combining them.');
+            for (var m = 0; m < motionNames.length; m++) if (motion[motionNames[m]].animated) throw new Error('Legacy captions with native animation are preserved as separate clips. Use one new caption clip or keep their existing keys.');
+            if (!sameValue(motion.anchor.value, [0.5, 0.5]) || !sameValue(motion.rotation.value, 0)) throw new Error('Legacy captions with a custom anchor or rotation are preserved as separate clips.');
+            if (!bounds) bounds = b;
+            if (stringify(b) !== stringify(bounds)) throw new Error('Legacy captions with different source text-box bounds are preserved as separate clips.');
+            var start = Number(clip.start.ticks), end = Number(clip.end.ticks), first = Math.round(start / tpf), last = Math.round(end / tpf);
+            if (Math.abs(start - first * tpf) > 2 || Math.abs(end - last * tpf) > 2 || end <= start || Number(clip.inPoint.ticks) !== 0 || Math.abs(Number(clip.outPoint.ticks) - (end - start)) > 2 || Math.abs(cue.startTime * TICKS - start) > 2 || Math.abs(cue.endTime * TICKS - end) > 2) throw new Error('Sync legacy caption timing from Premiere before combining untrimmed clips.');
+            if (i && (found.track !== clips[0].track || String(clip.start.ticks) !== clips[i - 1].endTicks)) throw new Error('Legacy caption clips must be adjacent on one track before combining.');
+            if (samples.length + last - first > 100000) throw new Error('Combine legacy captions in a smaller sequence.');
+            var effects = otherEffects(clip), receipt = fragmentReceipt([found])[0];
+            receipt.id = cue.id; receipt.projectItemId = String(clip.projectItem.nodeId); receipt.path = cue.mediaPath; receipt.bounds = b; receipt.motion = motion; receipt.effects = effects;
+            if (i && stringify(effects) !== stringify(clips[0].effects)) throw new Error('Legacy captions have different effects. Their existing clips were preserved.');
+            clips.push(receipt);
+            var sx = (motion.uniform.value ? motion.height.value : motion.width.value) / 100, sy = motion.height.value / 100;
+            for (var frame = first; frame < last; frame++) samples.push({ time: (frame + 0.5) * tpf / TICKS, scaleX: sx, scaleY: sy });
+        }
+        var result = { ok: true, version: 1, sequenceId: p.sequenceId, projectPath: p.projectPath, clips: clips, bounds: bounds, ticksPerFrame: tpf };
+        result.signature = curveSignature(result); result.motionProfile = { signature: result.signature, samples: samples };
+        return result;
+    }
+    function readCaptionConsolidation(file) { try { return reply(legacyPlan(readPayload(file))); } catch (e) { return reply({ error: e.toString() }); } }
+    function confirmLegacyPlan(p) {
+        var actual = legacyPlan(p);
+        if (!p.plan || p.plan.version !== 1 || p.plan.signature !== actual.signature || stringify(p.plan.clips) !== stringify(actual.clips) || stringify(p.plan.bounds) !== stringify(actual.bounds)) throw new Error('Legacy caption geometry or timing changed while rendering. No original clips were removed.');
+        return actual;
+    }
+    function consolidationValues(plan, name) {
+        var values = [];
+        for (var i = 0; i < plan.clips.length; i++) {
+            var m = plan.clips[i].motion, value = name === 'width' && m.uniform.value ? m.height.value : m[name].value;
+            values.push({ ticks: String(Number(plan.clips[i].startTicks) - Number(plan.clips[0].startTicks)), value: value });
+        }
+        return values;
+    }
+    function verifyConsolidatedMotion(clip, plan) {
+        var params = motionParameters(clip), names = ['position', 'width', 'height'];
+        if (stringify(otherEffects(clip)) !== stringify(plan.clips[0].effects)) throw new Error('The combined clip cannot preserve the legacy effects exactly.');
+        if (params.uniform.isTimeVarying() || !!params.uniform.getValue() || params.rotation.isTimeVarying() || !sameValue(params.rotation.getValue(), 0) || params.anchor.isTimeVarying() || !sameValue(params.anchor.getValue(), [0.5, 0.5])) throw new Error('The combined caption Motion changed.');
+        for (var n = 0; n < names.length; n++) {
+            var name = names[n], expected = consolidationValues(plan, name), curve = copyCurve(parameterCurve(params[name], 64), name);
+            if (!curve.animated || curve.keys.length !== expected.length) throw new Error('Premiere did not retain every legacy caption hold key.');
+            for (var i = 0; i < expected.length; i++) if (curve.keys[i].ticks !== expected[i].ticks || !sameValue(curve.keys[i].value, expected[i].value)) throw new Error('Premiere changed a legacy caption position or size key.');
+            // CEP has no interpolation getter. Sample every visible frame to
+            // prove these newly created hold curves without flattening old keys.
+            for (i = 0; i < plan.clips.length; i++) {
+                var first = Number(expected[i].ticks), end = Number(plan.clips[i].endTicks) - Number(plan.clips[0].startTicks);
+                for (var at = first; at < end; at += plan.ticksPerFrame) if (!sameValue(params[name].getValueAtTime(ticksTime(at)), expected[i].value)) throw new Error('Premiere did not preserve the legacy caption hold geometry.');
+            }
+        }
+    }
+    function consolidatedClip(p) {
+        var s = sequence(p.sequenceId, p.projectPath), cue = p.cues && p.cues.length === 1 && p.cues[0], found = cue && findClip(s, cue.clipNodeId, 2000);
+        if (!found || !sameNode(found.clip.projectItem.nodeId, cue.projectItemId) || found.clip.projectItem.getMediaPath() !== cue.mediaPath || referenceCount(found.clip.projectItem.nodeId) !== 1) throw new Error('The combined caption link changed. No original clips were removed.');
+        var clip = found.clip, plan = p.plan;
+        validateConsolidationPlan(plan, s, p);
+        if (!plan || !plan.clips || plan.clips.length < 2 || plan.clips.length > 64 || String(clip.start.ticks) !== plan.clips[0].startTicks || String(clip.end.ticks) !== plan.clips[plan.clips.length - 1].endTicks || String(clip.inPoint.ticks) !== '0' || Number(clip.outPoint.ticks) !== Number(clip.end.ticks) - Number(clip.start.ticks) || s.videoTracks[found.track].isLocked()) throw new Error('The combined caption timing changed.');
+        assertNormalSpeed(clip); verifyConsolidatedMotion(clip, plan);
+        return found;
+    }
+    function validateConsolidationPlan(plan, s, p) {
+        if (!plan || plan.version !== 1 || plan.sequenceId !== p.sequenceId || plan.projectPath !== p.projectPath || plan.ticksPerFrame !== Number(s.timebase) || !isFinite(plan.ticksPerFrame) || plan.ticksPerFrame <= 0 || !plan.clips || plan.clips.length < 2 || plan.clips.length > 64) throw new Error('Invalid legacy conversion proof.');
+        renderBounds(plan.bounds, s);
+        var nodes = {}, frames = 0;
+        for (var i = 0; i < plan.clips.length; i++) {
+            var c = plan.clips[i];
+            if (!c || typeof c.clipNodeId !== 'string' || !c.clipNodeId || nodes[c.clipNodeId] || c.track !== plan.clips[0].track || !isFinite(c.track) || c.track < 0 || c.track !== Math.floor(c.track) || !c.motion || !c.effects || c.effects.length > 32 || stringify(c.effects).length > 20000) throw new Error('Invalid legacy conversion proof.');
+            nodes[c.clipNodeId] = true;
+            var names = ['startTicks', 'endTicks', 'inTicks', 'outTicks'];
+            for (var j = 0; j < names.length; j++) if (typeof c[names[j]] !== 'string' || !/^(0|[1-9]\d{0,19})$/.test(c[names[j]])) throw new Error('Invalid legacy conversion timing.');
+            var start = Number(c.startTicks), end = Number(c.endTicks), count = (end - start) / plan.ticksPerFrame;
+            if (count <= 0 || count !== Math.floor(count) || start / plan.ticksPerFrame > 100000000 || start / plan.ticksPerFrame !== Math.floor(start / plan.ticksPerFrame) || c.inTicks !== '0' || Number(c.outTicks) !== end - start || i && c.startTicks !== plan.clips[i - 1].endTicks) throw new Error('Invalid legacy conversion timing.');
+            frames += count; if (frames > 100000) throw new Error('Legacy conversion exceeds the frame limit.');
+            for (j = 0; j < motionNames.length; j++) {
+                var curve = c.motion[motionNames[j]];
+                if (!curve || curve.animated !== false || !curve.keys || curve.keys.length) throw new Error('Invalid static legacy Motion proof.');
+                motionValue(curve.value, motionNames[j]);
+            }
+            if (stringify(c.bounds) !== stringify(plan.bounds) || !sameValue(c.motion.anchor.value, [0.5,0.5]) || !sameValue(c.motion.rotation.value,0)) throw new Error('Invalid legacy conversion geometry.');
+        }
+    }
+    function verifyCaptionConsolidation(file) {
+        try {
+            var p = readPayload(file), s = sequence(p.sequenceId, p.projectPath), found = consolidatedClip(p), present = 0;
+            for (var i = 0; i < p.plan.clips.length; i++) if (findClip(s, p.plan.clips[i].clipNodeId, 2000)) present++;
+            if (present && present !== p.plan.clips.length) throw new Error('Only some legacy clips remain. Review Premiere Undo before continuing; no automatic cleanup was attempted.');
+            if (present) confirmLegacyPlan(p);
+            var replacement = fragmentReceipt([found])[0]; replacement.path = found.clip.projectItem.getMediaPath();
+            return reply({ ok: true, complete: present === 0, clips: p.plan.clips, replacement: replacement });
+        } catch (e) { return reply({ error: e.toString() }); }
+    }
+    function stageCaptionConsolidation(file) {
+        var result = null, p;
+        try {
+            p = readPayload(file); var plan = confirmLegacyPlan(p);
+            if (!p.cues || p.cues.length !== 1 || p.cues[0].clipNodeId || p.cues[0].captionBundle !== true || stringify(p.cues[0].renderBounds) !== stringify(plan.bounds)) throw new Error('Invalid combined caption replacement.');
+            result = parseJSON(apply(file));
+            if (!result.ok) return reply(result);
+            var s = sequence(p.sequenceId, p.projectPath), found = findClip(s, result.cues[0].clipNodeId), clip = found.clip, params = motionParameters(clip), names = ['position', 'width', 'height'];
+            if (stringify(otherEffects(clip)) !== stringify(plan.clips[0].effects)) throw new Error('The combined clip cannot preserve the legacy effects exactly.');
+            for (var n = 0; n < names.length; n++) {
+                var name = names[n], param = params[name], values = consolidationValues(plan, name);
+                if (param.isTimeVarying() || typeof param.setTimeVarying !== 'function' || typeof param.addKey !== 'function' || typeof param.setInterpolationTypeAtKey !== 'function') throw new Error('Premiere did not expose native hold-key creation for combined captions.');
+                param.setTimeVarying(true);
+                for (var k = 0; k < values.length; k++) {
+                    var at = ticksTime(values[k].ticks);
+                    param.addKey(at); param.setValueAtKey(at, values[k].value, 1); param.setInterpolationTypeAtKey(at, 4, 1);
+                }
+            }
+            confirmLegacyPlan(p); verifyConsolidatedMotion(clip, plan);
+            result.cues[0].motionProfile = motionProfile(clip, p.cues[0].startFrame, p.cues[0].endFrame - p.cues[0].startFrame, Number(s.timebase));
+            return reply(result);
+        } catch (e) {
+            var cleanup = true;
+            if (result && result.ok) try {
+                confirmLegacyPlan(p);
+                var staged = findClip(sequence(p.sequenceId, p.projectPath), result.cues[0].clipNodeId);
+                if (!staged || !sameNode(staged.clip.projectItem.nodeId, result.cues[0].projectItemId) || staged.clip.projectItem.getMediaPath() !== result.cues[0].path || referenceCount(staged.clip.projectItem.nodeId) !== 1) throw new Error('The staged caption changed.');
+                staged.clip.remove(false, false);
+                if (findClip(sequence(p.sequenceId, p.projectPath), result.cues[0].clipNodeId)) throw new Error('The staged caption could not be removed.');
+            } catch (cleanupError) { cleanup = false; }
+            return reply({ error: e.toString() + (cleanup ? ' Original clips were preserved.' : ' Original clips were preserved; review the extra staged clip before retrying.'), rolledBack: cleanup, recoveryJob: file });
+        }
+    }
+    function rollbackCaptionConsolidation(file) {
+        try {
+            var p = readPayload(file); confirmLegacyPlan(p);
+            var found = consolidatedClip(p), node = String(found.clip.nodeId), s = sequence(p.sequenceId, p.projectPath);
+            found.clip.remove(false, false);
+            if (findClip(s, node)) throw new Error('Premiere could not remove the staged replacement.');
+            return reply({ ok: true, rolledBack: true });
+        } catch (e) { return reply({ error: e.toString() }); }
+    }
     function prepare(p, requireMedia) {
         var s = sequence(p.sequenceId, p.projectPath), tpf = Number(s.timebase), fps = TICKS / tpf;
         if (!p.sequenceId || !p.projectPath || !p.cues || !p.cues.length || p.cues.length > 10000) throw new Error('Invalid caption job.');
@@ -812,7 +983,7 @@ var BetterCaptionsHost = (function () {
             if (found && cue.motionProfile) {
                 if (typeof cue.motionProfile.signature !== 'string' || cue.endFrame - cue.startFrame > 100000 || (fragments ? fragmentProfile(fragments, cue.startFrame, cue.endFrame - cue.startFrame, tpf) : motionProfile(found.clip, cue.startFrame, cue.endFrame - cue.startFrame, tpf)).signature !== cue.motionProfile.signature) throw new Error('The caption box size or its keyframes changed during rendering. Wait for the adjustment to finish and apply again.');
             }
-            planned.push({ cue: cue, located: found, track: trackIndex, startFrame: cue.startFrame, endFrame: cue.endFrame, geometry: geometry, bounds: bounds, fragments: fragments, fragmentReceipt: fragments ? fragmentReceipt(fragments) : null, fragmentMotions: fragmentMotions, fragmentGeometry: fragmentGeometryPlans });
+            planned.push({ cue: cue, located: found, track: trackIndex, startFrame: cue.startFrame, endFrame: cue.endFrame, geometry: geometry, bounds: bounds, fragments: fragments, fragmentReceipt: fragments ? fragmentReceipt(fragments) : null, bundleReceipt: cue.captionBundle === true && found ? fragmentReceipt(fragments || [found]) : null, fragmentMotions: fragmentMotions, fragmentGeometry: fragmentGeometryPlans });
         }
         // Inspect every destination track and every desired range before importing or relinking anything.
         for (i = 0; i < planned.length; i++) {
@@ -897,6 +1068,7 @@ var BetterCaptionsHost = (function () {
                     if (!clip) throw new Error('The caption did not appear at its expected timeline position.');
                 }
                 if (entry.fragments) {
+                    verifyBundleReferences(s, entry);
                     for (f = 0; f < entry.fragments.length; f++) {
                         var fragment = entry.fragments[f].clip;
                         writeMotion(fragment, entry.fragmentGeometry ? entry.fragmentGeometry[f].target : entry.fragmentMotions[f]);
@@ -916,6 +1088,9 @@ var BetterCaptionsHost = (function () {
                 if (entry.bounds) { result.renderBounds = entry.bounds; result.motionProfile = entry.fragments ? fragmentProfile(entry.fragments, cue.startFrame, cue.endFrame - cue.startFrame, tpf) : motionProfile(clip, cue.startFrame, cue.endFrame - cue.startFrame, tpf); }
                 results.push(result);
             }
+            // Rediscover global references after every relink and native write.
+            // Cached TrackItems alone cannot reveal a new external copy or cut.
+            for (i = 0; i < planned.length; i++) verifyBundleReferences(s, planned[i]);
             return reply({ ok: true, cues: results });
         } catch (e) {
             // No ripple removals. Restore source geometry and the exact native
@@ -959,5 +1134,5 @@ var BetterCaptionsHost = (function () {
             return reply({ ok: true, cues: out });
         } catch (e) { return reply({ error: e.toString() }); }
     }
-    return { context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, readCaptionAreaDescriptor: readCaptionAreaDescriptor, patchCaptionKeyValues: patchCaptionKeyValues, preflight: preflight, prepareCaptionTrack: prepareCaptionTrack, apply: apply, readTimeline: readTimeline };
+    return { readCaptionConsolidation: readCaptionConsolidation, stageCaptionConsolidation: stageCaptionConsolidation, verifyCaptionConsolidation: verifyCaptionConsolidation, rollbackCaptionConsolidation: rollbackCaptionConsolidation, context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, readCaptionAreaDescriptor: readCaptionAreaDescriptor, patchCaptionKeyValues: patchCaptionKeyValues, preflight: preflight, prepareCaptionTrack: prepareCaptionTrack, apply: apply, readTimeline: readTimeline };
 })();

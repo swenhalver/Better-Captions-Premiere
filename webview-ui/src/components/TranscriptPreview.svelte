@@ -114,7 +114,7 @@
     if (disabled) return;
     try {
       const next = regroupCaptions(captions, maxChars);
-      commit(next, hasLinked ? `${captionSentenceCount(next)} sentences grouped. Update Program Monitor to show them; timeline clips and keyframes stay in place.` : "Character limit applied. Short captions join where timing, sentences and placement allow.");
+      commit(next, hasLinked ? `${captionSentenceCount(next)} caption groups updated. Update Program Monitor to show them; timeline clips and keyframes stay in place.` : "Character limit applied. Short captions join where timing, sentences and placement allow.");
       selectedRowKey = null;
       if (next[0]) onSelect(next[0].id);
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
@@ -140,11 +140,11 @@
   <div class="transcript-editor__heading"><label class="transcript-editor__search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.5 12.5 4 4"/></svg><input type="search" aria-label="Search captions" placeholder="Search captions" bind:value={query} /></label><button class="caption-button" onclick={undo} disabled={!canUndo} title="Restore the previous transcript edit">Undo edit</button></div>
   {#if captions.length}
     <details class="transcript-editor__grouping">
-      <summary>Sentence grouping <span>{maxChars} characters · {sentenceCount} sentences</span></summary>
+      <summary>Caption grouping <span>{maxChars} characters · {sentenceCount} groups</span></summary>
       <div class="transcript-editor__grouping-body">
         <div class="transcript-editor__grouping-controls"><label class="caption-field"><span>Characters per caption</span><input type="number" min="1" max={MAX_CAPTION_CHARS} step="1" value={maxChars} onchange={changeCharacterLimit} disabled={disabled} /></label><button class="caption-button" onclick={regroup} disabled={disabled} title="Apply the character limit to the edited transcript">Regroup</button></div>
         <p class="caption-help">Includes spaces and punctuation. A word longer than the limit stays whole.</p>
-        <p class="caption-help">{hasLinked ? `${sentenceCount} sentences across ${captions.length} timeline clips. Keyframes stay with their clips.` : "Regroup splits or joins captions, respecting sentences, pauses and placement."}</p>
+        <p class="caption-help">{hasLinked ? `${sentenceCount} caption groups across ${captions.length} timeline ${captions.length === 1 ? 'clip' : 'clips'}. Keyframes stay with their clips.` : "Regroup splits or joins captions, respecting sentences, pauses and placement."}</p>
       </div>
     </details>
     <div class="transcript-editor__workspace">
@@ -160,9 +160,9 @@
       </div>
       {#if selected}
         <div class="transcript-editor__edit">
-          <div class="transcript-editor__edit-heading"><h3>{selectedSegment ? 'Sentence' : selected.renderSegments ? 'Timeline clip' : 'Caption'} {selectedRow ? sentenceRows.indexOf(selectedRow) + 1 : captions.findIndex((caption) => caption.id === selected.id) + 1}</h3><button class="caption-button" disabled={isDemo} onclick={() => onShowInPremiere?.(selected.startTime)} title={isDemo ? "Available in the installed Premiere panel" : "Select caption in Premiere"}>Show in Premiere</button></div>
+          <div class="transcript-editor__edit-heading"><h3>{selectedSegment ? 'Caption group' : selected.renderSegments ? 'Timeline clip' : 'Caption'} {selectedRow ? sentenceRows.indexOf(selectedRow) + 1 : captions.findIndex((caption) => caption.id === selected.id) + 1}</h3><button class="caption-button" disabled={isDemo} onclick={() => onShowInPremiere?.(selected.startTime)} title={isDemo ? "Available in the installed Premiere panel" : "Select caption in Premiere"}>Show in Premiere</button></div>
           <WordTimeline caption={selected} fps={frameRate} {currentTime} selectedWord={Math.max(0, selectedWord-selectedWordOffset)} onSelectWord={(index) => onSelectWord(index+selectedWordOffset)} onSeek={onSeek} onChange={(caption) => updateCaption(caption,"Word timing saved. Connected edges stay together.")} />
-          <details class="transcript-editor__detail"><summary>Edit sentence text</summary>
+          <details class="transcript-editor__detail"><summary>Edit caption text</summary>
           <label class="caption-field"><span>Transcription</span><textarea rows="3" bind:value={draftText} spellcheck="true" onkeydown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); saveText(); } }}></textarea></label>
           <div class="transcript-editor__save"><span class="caption-help">{draftText !== selected.text ? "Unsaved text" : "Text is up to date"}</span><button class="caption-button" onclick={saveText} disabled={draftText === selected.text}>Save text</button></div>
           </details>
@@ -194,7 +194,7 @@
   .transcript-editor__grouping { border-block: 1px solid var(--color-panel-border); font-size: var(--caption-type-s); }
   .transcript-editor__grouping > summary { cursor: pointer; padding: var(--caption-space-m) var(--caption-space-l); }
   .transcript-editor__grouping summary span { float: right; color: var(--color-panel-secondary); font-size: var(--caption-type-xs); }
-  .transcript-editor__grouping-body { padding: 0 var(--caption-space-l) var(--caption-space-m); }
+  .transcript-editor__grouping-body { clear: both; padding: 0 var(--caption-space-l) var(--caption-space-m); }
   .transcript-editor__grouping-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--caption-space-s); align-items: end; margin-block-end: var(--caption-space-s); }
   .transcript-editor__search { display: flex; align-items: center; gap: var(--caption-space-s); flex: 1; min-inline-size: 0; margin: 0; padding-inline: .5rem; border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); background: var(--color-input); }
   .transcript-editor__search svg { inline-size: 1.1rem; block-size: 1.1rem; color: var(--color-panel-secondary); flex-shrink: 0; }

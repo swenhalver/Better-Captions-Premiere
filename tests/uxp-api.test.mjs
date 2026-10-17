@@ -19,7 +19,7 @@ function harness(t, options = {}) {
     const entries=new Map(),value={nativePath:path,getEntries:async()=>[...entries].map(([name,file])=>({...file,name})),getEntry:async name=>{if(path==='/private/service'&&name==='service.json')serviceReads++;if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
     folders.set(path,value);return value;
   }
-  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues']});
+  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues','prepareCaptionTrack','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation']});
   function setService(status) {
     const entries=folder('/private/service').entries;
     if(status===null)entries.delete('service.json');else entries.set('service.json',{data:status});
@@ -53,6 +53,7 @@ function harness(t, options = {}) {
     if(name==='./transcript.js')return native;
     if(name==='./paths.js')return require('../uxp/paths.js');
     if(name==='./text-area.js'&&options.textArea)return options.textArea;
+    if(name==='./consolidation.js'&&options.consolidation)return options.consolidation;
     throw new Error('Unexpected import '+name);
   }};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/api.js',import.meta.url),'utf8'),context);
@@ -71,6 +72,56 @@ test('style preset storage works without a project or renderer and serializes st
   assert.equal(h.writes.length, 1); assert.equal(h.writes[0].path, '/plugin-data');
   assert.equal(h.writes[0].name, 'style-presets.json');
   assert.equal(h.projectReads, 0); assert.equal(h.serviceReads, 0); assert.equal(h.requests.length, 0);
+});
+
+function conversionFixture(t,mode='success'){
+ const previous=[{id:'old-a',clipNodeId:'a'},{id:'old-b',clipNodeId:'b'}],caption={id:'bundle',captionBundle:true,mediaPath:'/generated/new.mov'};
+ const plan={ok:true,version:1,sequenceId:'one',projectPath:'/projects/edit.prproj',signature:'native-proof',clips:structuredClone(previous)};
+ let complete=false,entered,release;const started=new Promise(resolve=>{entered=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+ const h=harness(t,{
+  serviceResult:request=>{
+   if(request.action==='readCaptionConsolidation')return {...plan,signature:mode==='stale'?'changed':plan.signature};
+   if(request.action==='prepareCaptionTrack')return {ok:true,sequenceId:'one',projectPath:plan.projectPath,destination:{mode:'reuse',trackIndex:2}};
+   if(request.action==='stageCaptionConsolidation')return {ok:true,cues:[{id:'bundle',clipNodeId:'new-node',projectItemId:'new-item',path:caption.mediaPath,start:0,end:5}]};
+   if(request.action==='verifyCaptionConsolidation')return mode==='partial'?{error:'Only some legacy clips remain'}:{ok:true,complete,clips:structuredClone(previous)};
+   if(request.action==='rollbackCaptionConsolidation')return {ok:true,rolledBack:true};
+   assert.fail('Unexpected conversion action '+request.action);
+  },
+  consolidation:{async removeLegacyClips(ppro,project,sequence,proof,verify){
+   assert.equal(sequence.name,'one');assert.equal(proof.signature,'native-proof');entered();if(mode==='gated')await gate;
+   if(mode==='reject'||mode==='partial')throw new Error('native transaction refused');
+   assert.equal((await verify()).complete,false);complete=true;
+   if(mode==='uncertain')throw new Error('native response lost');
+   assert.equal((await verify()).complete,true);
+  }},
+ });
+ return {...h,previous,caption,plan,started,release};
+}
+
+test('legacy conversion keeps one serial native lane and freezes its identities through verified replacement',async t=>{
+ const h=conversionFixture(t,'gated');await h.api.getActiveSequenceInfo();
+ const pending=h.api.applyConsolidatedCaption(h.caption,h.previous,h.plan,'one');await h.started;
+ h.caption.id='changed-by-editor';h.previous[0].clipNodeId='unrelated';h.plan.signature='changed-by-editor';
+ const before=h.requests.length,queued=h.api.getActiveSequenceInfo();await tick();assert.equal(h.requests.length,before);
+ h.release();assert.equal((await pending).cues[0].clipNodeId,'new-node');assert.equal((await queued).id,'one');
+ assert.deepEqual(h.requests.map(request=>request.action),['readCaptionConsolidation','prepareCaptionTrack','stageCaptionConsolidation','verifyCaptionConsolidation','verifyCaptionConsolidation']);
+ for(const request of h.requests){assert.equal(request.sequenceId,'one');assert.equal(request.projectPath,'/projects/edit.prproj');}
+ const stage=h.requests[2];assert.equal(stage.args[1],2);assert.equal(stage.args[2][0].clipNodeId,'a');assert.equal(stage.args[3].signature,'native-proof');assert.equal(Object.hasOwn(stage,'expiresAt'),false);
+ for(const request of h.requests.slice(3)){assert.equal(request.args[0].id,'bundle');assert.equal(request.args[0].clipNodeId,'new-node');assert.equal(request.args[1][0].clipNodeId,'a');assert.equal(request.args[2].signature,'native-proof');}
+ assert.equal(typeof h.api.stageCaptionConsolidation,'undefined');assert.equal(typeof h.api.rollbackCaptionConsolidation,'undefined');
+});
+
+test('legacy conversion rolls back only a fully verified untouched original set',async t=>{
+ const stale=conversionFixture(t,'stale');await stale.api.getActiveSequenceInfo();await assert.rejects(stale.api.applyConsolidatedCaption(stale.caption,stale.previous,stale.plan,'one'),/geometry changed/);assert.equal(stale.requests.length,1);
+ const rejected=conversionFixture(t,'reject');await rejected.api.getActiveSequenceInfo();await assert.rejects(rejected.api.applyConsolidatedCaption(rejected.caption,rejected.previous,rejected.plan,'one'),/Original clips were preserved/);
+ assert.deepEqual(rejected.requests.slice(-2).map(request=>request.action),['verifyCaptionConsolidation','rollbackCaptionConsolidation']);
+ const partial=conversionFixture(t,'partial');await partial.api.getActiveSequenceInfo();await assert.rejects(partial.api.applyConsolidatedCaption(partial.caption,partial.previous,partial.plan,'one'),/native transaction refused/);
+ assert.equal(partial.requests.some(request=>request.action==='rollbackCaptionConsolidation'),false,'uncertain partial removal must retain the replacement');
+});
+
+test('an uncertain native transaction that actually removed all originals retains the verified replacement',async t=>{
+ const h=conversionFixture(t,'uncertain');await h.api.getActiveSequenceInfo();assert.equal((await h.api.applyConsolidatedCaption(h.caption,h.previous,h.plan,'one')).ok,true);
+ assert.equal(h.requests.at(-1).action,'verifyCaptionConsolidation');assert.equal(h.requests.some(request=>request.action==='rollbackCaptionConsolidation'),false);
 });
 
 test('direct native requests and slow saves retain the captured sequence after selection changes',async t=>{

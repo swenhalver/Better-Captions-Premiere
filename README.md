@@ -4,10 +4,12 @@ Editable word-highlight captions using **Premiere Pro's built-in Speech to Text*
 
 This fork adds independent upcoming, currently spoken, and previously spoken word appearances; a rounded bubble behind the active word; word sizing; transcript and timing edits; a movable, independently resizable text area in Premiere's Program Monitor; native position and size keyframes; actual timeline insertion; and a local agent API.
 
+**Development status:** this branch contains the 0.7.3 one-clip/automatic-track changes described below. They are not released yet: Adobe's Windows installer is blocking fresh native acceptance. The published download remains [0.7.2](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.2). See the [0.7.3 verification record](docs/windows-verification-0.7.3.md) for the exact boundary.
+
 ## What you can edit
 
 - Caption text and individual word start/end times, with overlap validation.
-- Phrase grouping at sentences, pauses, a configurable character limit, and readable durations. Spaces and punctuation count; whole words stay intact. Split, merge, regroup, and undo before timeline links would be lost.
+- Phrase grouping at sentences, pauses, a configurable character limit, and readable durations. Spaces and punctuation count; whole words stay intact. Regroup before or after Apply; linked sentences change within their existing native clip.
 - Base font, weight, size, color, alignment, case, outline, shadow, caption background, wrapping width, and line height.
 - Active and past words independently: font, weight, relative size, color, opacity, bubble color/opacity, padding, and corner radius.
 - Caption placement and independent box width/height directly in Premiere's Program Monitor. Width changes reflow the words without changing their font size. Edit native Position, Width and Height keyframes in the plugin's lanes, including exact frame/value controls and supported Undo/Redo.
@@ -15,7 +17,7 @@ This fork adds independent upcoming, currently spoken, and previously spoken wor
 - Fade, Pop, Bounce, Typewriter, and word highlighting. Enlarged words reserve space so surrounding words do not jump as the highlight moves.
 - Named style presets: save all three word appearances, shared layout/background, animation and fades for reuse across projects on the same computer. Apply, rename, replace and delete them from the top of Styling.
 
-Each phrase is rendered as a transparent **ProRes 4444 text-area clip** at the sequence's exact frame rate, then placed on a chosen video track. It is hardcoded into the final video when you export the sequence. The Program Monitor is the caption preview; the plugin has no separate caption canvas. Edit text/style/timing in the panel and update the Program Monitor. These are rendered clips, so Premiere's Text tool does not edit their letters directly.
+New captions render as one transparent **ProRes 4444 text-area clip** at the sequence's exact frame rate, containing individually editable sentence groups. Automatic placement uses an empty track above footage or creates a new track. Explicit transcript splits and supported native Razor cuts retain separate physical clips. Captions are hardcoded into the final video when you export the sequence. The Program Monitor is the caption preview; the plugin has no separate caption canvas. Edit text/style/timing in the panel and update the Program Monitor. These are rendered clips, so Premiere's Text tool does not edit their letters directly.
 
 ## Requirements
 
@@ -52,7 +54,7 @@ Private queue and agent files live under `%APPDATA%\Better Captions` on Windows 
 2. Open a saved sequence, then **Refresh sequence** in the caption editor.
 3. Click **Transcribe in Premiere**. The main plugin calls Adobe's native `Transcript.transcribeClipProjectItem` API for enabled audio clips missing a transcript, using Premiere's language preferences. Existing native transcripts are reused.
 4. In **Transcript**, select a sentence to open its single word lane. Select a word and drag an edge, use the arrow keys, or edit the seconds. Boundaries snap to frames and stop before they overlap another word; connected edges move together. In **Styling**, choose **Past words**, **Current word**, or **Next words** to edit each state’s typography, color, opacity, case, tracking, stroke, shadow and bubble.
-5. Choose an unlocked video track above the footage, with its output enabled, and click **Apply to Program Monitor**.
+5. Leave **Caption track** on **Automatic · above footage**, then click **Apply to Program Monitor**. A manual unlocked track remains available. Keep its output enabled in Premiere.
 6. Choose a caption and click **Select in Program Monitor**. Enable Premiere's **Transform** control below the Program Monitor to show its native handles, or select **Motion** in Effect Controls. Drag the area to move it or drag its handles to resize it. Generated caption clips use independent width and height.
 7. In **Styling → Position & size**, enable a stopwatch for **Position**, **Width**, or **Height**, move the caption-frame playhead, then edit X/Y or the size in pixels. Select a diamond in a keyframe lane to edit that exact key's frame and value, independently of the playhead. Use the frame field or ±1-frame buttons to move it, or Delete key to remove it. Existing Position and Bezier size values are changed in place to preserve their native easing. Linear/Hold size keys support structural edits; Premiere's unreadable custom curves require native controls for moving, deletion or easing changes. Panel **Undo** and **Redo** keep up to 32 confirmed edits per caption for the current session, including across automatic reflow. Native changes invalidate incompatible panel history. Save the Premiere project to retain its actual keyframes.
 
@@ -60,7 +62,9 @@ Keep Better Captions open while editing the box dimensions. After a resize settl
 
 Background geometry checks use a bounded change fingerprint rather than evaluating every output frame or reading media metadata on each poll. They stop while the panel is hidden and pause after an error until you Refresh or Update. Native requests run in one serialized lane; a timeout does not pretend to cancel Premiere or start another overlapping call. Only one background service instance owns the queue. The plugin does not open or navigate native menus for transcription or timeline updates.
 
-Automatic size watching supports up to 256 combined Motion control keys; more complex curves can still use a manual Update. Existing animated Anchor Point changes or animated Motion on a nonzero trimmed source-in can require a fresh caption clip before changing its media geometry. Supported Position, independent Width and Height keys remain on their existing clip.
+Automatic size watching supports up to 256 combined Motion control keys; more complex curves can still use a manual Update. Existing animated Anchor Point changes or animated Motion on a nonzero trimmed source-in can require a fresh caption clip before changing its media geometry. A verified native Razor bundle permits later-slice text-area edits on the correct source frames. Its slices must remain adjacent, forward 1x, in source order, on one track, with no external reuse. Discovery is bounded to 64 fragments and 2,000 project clips. Supported Position, independent Width and Height keys remain on their existing clip.
+
+Updating a compatible legacy set of separate, untrimmed caption clips converts it into one clip. Existing static positions and sizes become native hold keys. The replacement is verified before the originals are removed together without ripple. Animated or custom effects, different source text-box bounds, custom anchor/rotation, timing gaps, trims and reused media stop conversion with the original clips preserved. These conversion and automatic-track paths still require installed 0.7.3 native acceptance.
 
 For edited footage, source word timestamps are mapped through the timeline clips' in/out points and duration. Muted tracks and disabled audio clips are skipped. Repeated uses of the same source reuse its native transcript. Native transcription failures are reported rather than replaced with another speech engine.
 
@@ -99,9 +103,9 @@ The [online interface review](https://better-captions-premiere-review.swenhalver
 
 ## Character limits
 
-In **Transcript → Sentence grouping**, set **Characters per caption** (1–500, default 56), then choose **Regroup** before applying clips to Premiere. The count includes spaces and punctuation, with Unicode grapheme counting where available. There is no word-count cap. A single word longer than the chosen limit stays whole in its own caption.
+In **Transcript → Caption grouping** (**Sentence grouping** in 0.7.2), set **Characters per caption** (1–500, default 56), then choose **Regroup**. For captions already applied, click **Update Program Monitor** to render the new caption groups. The count includes spaces and punctuation, with Unicode grapheme counting where available. There is no word-count cap. A single word longer than the chosen limit stays whole in its own caption.
 
-Regroup splits or rejoins unlinked captions while preserving word timings, sentence markers, pauses, speaker/placement boundaries and readable durations. Undo restores the previous captions. Linked Premiere captions keep their boundaries and native keyframes. Older sessions adopt the 56-character default instead of interpreting their old word count as characters; existing captions remain unchanged until regrouping. Style presets preserve the destination character limit.
+Regroup splits or rejoins sentences while preserving word timings, sentence markers, pauses, speaker/placement boundaries and readable durations. Undo restores the previous grouping. Linked Premiere clips keep their physical boundaries and native keyframes while their rendered sentence groups change. Older sessions adopt the 56-character default instead of interpreting their old word count as characters; existing captions remain unchanged until regrouping. Style presets preserve the destination character limit.
 
 ## Reusable style presets
 
@@ -109,7 +113,7 @@ In **Styling**, choose **Save preset…**, enter a name, and save. To reuse the 
 
 Presets include past/current/next typography, stroke, shadow, word bubbles, shared caption layout/background, and animation/fades. They preserve the destination's word timing, grouping, starting placement, and existing native Position/Width/Height animation. The installed panel writes an atomic, revision-checked `style-presets.json` in its UXP user-data folder, independent of the Premiere project. Keep the same plugin identity when upgrading to retain that library; clearing plugin data removes it. Fonts remain installed locally.
 
-Nested audio sequences, reversed speech, and variable time-remapping need a deliberate workflow; flatten/open the dialogue sequence before transcription. Simultaneously spoken overlapping audio is not a speaker-selection workflow. Transcript corrections in this panel affect generated captions; they are not written back into Premiere's native transcript. Linked captions cannot be deleted/regrouped silently; edit their timeline clips deliberately before replacing the set.
+Nested audio sequences, reversed speech, and variable time-remapping need a deliberate workflow; flatten/open the dialogue sequence before transcription. Simultaneously spoken overlapping audio is not a speaker-selection workflow. Transcript corrections in this panel affect generated captions; they are not written back into Premiere's native transcript. The panel does not silently delete linked clips. Use Premiere's Razor tool for deliberate physical splits after Apply.
 
 No After Effects, Whisper, audio-export transcription pipeline, paid speech API, or upstream native binary is used. The upstream shell addon is disabled, its shipped binaries are removed, and the production panel blocks remote content through CSP. See [the original audit](SECURITY-AUDIT.md) and [fork security notes](security/FORK-CHANGES.md).
 

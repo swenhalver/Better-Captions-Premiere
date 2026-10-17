@@ -96,6 +96,47 @@ function animate(param,values,mode=0,sourceIn=0){
  param.keys=values.map((value,index)=>({ticks:String((sourceIn+index)*TICKS),value,mode}));
 }
 
+function splitHarness() {
+ const h=harness({sourceIn:2,uniform:false});
+ const parts=[{clipNodeId:'first',track:0,startTicks:String(TICKS*8),endTicks:String(TICKS*10),inTicks:'0',outTicks:String(TICKS*2)},
+  {clipNodeId:'clip',track:0,startTicks:h.descriptor.startTicks,endTicks:h.descriptor.endTicks,inTicks:h.descriptor.inTicks,outTicks:h.descriptor.outTicks}];
+ for(const d of [h.descriptor,h.freshDescriptor])Object.assign(d,{bundleSourceContiguous:true,bundleFragments:clone(parts)});
+ h.clip.getOutPoint=async()=>time(h.descriptor.outTicks);
+ return h;
+}
+
+test('verified later Razor fragment edits and undoes keys on the native source clock',async()=>{
+ const h=splitHarness();let state=await h.read(12);
+ state=await h.edit(state,'toggle',{track:'width'});
+ assert.equal(h.params.width.keys[0].ticks,String(TICKS*2.5));
+ assert.equal(state.tracks.width.keys[0].frame,12);
+ state=await h.edit(state,'set-key',{track:'width',keyTicks:String(TICKS*2.5),value:[840]});
+ assert.deepEqual(state.tracks.width.value,[840]);assert.equal(h.patches.length,1);
+ state=await h.edit(state,'undo');assert.deepEqual(state.tracks.width.value,[900]);
+ assert.deepEqual(h.params.position.value,[.5,.5]);
+});
+
+test('Razor key editing rejects malformed or incomplete fragment proofs before native work',async()=>{
+ const changes=[d=>delete d.bundleSourceContiguous,d=>d.bundleSourceContiguous=false,d=>delete d.bundleFragments,d=>d.bundleFragments=[],d=>d.bundleFragments=Array(65).fill(d.bundleFragments[0]),
+  d=>d.bundleFragments[1].clipNodeId='first',d=>d.bundleFragments[0].track=1,d=>d.bundleFragments[0].inTicks='1',d=>d.bundleFragments[0].outTicks='1',
+  d=>d.bundleFragments[0].endTicks=String(TICKS*9),d=>d.bundleFragments[1].outTicks='bad',d=>d.bundleFragments[1].endTicks=String(TICKS*13),d=>d.clipNodeId='missing'];
+ for(const change of changes){const h=splitHarness();change(h.descriptor);await assert.rejects(h.read(0),/split receipt/);assert.equal(h.transactions,0);}
+ const h=splitHarness();h.clip.getOutPoint=async()=>time(TICKS*5);await assert.rejects(h.read(0),/clip changed/);
+});
+
+test('full fragment receipt participates in stale signatures and final asynchronous identity checks',async()=>{
+ const h=splitHarness(),state=await h.read(0);h.freshDescriptor.bundleFragments[0].clipNodeId='external-replacement';
+ await assert.rejects(h.edit(state,'toggle',{track:'width'}),/timeline link changed/);assert.equal(h.transactions,0);
+ const g=splitHarness(),old=await g.read(0);for(const d of [g.descriptor,g.freshDescriptor])d.bundleFragments[0].clipNodeId='replacement';
+ await assert.rejects(g.edit(old,'toggle',{track:'width'}),/Motion changed/);assert.equal(g.transactions,0);
+});
+
+test('verified native cuts do not weaken custom-easing protections',async()=>{
+ const h=splitHarness();animate(h.params.width,[100,150],5,2);
+ await assert.rejects(h.edit(await h.read(0),'remove-key',{track:'width',keyTicks:String(TICKS*2)}),/custom interpolation/);
+ assert.equal(h.transactions,0);assert.equal(h.params.width.keys.length,2);
+});
+
 test('trimmed clips read the source clock but cannot acquire animation that reflow will refuse',async()=>{
  const h=harness({sourceIn:2});
  const state=await h.read(24);
