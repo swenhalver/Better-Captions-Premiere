@@ -7,7 +7,7 @@ This fork adds independent upcoming, currently spoken, and previously spoken wor
 ## What you can edit
 
 - Caption text and individual word start/end times, with overlap validation.
-- Phrase grouping at sentences, pauses, word/character limits, and readable durations. Split, merge, regroup, and undo before timeline links would be lost.
+- Phrase grouping at sentences, pauses, a configurable character limit, and readable durations. Spaces and punctuation count; whole words stay intact. Split, merge, regroup, and undo before timeline links would be lost.
 - Base font, weight, size, color, alignment, case, outline, shadow, caption background, wrapping width, and line height.
 - Active and past words independently: font, weight, relative size, color, opacity, bubble color/opacity, padding, and corner radius.
 - Caption placement and independent box width/height directly in Premiere's Program Monitor. Width changes reflow the words without changing their font size. Edit native Position, Width and Height keyframes in the plugin's lanes, including exact frame/value controls and supported Undo/Redo.
@@ -19,7 +19,7 @@ Each phrase is rendered as a transparent **ProRes 4444 text-area clip** at the s
 
 ## Requirements
 
-The installer supports **Windows and macOS (Apple Silicon or Intel), with Premiere Pro 26.3 or newer**. The same JavaScript plugin and platform-neutral package are used on both systems. Download the complete [0.7.0 Windows/macOS package](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.0). See the [release verification notes](docs/release-0.7.0.md) for tested behavior and remaining native-runtime limits.
+The installer supports **Windows and macOS (Apple Silicon or Intel), with Premiere Pro 26.3 or newer**. The same JavaScript plugin and platform-neutral package are used on both systems. Download the complete [0.7.1 Windows/macOS package](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.1). See the [release verification notes](docs/release-0.7.1.md) for tested behavior and remaining native-runtime limits.
 
 - Node.js 24 LTS for building/development and the optional agent CLI.
 - Local FFmpeg and FFprobe. The plugin finds WinGet's user links on Windows, Apple Silicon/Intel Homebrew locations on macOS, and absolute directories in `PATH`.
@@ -95,7 +95,13 @@ Use `--sequence <id>` or `--instance <id>` if several editors are open. Use `--f
 
 The preview opened by `npm run dev` uses a fictional transcript for UI evaluation. Its Transcribe and Apply buttons require the installed Premiere panel.
 
-The [online interface review](https://better-captions-premiere-review.swenhalver.chatgpt.site) provides the 0.7.0 editor with browser-only panel-width controls (owner sign-in required). Preview presets are saved in that browser; they do not synchronize with the installed plugin or other computers. See [interface review and verification](docs/interface-review.md) for the two-tab workflow and [0.7.0 release notes](docs/release-0.7.0.md) for current verification. The older three concept studies remain available at `/concepts/`.
+The [online interface review](https://better-captions-premiere-review.swenhalver.chatgpt.site) provides the 0.7.1 editor with browser-only panel-width controls (owner sign-in required). Preview presets are saved in that browser; they do not synchronize with the installed plugin or other computers. See [interface review and verification](docs/interface-review.md) for the two-tab workflow and [0.7.1 release notes](docs/release-0.7.1.md) for current verification. The older three concept studies remain available at `/concepts/`.
+
+## Character limits
+
+In **Transcript → Sentence grouping**, set **Characters per caption** (1–500, default 56), then choose **Regroup** before applying clips to Premiere. The count includes spaces and punctuation, with Unicode grapheme counting where available. There is no word-count cap. A single word longer than the chosen limit stays whole in its own caption.
+
+Regroup splits or rejoins unlinked captions while preserving word timings, sentence markers, pauses, speaker/placement boundaries and readable durations. Undo restores the previous captions. Linked Premiere captions keep their boundaries and native keyframes. Older sessions adopt the 56-character default instead of interpreting their old word count as characters; existing captions remain unchanged until regrouping. Style presets preserve the destination character limit.
 
 ## Reusable style presets
 

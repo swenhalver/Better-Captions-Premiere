@@ -162,7 +162,7 @@ test('transcripts split at sentence punctuation, pauses and limits without capti
   ]]));
   assert.deepEqual(parsed.map(c=>c.text),['Dr. Smith speaks.','Then waits','Again now!']);
   validateCaptions(parsed);
-  const limited=parseTranscript(transcript([Array.from({length:7},(_,i)=>sourceWord(`w${i}`,i*.3))]),2);
+  const limited=parseTranscript(transcript([Array.from({length:7},(_,i)=>sourceWord(`w${i}`,i*.3))]),5);
   assert.deepEqual(limited.map(c=>c.words.length),[2,2,2,1]);validateCaptions(limited);
   for(let i=0;i<limited.length-1;i++)assert.equal(getCaptionAtTime(limited,limited[i+1].startTime),limited[i+1]);
 });
@@ -188,7 +188,7 @@ test('punctuation stays with its segment and opening quotes are retained',()=>{
 test('transcript sentence flags and readable character/duration limits split caption blocks',()=>{
   const first=sourceWord('without punctuation',0);first.eos=true;
   assert.deepEqual(parseTranscript(transcript([[first,sourceWord('new sentence',.3)]])).map(c=>c.text),['without punctuation','new sentence']);
-  const chars=groupCaptionWords([word('long',0,.3),word('enough',.4,.7),word('sentence',.8,1.1)],6,12);
+  const chars=groupCaptionWords([word('long',0,.3),word('enough',.4,.7),word('sentence',.8,1.1)],12);
   assert.deepEqual(chars.map(c=>c.text),['long enough','sentence']);validateCaptions(chars);
   const duration=groupCaptionWords([word('slow',0,3),word('speech',3.1,6.2)]);
   assert.deepEqual(duration.map(c=>c.text),['slow','speech']);validateCaptions(duration);

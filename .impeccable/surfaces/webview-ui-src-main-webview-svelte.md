@@ -30,3 +30,7 @@ The user combined concepts 1 and 2 into Transcript and designated concept 3 as S
 ## Reusable style presets, 2026-10-17
 
 Local extension: add a compact preset picker above the existing Styling controls. Save a named snapshot of all three resolved word appearances, shared layout/background and animation. Apply, rename, replace and delete use the existing native-style fields, buttons and inline feedback. Presets live in plugin user data across projects on the same computer; the hosted preview uses browser storage and says so. Applying a look preserves placement, grouping, timing and native area/keyframes. Save errors stay visible and stale revisions require a reload. The existing design system and two-tab structure remain authoritative.
+
+## Character grouping correction, 2026-10-17
+
+The user requires a character limit instead of a word limit. Preserve the existing Transcript grouping disclosure and control treatment; label the numeric field Characters per caption and show the character count in its summary. Count spaces/punctuation and explain whole-word exceptions. Regroup may split or rejoin unlinked captions across earlier automatic boundaries, preserving timings, sentence/placement/speaker boundaries and native linked-clip protections. Saved legacy word limits become the 56-character default without silently regrouping captions. No visual-system change is authorized or needed.

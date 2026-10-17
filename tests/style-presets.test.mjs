@@ -21,17 +21,17 @@ test('presets capture the resolved appearance of all word states, layout and ani
   for (const state of ['spokenWord', 'activeWord', 'upcomingWord']) assert.deepEqual(saved.style[state], resolveAppearance(source, state));
   assert.deepEqual(saved.animation, animation);
   assert.equal(saved.style.backgroundColor, source.backgroundColor);
-  for (const excluded of ['positionX', 'positionY', 'maxWords']) assert.equal(Object.hasOwn(saved.style, excluded), false);
+  for (const excluded of ['positionX', 'positionY', 'maxChars']) assert.equal(Object.hasOwn(saved.style, excluded), false);
   source.activeWord.italic = false; animation.fadeInDuration = 0;
   assert.equal(saved.style.activeWord.italic, true); assert.equal(saved.animation.fadeInDuration, .8);
 });
 
 test('applying a preset clears unrelated optional word overrides and preserves placement and grouping', () => {
   const target = structuredClone(DEFAULT_STYLE);
-  target.positionX = .1; target.positionY = .2; target.maxWords = 2;
+  target.positionX = .1; target.positionY = .2; target.maxChars = 2;
   target.spokenWord.italic = true; target.activeWord.letterSpacing = 9; target.upcomingWord = { shadowEnabled: true, shadowColor: '#ff0000' };
   const saved = look(), result = applyPresetLook(target, saved);
-  assert.equal(result.style.positionX, .1); assert.equal(result.style.positionY, .2); assert.equal(result.style.maxWords, 2);
+  assert.equal(result.style.positionX, .1); assert.equal(result.style.positionY, .2); assert.equal(result.style.maxChars, 2);
   assert.equal(result.style.spokenWord.italic, false); assert.equal(result.style.activeWord.letterSpacing, 0);
   for (const state of ['spokenWord', 'activeWord', 'upcomingWord']) assert.deepEqual(resolveAppearance(result.style, state), saved.style[state]);
   assert.equal(target.activeWord.letterSpacing, 9, 'applying never mutates its input');

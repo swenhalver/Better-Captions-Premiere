@@ -54,6 +54,7 @@ export interface CaptionWord {
   startTime: number;
   endTime: number;
   isActive: boolean;
+  endOfSentence?: boolean;
 }
 
 export type AnimationPreset = "fade" | "pop" | "typewriter" | "karaoke" | "bounce";
@@ -111,7 +112,7 @@ export interface StyleConfig {
   maxWidth: number;
   lineHeight: number;
   textTransform: "none" | "uppercase" | "lowercase";
-  maxWords: number;
+  maxChars: number;
   activeWord: WordAppearance;
   spokenWord: WordAppearance;
   upcomingWord?: Partial<WordAppearance>;
@@ -152,6 +153,8 @@ export interface SequenceInfo {
   tracks?: { index: number; name: string; clips: number; locked: boolean }[];
 }
 
+export const DEFAULT_MAX_CHARS = 56;
+export const MAX_CAPTION_CHARS = 500;
 export const DEFAULT_STYLE: StyleConfig = {
   fontFamily: "Arial",
   fontSize: 64,
@@ -178,7 +181,7 @@ export const DEFAULT_STYLE: StyleConfig = {
   maxWidth: 0.8,
   lineHeight: 1.3,
   textTransform: "none",
-  maxWords: 6,
+  maxChars: DEFAULT_MAX_CHARS,
   activeWord: {fontFamily:"",fontWeight:700,sizeScale:1.15,color:"#171717",opacity:1,bubble:true,bubbleColor:"#FFD84D",bubbleOpacity:1,padding:10,radius:14},
   spokenWord: {fontFamily:"",fontWeight:700,sizeScale:1,color:"#AAAAAA",opacity:1,bubble:false,bubbleColor:"#333333",bubbleOpacity:1,padding:8,radius:10},
 };

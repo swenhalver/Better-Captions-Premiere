@@ -5,7 +5,7 @@ import { validateStylePatch } from './agent-bridge.ts';
 export const PRESET_STORAGE_KEY = 'better-captions-style-presets-v1';
 export const PRESET_LIMIT = 200;
 export const PRESET_BYTES = 2 * 1024 * 1024;
-export type PresetStyle = Omit<StyleConfig, 'positionX' | 'positionY' | 'maxWords'>;
+export type PresetStyle = Omit<StyleConfig, 'positionX' | 'positionY' | 'maxChars'>;
 export interface PresetLook { style: PresetStyle; animation: AnimationConfig; }
 export interface StylePreset extends PresetLook { id: string; name: string; createdAt: number; updatedAt: number; }
 export interface PresetLibrary { version: 1; revision: number; presets: StylePreset[]; }
@@ -35,7 +35,7 @@ export function validatePresetLook(value: unknown): PresetLook {
 }
 /** Resolve inheritance so a saved look fully replaces all three word appearances. */
 export function capturePresetLook(style: StyleConfig, animation: AnimationConfig): PresetLook {
-  const { positionX: _x, positionY: _y, maxWords: _count, ...look } = style;
+  const { positionX: _x, positionY: _y, maxChars: _count, ...look } = style;
   return validatePresetLook({ style: { ...look, spokenWord: resolveAppearance(style, 'spokenWord'), activeWord: resolveAppearance(style, 'activeWord'), upcomingWord: resolveAppearance(style, 'upcomingWord') }, animation });
 }
 export function validatePresetLibrary(value: unknown): PresetLibrary {

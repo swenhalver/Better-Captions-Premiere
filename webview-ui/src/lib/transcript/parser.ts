@@ -1,6 +1,15 @@
 import type {TranscriptJSON,CaptionItem,CaptionWord} from '../types';
+import { DEFAULT_MAX_CHARS, MAX_CAPTION_CHARS } from '../types.ts';
 let nextCaptionId=0;
-export function parseTranscript(json:TranscriptJSON,maxWords=6,maxChars=56):CaptionItem[]{
+const characters = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+export function captionCharacterCount(text: string): number {
+  return characters ? Array.from(characters.segment(text)).length : Array.from(text.normalize('NFC')).length;
+}
+export function validateCharacterLimit(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_CAPTION_CHARS) throw new Error(`Enter a whole-number character limit from 1 to ${MAX_CAPTION_CHARS}.`);
+  return value;
+}
+export function parseTranscript(json:TranscriptJSON,maxChars=DEFAULT_MAX_CHARS):CaptionItem[]{
   const words:CaptionWord[]=[],sentenceEnds=new Set<CaptionWord>();
   for(const segment of json.segments||[]){
     const segmentWords:CaptionWord[]=[];let prefix='';
@@ -13,21 +22,53 @@ export function parseTranscript(json:TranscriptJSON,maxWords=6,maxChars=56):Capt
         continue;
       }
       if(!Number.isFinite(w.start)||w.start<0||!Number.isFinite(w.duration)||w.duration<=0||!Number.isFinite(w.start+w.duration))continue;
-      const word={text:prefix+text,startTime:w.start,endTime:w.start+w.duration,isActive:false};prefix='';
+      const word={text:prefix+text,startTime:w.start,endTime:w.start+w.duration,isActive:false,...(w.eos ? {endOfSentence:true} : {})};prefix='';
       segmentWords.push(word);if(w.eos)sentenceEnds.add(word);
     }
     words.push(...segmentWords);
   }
   words.sort((a,b)=>a.startTime-b.startTime);
   for(let i=1;i<words.length;i++)words[i-1].endTime=Math.min(words[i-1].endTime,words[i].startTime);
-  return groupCaptionWords(words.filter(w=>w.endTime>w.startTime),maxWords,maxChars,sentenceEnds);
+  return groupCaptionWords(words.filter(w=>w.endTime>w.startTime),maxChars,sentenceEnds);
 }
-export function groupCaptionWords(words:CaptionWord[],maxWords=6,maxChars=56,sentenceEnds=new Set<CaptionWord>()):CaptionItem[]{
-  const out:CaptionItem[]=[];let group:CaptionWord[]=[];
-  function flush(){if(!group.length)return;out.push({id:'caption-'+Date.now().toString(36)+'-'+nextCaptionId++,words:group.map(w=>({...w})),text:group.map(w=>w.text).join(' '),startTime:group[0].startTime,endTime:group[group.length-1].endTime});group=[];}
-  for(const w of words){const last=group[group.length-1];if(last&&(w.startTime-last.endTime>=.5||group.length>=maxWords||group.concat(w).map(x=>x.text).join(' ').length>maxChars||w.endTime-group[0].startTime>5.5))flush();group.push(w);if(sentenceEnds.has(w)||/[.!?]["'”’)]*$/.test(w.text)&&!/^(Mr|Mrs|Ms|Dr|St|vs)\.$/i.test(w.text))flush();}flush();
+export function groupCaptionWords(words:CaptionWord[],maxChars=DEFAULT_MAX_CHARS,sentenceEnds=new Set<CaptionWord>()):CaptionItem[]{
+  validateCharacterLimit(maxChars);
+  const out:CaptionItem[]=[];let group:CaptionWord[]=[],length=0;
+  function flush(){if(!group.length)return;out.push({id:'caption-'+Date.now().toString(36)+'-'+nextCaptionId++,words:group.map(w=>({...w})),text:group.map(w=>w.text).join(' '),startTime:group[0].startTime,endTime:group[group.length-1].endTime});group=[];length=0;}
+  for(const w of words){
+    const last=group[group.length-1],wordLength=captionCharacterCount(w.text);
+    if(last&&(w.startTime-last.endTime>=.5||length+1+wordLength>maxChars||w.endTime-group[0].startTime>5.5))flush();
+    length+=wordLength+(group.length?1:0);group.push(w);
+    if(w.endOfSentence||sentenceEnds.has(w)||/[.!?]["'”’)]*$/.test(w.text)&&!/^(Mr|Mrs|Ms|Dr|St|vs)\.$/i.test(w.text))flush();
+  }flush();
   for(let i=0;i<out.length;i++)out[i].endTime=Math.min(out[i].endTime+.12,out[i+1]?.startTime??Infinity);
   return out;
+}
+/** Regroup edited, unlinked words across old automatic boundaries in either direction. */
+export function regroupCaptions(captions: CaptionItem[], maxChars: number): CaptionItem[] {
+  validateCharacterLimit(maxChars);
+  if (captions.some(c => c.clipNodeId)) throw new Error('Regroup captions before their first apply to Premiere. Linked caption boundaries are preserved.');
+  const result: CaptionItem[] = [], owners = new Map<number, CaptionItem>();
+  let run: CaptionItem[] = [];
+  function flush() {
+    for (const group of groupCaptionWords(run.flatMap(c => c.words), maxChars)) {
+      const sources = group.words.map(w => owners.get(w.startTime)!);
+      const first = sources[0], last = sources[sources.length - 1];
+      result.push({ ...group, id: group.startTime === first.words[0].startTime ? first.id : group.id,
+        endTime: Math.min(group.endTime, last.endTime), speaker: first.speaker,
+        ...(first.position ? { position: { ...first.position } } : {}),
+        timingEstimated: sources.some(c => c.timingEstimated) });
+    }
+    run = [];
+  }
+  for (const caption of captions) {
+    const previous = run[run.length - 1];
+    if (previous && (previous.speaker !== caption.speaker || previous.position?.x !== caption.position?.x || previous.position?.y !== caption.position?.y)) flush();
+    for (const word of caption.words) owners.set(word.startTime, caption);
+    run.push(caption);
+  }
+  flush();
+  return result;
 }
 export function getCaptionAtTime(captions:CaptionItem[],time:number){return captions.find(c=>time>=c.startTime&&time<c.endTime)??null;}
 export function formatTime(seconds:number){const ticks=Math.round(Math.max(0,Number.isFinite(seconds)?seconds:0)*100),min=Math.floor(ticks/6000);return String(min).padStart(2,'0')+':'+((ticks%6000)/100).toFixed(2).padStart(5,'0');}

@@ -1,16 +1,17 @@
 <script lang="ts">
   import WordTimeline from "./WordTimeline.svelte";
   import type { CaptionItem, CaptionWord } from "../lib/types";
-  import { formatTime, groupCaptionWords } from "../lib/transcript/parser";
+  import { formatTime, regroupCaptions, validateCharacterLimit } from "../lib/transcript/parser";
+  import { MAX_CAPTION_CHARS } from '../lib/types';
   import { replaceText, retime, split, validateCaptions } from "../lib/transcript/edit";
   interface Props {
     frameRate: number; selectedWord?: number; onSelectWord?: (index:number)=>void;
-    sequenceId: string; captions: CaptionItem[]; currentTime: number; maxWords: number; selectedId?: string | null;
+    sequenceId: string; captions: CaptionItem[]; currentTime: number; maxChars: number; selectedId?: string | null;
     onSeek: (time: number) => void; onSelect: (id: string) => void;
-    onMaxWordsChange: (maxWords: number) => void; onUpdate: (captions: CaptionItem[]) => void;
+    onMaxCharsChange: (maxChars: number) => void; onUpdate: (captions: CaptionItem[]) => void;
     onShowInPremiere?: (time: number) => void; isDemo?: boolean;
   }
-  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxWords, selectedId = null, onSeek, onSelect, onMaxWordsChange, onUpdate, onShowInPremiere, isDemo = false }: Props = $props();
+  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, onShowInPremiere, isDemo = false }: Props = $props();
   let activeId = $derived(captions.find((caption) => currentTime >= caption.startTime && currentTime < caption.endTime)?.id ?? null);
   let selected = $derived(captions.find((caption) => caption.id === selectedId) ?? captions[0]);
   let query = $state("");
@@ -92,10 +93,15 @@
   function regroup() {
     if (hasLinked) { error = "Regroup captions before their first apply to Premiere. Linked caption boundaries are preserved."; return; }
     try {
-      const next = captions.flatMap((caption) => groupCaptionWords(caption.words, maxWords).map((group, index) => ({ ...group, endTime: Math.min(group.endTime, caption.endTime), id: index === 0 ? caption.id : `${caption.id}-part-${index}-${Date.now().toString(36)}`, ...(index === 0 ? { clipNodeId: caption.clipNodeId, projectItemId: caption.projectItemId, mediaPath: caption.mediaPath } : {}), position: caption.position, timingEstimated: caption.timingEstimated, speaker: caption.speaker })));
-      commit(next, "Grouping applied to the edited words. Existing caption boundaries remain split points.");
+      const next = regroupCaptions(captions, maxChars);
+      commit(next, "Character limit applied. Short captions join where timing, sentences and placement allow.");
       if (next[0]) onSelect(next[0].id);
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
+  }
+  function changeCharacterLimit(event: Event) {
+    const input = event.target as HTMLInputElement;
+    try { onMaxCharsChange(validateCharacterLimit(input.valueAsNumber)); error = ''; }
+    catch (problem) { input.value = String(maxChars); error = problem instanceof Error ? problem.message : String(problem); }
   }
   function choose(caption: CaptionItem) { onSelectWord(0); onSelect(caption.id); onSeek(caption.startTime); error = ""; notice = ""; }
   function undo() {
@@ -113,10 +119,11 @@
   <div class="transcript-editor__heading"><label class="transcript-editor__search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.5 12.5 4 4"/></svg><input type="search" aria-label="Search captions" placeholder="Search captions" bind:value={query} /></label><button class="caption-button" onclick={undo} disabled={!canUndo} title="Restore the previous transcript edit">Undo edit</button></div>
   {#if captions.length}
     <details class="transcript-editor__grouping">
-      <summary>Sentence grouping <span>Up to {maxWords} words</span></summary>
+      <summary>Sentence grouping <span>{maxChars} characters</span></summary>
       <div class="transcript-editor__grouping-body">
-        <div class="transcript-editor__grouping-controls"><label class="caption-field"><span>Words per caption</span><input type="number" min="1" max="20" step="1" value={maxWords} onchange={(event) => onMaxWordsChange(Math.max(1, Math.min(20, Number((event.target as HTMLInputElement).value))))} /></label><button class="caption-button" onclick={regroup} disabled={hasLinked} title={hasLinked ? "Regroup before the first apply to Premiere" : "Apply the word limit to the edited transcript"}>Regroup</button></div>
-        <p class="caption-help">{hasLinked ? "Linked caption boundaries are preserved. Split individual captions below." : "Respects punctuation, pauses and line length. Use Regroup to apply a new limit."}</p>
+        <div class="transcript-editor__grouping-controls"><label class="caption-field"><span>Characters per caption</span><input type="number" min="1" max={MAX_CAPTION_CHARS} step="1" value={maxChars} onchange={changeCharacterLimit} /></label><button class="caption-button" onclick={regroup} disabled={hasLinked} title={hasLinked ? "Regroup before the first apply to Premiere" : "Apply the character limit to the edited transcript"}>Regroup</button></div>
+        <p class="caption-help">Includes spaces and punctuation. A word longer than the limit stays whole.</p>
+        <p class="caption-help">{hasLinked ? "Linked caption boundaries are preserved. Split individual captions below." : "Regroup splits or joins captions, respecting sentences, pauses and placement."}</p>
       </div>
     </details>
     <div class="transcript-editor__workspace">
