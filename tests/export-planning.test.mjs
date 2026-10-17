@@ -87,6 +87,26 @@ test('text overflow is reported instead of growing or shrinking a previously siz
   const [rendered]=await exporter.exportFrames([phrase],{fontFamily:'Arial',fontWeight:700,fontSize:64,maxWidth:.8,positionX:.5,positionY:.8,activeWord:{},spokenWord:{}},{},720,1280,1,1,{begin:async()=>'/output/overflow',write:async()=>{},finish:async()=>'/output/overflow/caption.mov'});
   assert.equal(rendered.layoutOverflow,true);assert.equal(rendered.renderBounds.height,512);
 });
+test('one native container measures every displayed sentence even when its Motion size stays constant', async () => {
+  const measured = [], context = { save(){}, restore(){}, scale(){} };
+  const exporter = loadTypeScript(path.join(root, 'webview-ui/src/lib/export/exporter.ts'), { '../canvas/engine': { CaptionRenderer: class {
+    resize() {}
+    renderFrame(caption, time, _style, _animation, area) {
+      const segment = caption.renderSegments.find(group => time >= group.startTime && time < group.endTime);
+      if (area.measureOnly) measured.push(segment.id);
+      return { width:100, height:segment.id === 'short' ? 100 : 900 };
+    }
+  } } }, { document: { createElement:()=>({width:0,height:0,getContext:()=>context,toDataURL:()=> 'data:image/png;base64,AAAA'}) } });
+  const phrase = { ...cue('container', 0, 2), renderBounds:{x:72,y:832,width:576,height:512,frameWidth:720,frameHeight:1280}, renderSegments: [
+    { id:'short',text:'short',startTime:0,endTime:1,words:[] }, {id:'tall',text:'a tall sentence',startTime:1,endTime:2,words:[]},
+  ] };
+  let completed = 0;
+  const [rendered] = await exporter.exportFrames([phrase], {fontFamily:'Arial',fontWeight:700,fontSize:64,maxWidth:.8,positionX:.5,positionY:.8,activeWord:{},spokenWord:{}}, {},720,1280,2,2,
+    {begin:async()=>'/output/container',write:async()=>{},finish:async()=>{completed++;return '/output/container/caption.mov';}});
+  assert.deepEqual(measured,['short','tall']); assert.equal(rendered.layoutOverflow,true);
+  assert.equal(completed,1,'all sentence groups render to one physical movie');
+  assert.equal(rendered.renderSegments.length,2); assert.equal(rendered.renderBounds.height,512);
+});
 test('CEP save uses its own sequence directory when a different sequence becomes active', async () => {
   let active = 'a'; const saved = [], contexts = { a: { id: 'a', projectPath: '/project/a.prproj', width: 1920, height: 1080, fps: 24 }, b: { id: 'b', projectPath: '/project/b.prproj', width: 1920, height: 1080, fps: 24 } };
   const runtime = { directory: context => '/data/' + context.id, save: (dir, data) => saved.push({ dir, data }) };

@@ -3,13 +3,13 @@ import { createHostAPI } from '../webview-ui/src/cep-api';
 /** Local-only transport for the single visible UXP Better Captions panel. */
 export const SERVICE_ACTIONS = [
   'getFonts', 'beginCaption', 'saveCaptionFrames', 'finishCaption',
-  'preflightCaptionClips', 'applyCaptionClips', 'readTimeline', 'showInPremiere',
+  'preflightCaptionClips', 'prepareCaptionTrack', 'applyCaptionClips', 'readTimeline', 'showInPremiere',
   'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'patchCaptionKeyValues',
 ] as const;
 const READ_ACTIONS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor']);
 const ARG_COUNTS: Record<string, number[]> = {
   getFonts: [0], beginCaption: [1], saveCaptionFrames: [3], finishCaption: [3, 4],
-  preflightCaptionClips: [2], applyCaptionClips: [2, 3], readTimeline: [1], showInPremiere: [1],
+  preflightCaptionClips: [2], prepareCaptionTrack: [2, 3], applyCaptionClips: [2, 3], readTimeline: [1], showInPremiere: [1],
   selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1], readCaptionAreaDescriptor: [1], patchCaptionKeyValues: [2],
 };
 interface Request { version: number; id: string; createdAt: number; expiresAt?: number; sequenceId: string; projectPath: string; action: string; args: any[]; }
@@ -46,6 +46,7 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
     case 'saveCaptionFrames': return api.saveCaptionFrames(a, b, c, id);
     case 'finishCaption': return api.finishCaption(a, b, c, id, d);
     case 'preflightCaptionClips': return api.preflightCaptionClips(a, b, id);
+    case 'prepareCaptionTrack': return api.prepareCaptionTrack(a, b, id, c);
     case 'applyCaptionClips': return api.applyCaptionClips(a, b, id, c);
     case 'readTimeline': return api.readTimeline(a, id);
     case 'showInPremiere': return api.showInPremiere(a, id);

@@ -1,6 +1,6 @@
 import type {SessionState,StyleConfig,CaptionItem,AnimationConfig} from './types';
 import {validateCaptions} from './transcript/edit.ts';
-import {validateCharacterLimit} from './transcript/parser.ts';
+import {refreshCaptionGroups,validateCharacterLimit} from './transcript/parser.ts';
 import type {TextAreaEdit} from './text-area';
 
 export interface AgentHandler {
@@ -68,10 +68,11 @@ export function validateStylePatch(value:unknown):Partial<StyleConfig>{
 export function validateCaptionPatch(value:unknown,current:CaptionItem[]):CaptionItem[]{
   if(!Array.isArray(value)||value.length>10000)throw new Error('Expected at most 10000 captions.');
   const existing=new Map(current.map(c=>[c.id,c]));
+  let totalWords=0;
   const result=value.map(item=>{
     object(item);if(typeof item.id!=='string'||!/^[\w-]{1,160}$/.test(item.id))throw new Error('Invalid caption identity.');
-    if(typeof item.text!=='string'||item.text.length>10000)throw new Error('Invalid caption text.');
-    if(!Array.isArray(item.words)||item.words.length>300)throw new Error('Invalid word list.');
+    if(typeof item.text!=='string'||item.text.length>250000)throw new Error('Invalid caption text.');
+    if(!Array.isArray(item.words)||(totalWords+=item.words.length)>50000)throw new Error('Expected at most 50000 words across the caption transcript.');
     const original=existing.get(item.id),next={...original,id:item.id,text:item.text,startTime:item.startTime,endTime:item.endTime,words:item.words.map(w=>{
       object(w);if(typeof w.text!=='string'||w.text.length>500)throw new Error('Invalid word text.');
       const endOfSentence=w.endOfSentence;
@@ -80,10 +81,11 @@ export function validateCaptionPatch(value:unknown,current:CaptionItem[]):Captio
     })} as CaptionItem;
     if(item.position!==undefined){object(item.position);number(item.position.x,0,1);number(item.position.y,0,1);next.position={x:item.position.x as number,y:item.position.y as number};}
     next.text=next.words.map(word=>word.text).join(' ');
+    if(next.text.length>250000)throw new Error('Caption text exceeds 250000 characters.');
     return next;
   });
   for(const c of current)if(c.clipNodeId&&!result.some(n=>n.id===c.id))throw new Error('Removing a linked timeline caption requires a separate timeline edit.');
-  validateCaptions(result);return result;
+  validateCaptions(result);return refreshCaptionGroups(result);
 }
 export function startAgentBridge(handler:AgentHandler):()=>void {
   const win=window as any;if(!win.__adobe_cep__||typeof win.require!=='function')return ()=>{};

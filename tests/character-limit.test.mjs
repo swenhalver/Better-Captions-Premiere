@@ -60,10 +60,13 @@ test('regroup preserves sentence flags, pauses, speaker and placement boundaries
   assert.equal(groupCaptionWords(pause, 100).length, 2); validateCaptions(result);
 });
 
-test('linked captions cannot be regrouped or lose native keyframe/media identities', () => {
+test('linked captions regroup displayed sentences while retaining native keyframe/media identities', () => {
   const original = [cue('linked', words('keep these words'), { clipNodeId: 'clip', projectItemId: 'item', mediaPath: '/caption.mov', renderBounds: { width: 400 }, motionProfile: { signature: 'keys' } })];
   const before = structuredClone(original);
-  assert.throws(() => regroupCaptions(original, 5), /Linked caption boundaries/);
+  const result = regroupCaptions(original, 5);
+  assert.deepEqual(result[0].renderSegments.map(group => group.text), ['keep', 'these', 'words']);
+  const { renderSegments, groupingMaxChars, ...container } = result[0];
+  assert.deepEqual(container, before[0]); assert.equal(groupingMaxChars, 5);
   assert.deepEqual(original, before);
 });
 

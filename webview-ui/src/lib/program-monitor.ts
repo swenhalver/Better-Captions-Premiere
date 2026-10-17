@@ -1,9 +1,10 @@
 import type { CaptionItem, MotionProfile } from './types';
 
-export type CaptionLink = Pick<CaptionItem, 'id' | 'clipNodeId' | 'projectItemId' | 'mediaPath'>;
+export type CaptionLink = Pick<CaptionItem, 'id' | 'clipNodeId' | 'projectItemId' | 'mediaPath' | 'captionBundle'>;
 export function captionLinks(captions: CaptionItem[]): CaptionLink[] {
   return captions.filter(caption => caption.clipNodeId).map(caption => ({
     id: caption.id, clipNodeId: caption.clipNodeId, projectItemId: caption.projectItemId, mediaPath: caption.mediaPath,
+    ...(caption.captionBundle === true ? { captionBundle: true } : {}),
   }));
 }
 export interface CaptionGeometryCue {
@@ -13,7 +14,7 @@ export interface CaptionGeometryCue {
 /** Accept read-only control updates only for the exact still-selected link. */
 export function confirmCaptionGeometry(captured: CaptionItem, current: CaptionItem, cue: CaptionGeometryCue | undefined) {
   const link = (caption: CaptionItem) => JSON.stringify([caption.id, caption.clipNodeId, caption.projectItemId,
-    caption.mediaPath, caption.startTime, caption.endTime, caption.renderBounds]);
+    caption.mediaPath, caption.startTime, caption.endTime, caption.renderBounds, caption.captionBundle]);
   if (link(captured) !== link(current)) throw new Error('The caption link changed while its controls were being read. Refresh the selected caption.');
   if (!cue || cue.id !== captured.id || cue.clipNodeId !== captured.clipNodeId || cue.projectItemId !== captured.projectItemId || cue.path !== captured.mediaPath) throw new Error('Premiere did not confirm the selected caption controls.');
   const valid = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 4096;
@@ -48,7 +49,7 @@ interface SelectionOptions {
 }
 const selectionIdentity = (context: CaptionSelectionContext) => JSON.stringify([
   context.sequenceId, context.revision,
-  context.captions.map(caption => [caption.id, caption.clipNodeId, caption.projectItemId, caption.mediaPath]),
+  context.captions.map(caption => [caption.id, caption.clipNodeId, caption.projectItemId, caption.mediaPath, caption.captionBundle]),
 ]);
 /** Follow native selection without selecting clips or seeking Premiere. */
 export function createCaptionSelectionSync(options: SelectionOptions) {

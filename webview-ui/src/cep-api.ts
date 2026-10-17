@@ -62,7 +62,7 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
   }
   function timelinePayload(context: CapturedContext, captions: CaptionItem[], track: number, previous: CaptionItem[]) {
     return { sequenceId: context.id, projectPath: context.projectPath, track, width: context.width, height: context.height, fps: context.fps,
-      cues: captions.map(c => ({ id: c.id, text: c.text, startFrame: Math.round(c.startTime * context.fps), endFrame: Math.round(c.endTime * context.fps), path: c.mediaPath, previousPath: previous.find(old => old.id === c.id)?.mediaPath ?? c.mediaPath, clipNodeId: c.clipNodeId, projectItemId: c.projectItemId,renderBounds:c.renderBounds,previousRenderBounds:previous.find(old=>old.id===c.id)?.renderBounds,motionProfile:c.motionProfile })) };
+      cues: captions.map(c => ({ id: c.id, text: c.text, startFrame: Math.round(c.startTime * context.fps), endFrame: Math.round(c.endTime * context.fps), path: c.mediaPath, previousPath: previous.find(old => old.id === c.id)?.mediaPath ?? c.mediaPath, clipNodeId: c.clipNodeId, projectItemId: c.projectItemId,captionBundle:c.captionBundle,renderBounds:c.renderBounds,previousRenderBounds:previous.find(old=>old.id===c.id)?.renderBounds,motionProfile:c.motionProfile })) };
   }
   const api = {
     async loadStylePresets(): Promise<PresetLibrary> {
@@ -85,11 +85,11 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     },
     async readCaptionAreaDescriptor(caption:CaptionItem,sequenceId=currentId){
       const context=await checkSequence(sequenceId);
-      return readJob('readCaptionAreaDescriptor',{sequenceId:context.id,projectPath:context.projectPath,cues:[{id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,renderBounds:caption.renderBounds}]});
+      return readJob('readCaptionAreaDescriptor',{sequenceId:context.id,projectPath:context.projectPath,cues:[{id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,captionBundle:caption.captionBundle,renderBounds:caption.renderBounds}]});
     },
     async patchCaptionKeyValues(caption:CaptionItem,patch:unknown,sequenceId=currentId){
       const context=await checkSequence(sequenceId);
-      const file=jobFile(context,'key-value-job',{sequenceId:context.id,projectPath:context.projectPath,cues:[{id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,renderBounds:caption.renderBounds}],patch});
+      const file=jobFile(context,'key-value-job',{sequenceId:context.id,projectPath:context.projectPath,cues:[{id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,captionBundle:caption.captionBundle,renderBounds:caption.renderBounds}],patch});
       const result=await host('patchCaptionKeyValues',[file]);
       try{runtime.fs.unlinkSync(file);}catch{} // Failed mutations retain their recovery job.
       return result;
@@ -152,6 +152,23 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
       const context = await checkSequence(sequenceId);
       return host('preflight', [jobFile(context, 'preflight', timelinePayload(context, captions, track, captions))]);
     },
+    async prepareCaptionTrack(captions: CaptionItem[], track: number, sequenceId: string, previous: CaptionItem[] = captions) {
+      const context = await checkSequence(sequenceId);
+      captions.forEach(caption => generatedMedia(context, caption.mediaPath));
+      previous.filter(caption => caption.clipNodeId).forEach(caption => generatedMedia(context, caption.mediaPath));
+      const firstNew = track === -1 ? captions.find(caption => !caption.clipNodeId) : undefined;
+      if (firstNew) {
+        const probe = JSON.parse(await runtime.run(runtime.platform.resolveTool('ffprobe'), ['-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'json', firstNew.mediaPath], { timeout: 15000 }));
+        if (!Array.isArray(probe.streams) || probe.streams.length !== 1 || probe.streams[0]?.codec_type !== 'video') throw new Error('Creating a caption track requires a generated video-only caption movie. No timeline changes were made.');
+        await checkSequence(sequenceId);
+      }
+      const result = await host('prepareCaptionTrack', [jobFile(context, 'caption-track-job', timelinePayload(context, captions, track, previous))]);
+      if (result.seed) {
+        if (!firstNew || result.seed.id !== firstNew.id || result.seed.path !== firstNew.mediaPath) throw new Error('Premiere returned a different temporary caption source. No track was created.');
+        result.seed.videoOnly = true;
+      }
+      return result;
+    },
     async applyCaptionClips(captions: CaptionItem[], track: number, sequenceId: string, previous: CaptionItem[] = captions) {
       const context = await checkSequence(sequenceId);
       captions.forEach(caption => generatedMedia(context, caption.mediaPath));
@@ -160,15 +177,15 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     },
     async readTimeline(captions: CaptionItem[], sequenceId = currentId) {
       const context = await checkSequence(sequenceId);
-      return readJob('readTimeline', { sequenceId: context.id, projectPath: context.projectPath, cues: captions.map(c => ({ id: c.id, clipNodeId: c.clipNodeId })) });
+      return readJob('readTimeline', { sequenceId: context.id, projectPath: context.projectPath, cues: captions.map(c => ({ id: c.id, clipNodeId: c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,captionBundle:c.captionBundle })) });
     },
     async readCaptionMotion(captions:CaptionItem[],sequenceId=currentId,options?:{includeDiagnostics?:boolean}){
       const context=await checkSequence(sequenceId);
-      return readJob('readCaptionMotion',{sequenceId:context.id,projectPath:context.projectPath,...(options?.includeDiagnostics===true?{includeDiagnostics:true}:{}),cues:captions.map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,startTime:c.startTime,endTime:c.endTime,renderBounds:c.renderBounds}))});
+      return readJob('readCaptionMotion',{sequenceId:context.id,projectPath:context.projectPath,...(options?.includeDiagnostics===true?{includeDiagnostics:true}:{}),cues:captions.map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,captionBundle:c.captionBundle,startTime:c.startTime,endTime:c.endTime,renderBounds:c.renderBounds}))});
     },
     async readCaptionGeometry(captions:CaptionItem[],sequenceId=currentId){
       const context=await checkSequence(sequenceId);
-      return readJob('readCaptionGeometry',{sequenceId:context.id,projectPath:context.projectPath,cues:captions.map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,startTime:c.startTime,endTime:c.endTime}))});
+      return readJob('readCaptionGeometry',{sequenceId:context.id,projectPath:context.projectPath,cues:captions.map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,captionBundle:c.captionBundle,startTime:c.startTime,endTime:c.endTime}))});
     },
     async selectCaptionClip(caption:CaptionItem,sequenceId=currentId){
       const context=await checkSequence(sequenceId);
@@ -176,7 +193,7 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     },
     async readCaptionSelection(captions:CaptionItem[],sequenceId=currentId){
       const context=await checkSequence(sequenceId);
-      return readJob('readCaptionSelection',{sequenceId:context.id,projectPath:context.projectPath,cues:captions.filter(c=>c.clipNodeId).map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath}))});
+      return readJob('readCaptionSelection',{sequenceId:context.id,projectPath:context.projectPath,cues:captions.filter(c=>c.clipNodeId).map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,captionBundle:c.captionBundle}))});
     },
     async getColorScheme() { return { theme: 'darkest', colors: {} }; },
   };

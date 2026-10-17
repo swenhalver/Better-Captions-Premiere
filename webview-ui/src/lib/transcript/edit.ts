@@ -51,6 +51,6 @@ export function retime(c:CaptionItem,start:number,end:number):CaptionItem{
 }
 export function split(c:CaptionItem,index:number):CaptionItem[]{
   if(!Number.isInteger(index)||index<1||index>=c.words.length)throw new Error('Select an interior word to split.');
-  const make=(words:CaptionWord[],id:string)=>({...c,id,clipNodeId:undefined,projectItemId:undefined,mediaPath:undefined,position:c.position?{...c.position}:undefined,words:words.map(w=>({...w})),text:words.map(w=>w.text).join(' '),startTime:words[0].startTime,endTime:words[words.length-1].endTime});
+  const make=(words:CaptionWord[],id:string)=>({...c,id,manualSplit:true,clipNodeId:undefined,projectItemId:undefined,mediaPath:undefined,position:c.position?{...c.position}:undefined,words:words.map(w=>({...w})),text:words.map(w=>w.text).join(' '),startTime:words[0].startTime,endTime:words[words.length-1].endTime});
   return [make(c.words.slice(0,index),c.id),make(c.words.slice(index),c.id+'-'+Date.now().toString(36)+'-'+nextSplitId++)];
 }

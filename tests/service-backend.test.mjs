@@ -39,6 +39,17 @@ test('service inserts captured sequence identity and preserves previous-caption 
   await service.dispatchServiceRequest(api, data);
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[[{ id: 'cue' }], 2, 'seq-a', [{ id: 'old' }]]]);
 });
+test('track preparation uses the captured identity and automatic sentinel without accepting another sequence argument', async () => {
+  const calls=[],api={getActiveSequenceInfo:info,prepareCaptionTrack:(...args)=>calls.push(args)},captions=[{id:'bundle'}],previous=[{id:'old'}];
+  const data=request('prepareCaptionTrack',[captions,-1,previous]);
+  assert.equal(service.validateServiceRequest(data,data.id+'.json').action,'prepareCaptionTrack');
+  await service.dispatchServiceRequest(api,data);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)),[[captions,-1,'seq-a',previous]]);
+  const injected=request('prepareCaptionTrack',[captions,-1,previous,'other-sequence']);
+  assert.throws(()=>service.validateServiceRequest(injected,injected.id+'.json'),/arguments/);
+  const stale={...data,projectPath:'/different.prproj'};
+  await assert.rejects(service.dispatchServiceRequest(api,stale),/changed/);assert.equal(calls.length,1);
+});
 test('text-box rendering and selection use captured identity without accepting a caller-supplied sequence', async () => {
   const calls = [], caption = { id: 'cue', clipNodeId: 'node', projectItemId: 'item', mediaPath: '/generated/caption.mov' };
   const bounds = { x: 100, y: 500, width: 400, height: 300, frameWidth: 720, frameHeight: 1280 };

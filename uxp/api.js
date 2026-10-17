@@ -176,20 +176,35 @@ function createHostAPI(options = {}) {
     async saveCaptionFrames(folder, frames, start, id) { return backend('saveCaptionFrames', [folder, frames, start], id); },
     async finishCaption(folder, fps, count, id, bounds) { return backend('finishCaption', bounds ? [folder, fps, count, bounds] : [folder, fps, count], id); },
     async preflightCaptionClips(captions, track, id) { return backend('preflightCaptionClips', [captions, track], id); },
-    async applyCaptionClips(captions, track, id, previous = captions) { return backend('applyCaptionClips', [captions, track, previous], id); },
+    async applyCaptionClips(captions, track, id, previous = captions) {
+      let destination = track;
+      if (track === -1 && captions.some(caption => !caption.clipNodeId)) {
+        const prepared = await backend('prepareCaptionTrack', [captions, track, previous], id);
+        if (!record(prepared) || prepared.ok !== true || !record(prepared.destination)) throw new Error('Premiere could not plan an automatic caption track.');
+        const context = captured(id);
+        if (prepared.sequenceId !== context.id || prepared.projectPath !== context.projectPath) throw new Error('The caption-track plan belongs to another project or sequence.');
+        if (prepared.destination.mode === 'create') {
+          const { project, sequence } = await sequenceContext(id);
+          destination = await require('./caption-track.js').createCaptionTrack(ppro, project, sequence, prepared);
+        } else if (prepared.destination.mode === 'reuse' && Number.isInteger(prepared.destination.trackIndex) && prepared.destination.trackIndex >= 0) {
+          destination = prepared.destination.trackIndex;
+        } else throw new Error('Premiere did not confirm a safe automatic caption track.');
+      }
+      return backend('applyCaptionClips', [captions, destination, previous], id);
+    },
     async readTimeline(captions, id = currentId) { return backend('readTimeline', [captions], id); },
     async selectCaptionClip(caption, id = currentId) { return backend('selectCaptionClip', [caption], id); },
     async readCaptionMotion(captions, id = currentId, options) { return backend('readCaptionMotion', options?.includeDiagnostics === true ? [captions, { includeDiagnostics: true }] : [captions], id); },
     async readCaptionGeometry(captions, id = currentId) { return backend('readCaptionGeometry', [captions], id); },
     async readCaptionSelection(captions, id = currentId) { return backend('readCaptionSelection', [captions], id); },
     async readCaptionArea(caption,id=currentId,frame=0) {
-      const link={id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,renderBounds:caption.renderBounds?JSON.parse(JSON.stringify(caption.renderBounds)):undefined};
+      const link={id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,...(caption.captionBundle===true?{captionBundle:true}:{}),renderBounds:caption.renderBounds?JSON.parse(JSON.stringify(caption.renderBounds)):undefined};
       const revalidate=()=>backend('readCaptionAreaDescriptor',[link],id);
       const descriptor=await revalidate(), {sequence}=await sequenceContext(id);
       return require('./text-area.js').readArea(ppro,sequence,descriptor,frame,revalidate);
     },
     async editCaptionArea(caption,id=currentId,request) {
-      const link={id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,renderBounds:caption.renderBounds?JSON.parse(JSON.stringify(caption.renderBounds)):undefined};
+      const link={id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,...(caption.captionBundle===true?{captionBundle:true}:{}),renderBounds:caption.renderBounds?JSON.parse(JSON.stringify(caption.renderBounds)):undefined};
       const revalidate=()=>backend('readCaptionAreaDescriptor',[link],id);
       const descriptor=await revalidate(), {project,sequence}=await sequenceContext(id);
       // Call the internal backend directly while this native lane is occupied.

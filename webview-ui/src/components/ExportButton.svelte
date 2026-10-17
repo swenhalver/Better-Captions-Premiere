@@ -2,6 +2,7 @@
   import type { CaptionItem, StyleConfig, AnimationConfig, SequenceInfo,MotionProfile } from '../lib/types';
   import { exportFrames, planCaptionFrames,motionScaleAt, type ExportProgress } from '../lib/export/exporter';
   import { refreshProgramMonitor } from '../lib/export/program-monitor';
+  import { bundleCaptionContainers } from '../lib/export/containers';
 
   interface Props {
     captions: CaptionItem[]; style: StyleConfig; animation: AnimationConfig;
@@ -15,12 +16,15 @@
   let { captions, style, animation, frameWidth, frameHeight, frameRate, duration, sequenceName, sequenceId, tracks = [], hostApi, onUpdated, onApplied, currentTime, selectedId, onBusy, disabled = false }: Props = $props();
   const hasLinkedCaptions = $derived(captions.some(caption => !!caption.clipNodeId));
   let isExporting = $state(false), selectedTrack = $state(-1);
+  let trackSequenceId = $state<string | null>(null);
   let progress = $state<ExportProgress | null>(null), error = $state<string | null>(null), status = $state<string | null>(null);
   let controller: AbortController | null = null;
   $effect(() => {
-    if (!tracks.some(track => track.index === selectedTrack && !track.locked)) {
-      const empty = tracks.filter(track => !track.locked && track.clips === 0);
-      selectedTrack = empty.at(-1)?.index ?? tracks.find(track => !track.locked)?.index ?? -1;
+    if (trackSequenceId !== sequenceId) {
+      trackSequenceId = sequenceId;
+      selectedTrack = -1;
+    } else if (selectedTrack >= 0 && !tracks.some(track => track.index === selectedTrack && !track.locked)) {
+      selectedTrack = -1;
     }
   });
   const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
@@ -45,11 +49,12 @@
     if (disabled) throw new Error('Wait for the current transcript or timeline operation to finish.');
     if (!captions.length) throw new Error('Transcribe or load captions first.');
     if (hostApi.isDemo) throw new Error('Open the Better Captions panel in Premiere to generate timeline clips.');
-    if (selectedTrack < 0) throw new Error('Add an unlocked video track in Premiere and refresh the panel.');
-    isExporting = true; onBusy?.(true); error = null; progress = null; controller = new AbortController();
-    const source = clone(captions), exportStyle = clone(style), exportAnimation = clone(animation);
+    if (!Number.isInteger(selectedTrack) || selectedTrack < -1) throw new Error('Choose an automatic or unlocked caption track.');
+    const exportStyle = clone(style), exportAnimation = clone(animation);
     const id = sequenceId, track = selectedTrack, key = sourceKey(), notify = onUpdated;
+    isExporting = true; onBusy?.(true); error = null; progress = null; controller = new AbortController();
     try {
+      const source = clone(bundleCaptionContainers(captions, exportStyle.maxChars));
       const requested=options.captionIds?new Set(options.captionIds):null;
       if(requested&&(!requested.size||[...requested].some(captionId=>!source.some(caption=>caption.id===captionId))))throw new Error('Choose an existing caption to update.');
       const aligned = planCaptionFrames(source, frameRate, duration).map(cue => cue.caption).filter(caption=>!requested||requested.has(caption.id));
@@ -122,15 +127,15 @@
   {#if !captions.length || captions.some(caption => !caption.clipNodeId)}
   <label class="caption-field caption-export__track">
     Caption track
-    <select bind:value={selectedTrack} disabled={disabled || isExporting || hostApi.isDemo} title="Place new captions on a video track above the footage.">
-      {#if tracks.length === 0}<option value={-1}>{hostApi.isDemo ? 'Available in Premiere' : 'Refresh to load Premiere tracks'}</option>{/if}
+    <select bind:value={selectedTrack} disabled={disabled || isExporting || hostApi.isDemo} title="Automatic placement creates a track above the footage when needed.">
+      <option value={-1}>{hostApi.isDemo ? 'Automatic · available in Premiere' : 'Automatic · above footage'}</option>
       {#each tracks as track}
         <option value={track.index} disabled={track.locked}>V{track.index + 1} · {track.name}{track.locked ? ' · locked' : track.clips === 0 ? ' · empty' : ` · ${track.clips} clips`}</option>
       {/each}
     </select>
   </label>
   {/if}
-  <button class="caption-button caption-button--primary caption-export__apply" onclick={handleApply} disabled={disabled || isExporting || !captions.length || hostApi.isDemo || selectedTrack < 0}>
+  <button class="caption-button caption-button--primary caption-export__apply" onclick={handleApply} disabled={disabled || isExporting || !captions.length || hostApi.isDemo || selectedTrack < -1}>
     {isExporting ? `${status ?? 'Generating…'}${progress ? ` ${progress.percent}%` : ''}` : hasLinkedCaptions ? 'Update Program Monitor' : 'Apply to Program Monitor'}
   </button>
   {#if isExporting && progress}

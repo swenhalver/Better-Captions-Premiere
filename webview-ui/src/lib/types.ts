@@ -47,6 +47,20 @@ export interface CaptionItem {
   renderBounds?: RenderBounds;
   motionProfile?: MotionProfile;
   layoutOverflow?: boolean;
+  /** Explicit regrouping changes displayed phrases without replacing native clips. */
+  groupingMaxChars?: number;
+  renderSegments?: CaptionSegment[];
+  /** Explicit transcript splits stay separate on subsequent applies. */
+  manualSplit?: boolean;
+  captionBundle?: boolean;
+}
+
+export interface CaptionSegment {
+  id: string;
+  words: CaptionWord[];
+  text: string;
+  startTime: number;
+  endTime: number;
 }
 
 export interface CaptionWord {

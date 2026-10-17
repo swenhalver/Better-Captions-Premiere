@@ -64,6 +64,149 @@ function worldPoint(logical,sourceBounds,motion){
 }
 function closePoint(actual,expected){assert.equal(actual.length,expected.length);for(let i=0;i<actual.length;i++)assert.ok(Math.abs(actual[i]-expected[i])<1e-6,`${actual} differs from ${expected}`);}
 
+function automaticPayload(f,cues){const file=f.payload(cues),data=JSON.parse(f.files.get(file));data.track=-1;f.files.set(file,JSON.stringify(data));return file;}
+function addVideoTrack(f,options={}){
+ const clips=collection(),track={name:'Video '+(f.sequence.videoTracks.length+1),clips,isLocked:()=>false,
+  overwriteClip(item,seconds){f.overwrites.push(seconds);return f.addClip(item,seconds,seconds+item.outSeconds,clips);},...options};
+ f.sequence.videoTracks.push(track);return track;
+}
+test('automatic preflight plans one new top track without importing media or changing the sequence',()=>{
+ const f=hostFixture(),footage=f.addClip(f.item('/footage.mov'),0,10),file=automaticPayload(f,[f.cue('bundle',6,186)]);
+ f.files.delete('/render/bundle.mov');
+ const result=JSON.parse(f.host.preflight(file));
+ assert.equal(result.ok,true);assert.deepEqual(result.destination,{mode:'create',trackIndex:1,expectedVideoTrackCount:1,newCaptionCount:1});
+ assert.equal(f.sequence.videoTracks.length,1);assert.deepEqual(f.clips,[footage]);assert.equal(f.imports.length,0);assert.equal(f.project.rootItem.children.length,0);assert.equal(f.overwrites.length,0);
+});
+test('automatic Apply reuses only an unlocked, enabled, empty top track above occupied footage',()=>{
+ const f=hostFixture(),footage=f.addClip(f.item('/footage.mov'),0,10),top=addVideoTrack(f),cue=f.cue('bundle',6,186);
+ const result=JSON.parse(f.host.apply(automaticPayload(f,[cue])));
+ assert.equal(result.ok,true);assert.equal(result.cues.length,1);assert.equal(result.cues[0].track,1);assert.equal(top.clips.length,1);
+ assert.equal(top.clips[0].start.ticks,String(6*TPF));assert.equal(top.clips[0].end.ticks,String(186*TPF));assert.deepEqual(f.clips,[footage]);assert.equal(f.sequence.videoTracks.length,2);
+});
+test('automatic destination never chooses a lower empty track or unlocks or unmutes the top track',()=>{
+ for(const state of ['occupied','locked','muted']){
+  const f=hostFixture(),top=addVideoTrack(f,{isLocked:()=>state==='locked',isMuted:()=>state==='muted'});
+  if(state==='occupied')f.addClip(f.item('/upper-footage.mov'),0,1,top.clips);
+  const result=JSON.parse(f.host.preflight(automaticPayload(f,[f.cue('bundle')])));
+  assert.equal(result.ok,true);assert.equal(result.destination.mode,'create');assert.equal(result.destination.trackIndex,2);assert.equal(f.sequence.videoTracks.length,2);
+  assert.equal(top.isLocked(),state==='locked');assert.equal(top.isMuted(),state==='muted');assert.equal(f.imports.length,0);
+ }
+});
+test('track preparation imports one exact seed idempotently and final Apply reuses the new empty track',()=>{
+ const f=hostFixture(),footage=f.addClip(f.item('/footage.mov'),0,10),file=automaticPayload(f,[f.cue('bundle',6,186)]);
+ const first=JSON.parse(f.host.prepareCaptionTrack(file)),second=JSON.parse(f.host.prepareCaptionTrack(file));
+ assert.equal(first.ok,true);assert.deepEqual(second,first);assert.equal(first.seed.path,'/render/bundle.mov');assert.equal(first.seed.startTicks,String(6*TPF));assert.equal(first.seed.endTicks,String(186*TPF));assert.equal(first.seed.durationTicks,String(180*TPF));
+ assert.equal(f.imports.length,1);assert.equal(f.overwrites.length,0);assert.equal(f.sequence.videoTracks.length,1);assert.deepEqual(f.clips,[footage]);
+ const top=addVideoTrack(f),result=JSON.parse(f.host.apply(file));
+ assert.equal(result.ok,true);assert.equal(result.cues.length,1);assert.equal(result.cues[0].projectItemId,first.seed.projectItemId);assert.equal(result.cues[0].track,1);assert.equal(top.clips.length,1);assert.equal(f.imports.length,1);assert.equal(f.sequence.videoTracks.length,2);
+});
+test('CEP Apply refuses an uncreated automatic destination before imports or timeline edits',()=>{
+ const f=hostFixture(),footage=f.addClip(f.item('/footage.mov'),0,10),result=JSON.parse(f.host.apply(automaticPayload(f,[f.cue('bundle')])));
+ assert.match(result.error,/UXP panel/);assert.equal(result.rolledBack,true);assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);assert.deepEqual(f.clips,[footage]);
+});
+test('track preparation validates every cue and captured project before importing the seed',()=>{
+ for(const problem of ['missing-media','overlap','stale-project','stale-link']){
+  const f=hostFixture();f.addClip(f.item('/footage.mov'),0,10);
+  const cues=[f.cue('bundle',0,30),f.cue('second',30,60)],file=automaticPayload(f,cues);
+  if(problem==='missing-media')f.files.delete(cues[1].path);
+  if(problem==='overlap'){cues[1].startFrame=29;automaticPayload(f,cues);}
+  if(problem==='stale-project')f.project.path='/project/other.prproj';
+  if(problem==='stale-link'){cues[1].clipNodeId='missing';automaticPayload(f,cues);}
+  assert.ok(JSON.parse(f.host.prepareCaptionTrack(file)).error,problem);assert.equal(f.imports.length,0,problem);assert.equal(f.overwrites.length,0,problem);assert.equal(f.project.rootItem.children.length,0,problem);
+ }
+});
+test('automatic linked updates retain their exact track, clip identity and manual Motion',()=>{
+ const f=hostFixture(),media=f.item('/old-caption.mov'),caption=f.addClip(media,0,1),before=structuredClone(caption.motion);
+ const upper=addVideoTrack(f);f.addClip(f.item('/upper-footage.mov'),0,10,upper.clips);
+ const cue=f.cue('updated',0,30,{clipNodeId:caption.nodeId,projectItemId:media.nodeId,previousPath:media.media}),file=automaticPayload(f,[cue]);
+ const plan=JSON.parse(f.host.preflight(file)),prepared=JSON.parse(f.host.prepareCaptionTrack(file));
+ assert.deepEqual(plan.destination,{mode:'linked',trackIndex:null,expectedVideoTrackCount:2,newCaptionCount:0});assert.equal(prepared.seed,null);assert.equal(f.imports.length,0);
+ const result=JSON.parse(f.host.apply(file));assert.equal(result.ok,true);assert.equal(result.cues[0].track,0);assert.equal(result.cues[0].clipNodeId,caption.nodeId);assert.equal(f.clips[0],caption);assert.deepEqual(caption.motion,before);assert.equal(f.overwrites.length,0);assert.equal(f.sequence.videoTracks.length,2);
+});
+test('automatic new cues and linked cues keep separate destinations without relocating existing clips',()=>{
+ const f=hostFixture(),media=f.item('/old-caption.mov'),caption=f.addClip(media,0,1),top=addVideoTrack(f);
+ const result=JSON.parse(f.host.apply(automaticPayload(f,[f.cue('old',0,30,{clipNodeId:caption.nodeId,projectItemId:media.nodeId,previousPath:media.media}),f.cue('new',0,30)])));
+ assert.equal(result.ok,true);assert.deepEqual(result.cues.map(cue=>cue.track),[0,1]);assert.equal(f.clips[0],caption);assert.equal(top.clips.length,1);
+});
+test('automatic track planning is bounded and permits reusing an empty 256th track',()=>{
+ const f=hostFixture();while(f.sequence.videoTracks.length<256)addVideoTrack(f);
+ const file=automaticPayload(f,[f.cue('bundle')]);let result=JSON.parse(f.host.preflight(file));assert.equal(result.ok,true);assert.equal(result.destination.trackIndex,255);
+ f.addClip(f.item('/top-footage.mov'),0,1,f.sequence.videoTracks[255].clips);
+ result=JSON.parse(f.host.prepareCaptionTrack(file));assert.match(result.error,/256 video tracks/);assert.equal(f.imports.length,0);
+});
+test('a seed already referenced by a timeline clip cannot be reused to create another track',()=>{
+ const f=hostFixture();f.addClip(f.item('/footage.mov'),0,10);const file=automaticPayload(f,[f.cue('bundle')]),first=JSON.parse(f.host.prepareCaptionTrack(file));
+ const imported=f.project.rootItem.children[0].children[0];f.addClip(imported,2,8);
+ const result=JSON.parse(f.host.prepareCaptionTrack(file));assert.match(result.error,/already used/);assert.equal(f.imports.length,1);assert.equal(f.overwrites.length,0);assert.equal(imported.nodeId,first.seed.projectItemId);
+});
+
+function razorFixture(){
+ const f=hostFixture(),media=f.item('/caption-bundle-old.mov'),first=f.addClip(media,30/FPS,60/FPS),second=f.addClip(media,60/FPS,120/FPS);
+ first.outPoint=frameTimeForTest(30);second.inPoint=frameTimeForTest(30);second.outPoint=frameTimeForTest(90);
+ const a=attachNativeMotion(first,{uniform:{value:false}}),b=attachNativeMotion(second,{uniform:{value:false},width:{keys:[{time:0,value:100},{time:90/FPS,value:190}]},position:{keys:[{time:0,value:[.4,.6]},{time:90/FPS,value:[.6,.7]}]}});
+ const caption=f.cue('bundle',30,120,{clipNodeId:first.nodeId,projectItemId:media.nodeId,previousPath:media.media,captionBundle:true,renderBounds:bounds(),previousRenderBounds:bounds()});
+ const readFile=()=>motionPayload(f,first,{captionBundle:true,startTime:30/FPS,endTime:120/FPS,renderBounds:bounds()});
+ return {...f,media,first,second,a,b,caption,readFile};
+}
+function frameTimeForTest(frame){const time=new Time();time.ticks=String(frame*TPF);return time;}
+function nativeSnapshot(clip){return {node:clip.nodeId,start:clip.start.ticks,end:clip.end.ticks,in:clip.inPoint.ticks,out:clip.outPoint.ticks,keys:clip.components[0].properties.map(param=>({name:param.displayName,value:structuredClone(param.value),keys:structuredClone(param.keys),mode:param.mode}))};}
+test('a Razor bundle samples each fragment on its source clock and fingerprints every slice without merging cuts',()=>{
+ const f=razorFixture(),before=[nativeSnapshot(f.first),nativeSnapshot(f.second)],result=JSON.parse(f.host.readCaptionMotion(f.readFile()));
+ assert.equal(result.ok,true);const cue=result.cues[0];assert.equal(cue.clipNodeId,f.first.nodeId);assert.equal(cue.bundleFragments.length,2);assert.equal(cue.motionProfile.samples.length,90);
+ assert.ok(Math.abs(cue.motionProfile.samples[30].scaleX-1.305)<1e-9);assert.ok(Math.abs(cue.motionProfile.samples[30].time-60.5/FPS)<1e-9);assert.ok(f.b.width.sampled.some(time=>Math.abs(time-30.5/FPS)<1e-9));
+ const geometry=JSON.parse(f.host.readCaptionGeometry(f.readFile()));assert.equal(geometry.ok,true);assert.equal(geometry.cues[0].watchSignature,cue.motionProfile.watchSignature);
+ f.b.width.keys[1].value=160;const changed=JSON.parse(f.host.readCaptionMotion(f.readFile()));assert.notEqual(changed.cues[0].motionProfile.signature,cue.motionProfile.signature);assert.notEqual(changed.cues[0].motionProfile.watchSignature,cue.motionProfile.watchSignature);
+ f.b.width.keys[1].value=190;assert.deepEqual([nativeSnapshot(f.first),nativeSnapshot(f.second)],before);assert.equal(f.overwrites.length,0);assert.equal(f.imports.length,0);
+});
+test('Apply relinks a Razor bundle once while preserving both cuts, source clocks, identities and native key curves',()=>{
+ const f=razorFixture(),before=[nativeSnapshot(f.first),nativeSnapshot(f.second)],profile=JSON.parse(f.host.readCaptionMotion(f.readFile())).cues[0].motionProfile;
+ let relinks=0;const change=f.media.changeMediaPath;f.media.changeMediaPath=function(path){relinks++;return change.call(this,path);};
+ const result=JSON.parse(f.host.apply(automaticPayload(f,[{...f.caption,motionProfile:profile}])));
+ assert.equal(result.ok,true);assert.equal(relinks,1);assert.equal(result.cues.length,1);assert.equal(result.cues[0].clipNodeId,f.first.nodeId);assert.equal(result.cues[0].bundleFragments.length,2);assert.equal(result.cues[0].start,f.first.start.seconds);assert.equal(result.cues[0].end,f.second.end.seconds);
+ assert.deepEqual([nativeSnapshot(f.first),nativeSnapshot(f.second)],before);assert.equal(f.media.media,'/render/bundle.mov');assert.equal(f.clips.length,2);assert.equal(f.overwrites.length,0);assert.equal(f.imports.length,0);assert.equal(result.cues[0].motionProfile.samples.length,90);
+});
+test('a Razor bundle refuses stale Motion in another fragment before relinking its shared source',()=>{
+ const f=razorFixture(),profile=JSON.parse(f.host.readCaptionMotion(f.readFile())).cues[0].motionProfile;
+ f.b.width.keys[1].value=175;
+ const result=JSON.parse(f.host.apply(automaticPayload(f,[{...f.caption,motionProfile:profile}])));
+ assert.match(result.error,/changed during rendering/);assert.equal(f.media.media,'/caption-bundle-old.mov');assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);assert.equal(f.b.width.keys[1].value,175);
+});
+test('a failed Razor geometry migration restores all fragment Motion and source timing without recreating clips',()=>{
+ const f=razorFixture(),before=[nativeSnapshot(f.first),nativeSnapshot(f.second)];f.b.anchor.ignoreNext=true;
+ const result=JSON.parse(f.host.apply(automaticPayload(f,[{...f.caption,renderBounds:bounds(300,550,800,480)}])));
+ assert.match(result.error,/did not keep/);assert.equal(result.rolledBack,true);assert.equal(f.media.media,'/caption-bundle-old.mov');assert.deepEqual([nativeSnapshot(f.first),nativeSnapshot(f.second)],before);assert.equal(f.clips.length,2);assert.equal(f.overwrites.length,0);assert.equal(f.imports.length,0);
+});
+test('native splits require the explicit bundle marker and never permit copied, reordered, trimmed or moved media',()=>{
+ for(const invalid of ['unmarked','external','audio-copy','duplicated-source','source-gap','timeline-gap','moved-track','speed','trimmed-start','changed-range','fractional-cut']){
+  const f=razorFixture(),caption={...f.caption};
+  if(invalid==='unmarked')delete caption.captionBundle;
+  if(invalid==='external')f.project.sequences.push({sequenceID:'other',videoTracks:collection([{clips:collection([{projectItem:f.media}])}],'numTracks'),audioTracks:collection([],'numTracks')});
+  if(invalid==='audio-copy')f.sequence.audioTracks.push({clips:collection([{projectItem:f.media}])});
+  if(invalid==='duplicated-source'){f.second.inPoint=frameTimeForTest(0);f.second.outPoint=frameTimeForTest(60);}
+  if(invalid==='source-gap'){f.second.inPoint=frameTimeForTest(31);f.second.outPoint=frameTimeForTest(91);}
+  if(invalid==='timeline-gap'){f.second.start=frameTimeForTest(61);f.second.end=frameTimeForTest(121);}
+  if(invalid==='moved-track'){f.clips.splice(f.clips.indexOf(f.second),1);addVideoTrack(f).clips.push(f.second);}
+  if(invalid==='speed')f.second.getSpeed=()=>2;
+  if(invalid==='trimmed-start'){f.first.inPoint=frameTimeForTest(1);f.first.outPoint=frameTimeForTest(31);}
+  if(invalid==='changed-range')caption.endFrame=121;
+  if(invalid==='fractional-cut'){f.first.end=frameTimeForTest(60.5);f.first.outPoint=frameTimeForTest(30.5);f.second.start=frameTimeForTest(60.5);f.second.inPoint=frameTimeForTest(30.5);}
+  const result=JSON.parse(f.host.apply(automaticPayload(f,[caption])));assert.ok(result.error,invalid);assert.equal(f.media.media,'/caption-bundle-old.mov',invalid);assert.equal(f.imports.length,0,invalid);assert.equal(f.overwrites.length,0,invalid);assert.equal(f.a.position.writes.length,0,invalid);assert.equal(f.b.width.writes.length,0,invalid);
+ }
+});
+test('native Razor selection follows the logical bundle while native text-area controls resolve the exact selected fragment',()=>{
+ const f=razorFixture();f.second.selected=true;f.sequence.playhead=frameTimeForTest(80);
+ let result=JSON.parse(f.host.readCaptionSelection(f.readFile()));assert.equal(result.ok,true);assert.equal(result.captionId,'caption');assert.equal(result.clipNodeId,f.first.nodeId);assert.equal(result.nativeClipNodeId,f.second.nodeId);
+ result=JSON.parse(f.host.readCaptionAreaDescriptor(f.readFile()));assert.equal(result.ok,true);assert.equal(result.clipNodeId,f.second.nodeId);assert.equal(result.inTicks,String(30*TPF));assert.equal(result.bundleSourceContiguous,true);assert.equal(result.bundleFragments.length,2);
+ result=JSON.parse(f.host.selectCaptionClip(f.readFile()));assert.equal(result.ok,true);assert.equal(result.clipNodeId,f.second.nodeId);assert.equal(result.time,80/FPS);assert.equal(f.second.selected,true);assert.equal(f.first.selected,false);
+ result=JSON.parse(f.host.readTimeline(f.readFile()));assert.equal(result.ok,true);assert.equal(result.cues[0].start,f.first.start.seconds);assert.equal(result.cues[0].end,f.second.end.seconds);assert.equal(result.cues[0].bundleFragments.length,2);assert.equal(f.overwrites.length,0);assert.equal(f.imports.length,0);
+});
+test('native Razor discovery and automatic key sampling have aggregate safety bounds',()=>{
+ const f=razorFixture();for(let i=0;i<2000;i++)f.addClip(f.item('/unrelated-'+i+'.mov'),10+i,11+i);
+ let result=JSON.parse(f.host.readCaptionGeometry(f.readFile()));assert.match(result.error,/too large/);assert.equal(f.a.position.sampled.length,0);assert.equal(f.b.width.sampled.length,0);
+ const g=razorFixture();g.a.width.keys=Array.from({length:130},(_,i)=>({time:i/FPS,value:100+i/10}));g.b.width.keys=Array.from({length:130},(_,i)=>({time:i/FPS,value:100+i/10}));
+ result=JSON.parse(g.host.readCaptionGeometry(g.readFile()));assert.match(result.error,/too many Motion keys/);assert.ok(g.b.width.sampled.length===0);assert.equal(g.overwrites.length,0);
+});
+
 test('host refuses an unrelated collision before import or overwrite', () => {
   const f = hostFixture(), existing = f.addClip(f.item('/original.mov'), 0, 1);
   const result = JSON.parse(f.host.apply(f.payload([f.cue('caption')])));

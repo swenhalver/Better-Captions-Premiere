@@ -44,10 +44,9 @@ export function groupCaptionWords(words:CaptionWord[],maxChars=DEFAULT_MAX_CHARS
   for(let i=0;i<out.length;i++)out[i].endTime=Math.min(out[i].endTime+.12,out[i+1]?.startTime??Infinity);
   return out;
 }
-/** Regroup edited, unlinked words across old automatic boundaries in either direction. */
-export function regroupCaptions(captions: CaptionItem[], maxChars: number): CaptionItem[] {
+/** Group logical sentences independently of the Premiere clips containing them. */
+function sentenceGroups(captions: CaptionItem[], maxChars: number): CaptionItem[] {
   validateCharacterLimit(maxChars);
-  if (captions.some(c => c.clipNodeId)) throw new Error('Regroup captions before their first apply to Premiere. Linked caption boundaries are preserved.');
   const result: CaptionItem[] = [], owners = new Map<number, CaptionItem>();
   let run: CaptionItem[] = [];
   function flush() {
@@ -69,6 +68,35 @@ export function regroupCaptions(captions: CaptionItem[], maxChars: number): Capt
   }
   flush();
   return result;
+}
+
+/** Rebuild derived sentence text after edits without changing native link identities. */
+export function refreshCaptionGroups(captions: CaptionItem[], maxChars?: number): CaptionItem[] {
+  const limit = maxChars ?? captions.find(caption => caption.groupingMaxChars !== undefined)?.groupingMaxChars;
+  if (limit === undefined) return captions;
+  const origins = new Map(captions.flatMap(caption => caption.words.map((word, index) => [word.startTime, { id: caption.id, index }] as const)));
+  const groups = sentenceGroups(captions, limit).map(group => ({
+    id: 'phrase-' + origins.get(group.words[0].startTime)!.id + '-' + origins.get(group.words[0].startTime)!.index,
+    text: group.text, words: group.words, startTime: group.startTime, endTime: group.endTime,
+  }));
+  // A group may cross an old automatic clip boundary. Keep the complete word
+  // context in both containers, so the sentence and spoken-word states remain
+  // continuous at the cut. The native clip still gates its own visible range.
+  return captions.map(caption => ({ ...caption, groupingMaxChars: limit,
+    renderSegments: groups.filter(group => group.startTime < caption.endTime && group.endTime > caption.startTime)
+      .map(group => ({ ...group, words: group.words.map(word => ({ ...word })) })),
+  }));
+}
+
+/** Split/join sentences; applied clips remain native timing/keyframe containers. */
+export function regroupCaptions(captions: CaptionItem[], maxChars: number): CaptionItem[] {
+  validateCharacterLimit(maxChars);
+  if (captions.some(caption => caption.clipNodeId || caption.manualSplit || caption.groupingMaxChars !== undefined)) return refreshCaptionGroups(captions, maxChars);
+  return sentenceGroups(captions, maxChars);
+}
+
+export function captionSentenceCount(captions: CaptionItem[]): number {
+  return new Set(captions.flatMap(caption => caption.renderSegments?.map(group => group.id) ?? [caption.id])).size;
 }
 export function getCaptionAtTime(captions:CaptionItem[],time:number){return captions.find(c=>time>=c.startTime&&time<c.endTime)??null;}
 export function formatTime(seconds:number){const ticks=Math.round(Math.max(0,Number.isFinite(seconds)?seconds:0)*100),min=Math.floor(ticks/6000);return String(min).padStart(2,'0')+':'+((ticks%6000)/100).toFixed(2).padStart(5,'0');}

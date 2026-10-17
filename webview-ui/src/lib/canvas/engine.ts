@@ -17,6 +17,13 @@ function rgba(hex:string,opacity:number){const n=parseInt(hex.replace('#',''),16
 function appearance(style:StyleConfig,state:'upcoming'|'active'|'spoken'):ResolvedAppearance { return resolveAppearance(style,state==='upcoming'?'upcomingWord':state==='active'?'activeWord':'spokenWord'); }
 export interface RenderArea { width:number; height:number; measureOnly?:boolean; }
 export interface RenderLayout { width:number; height:number; rowHeight:number; rows:CaptionWord[][]; }
+/** Native clip ranges remain authoritative; a displayed sentence can cross a cut. */
+export function captionAtRenderTime(caption:CaptionItem|null,time:number):CaptionItem|null {
+  if(!caption||time<caption.startTime||time>=caption.endTime)return null;
+  if(!caption.renderSegments)return caption;
+  const segment=caption.renderSegments.find(group=>time>=group.startTime&&time<group.endTime);
+  return segment?{...caption,...segment}:null;
+}
 interface MeasuredWord { word:CaptionWord; text:string; width:number; continuation:boolean; gapBefore:number; }
 export class CaptionRenderer {
   private ctx:CanvasRenderingContext2D;
@@ -35,7 +42,7 @@ export class CaptionRenderer {
     const c=this.ctx;r=Math.min(Math.max(0,r),w/2,h/2);c.beginPath();c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.quadraticCurveTo(x+w,y,x+w,y+r);c.lineTo(x+w,y+h-r);c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);c.lineTo(x+r,y+h);c.quadraticCurveTo(x,y+h,x,y+h-r);c.lineTo(x,y+r);c.quadraticCurveTo(x,y,x+r,y);c.closePath();
   }
   renderFrame(caption:CaptionItem|null,time:number,style:StyleConfig,animation:AnimationConfig,area?:RenderArea):RenderLayout|undefined{
-    this.clear();if(!caption||time<caption.startTime||time>=caption.endTime||this.width<=0||this.height<=0)return;
+    this.clear();caption=captionAtRenderTime(caption,time);if(!caption||this.width<=0||this.height<=0)return;
     const c=this.ctx,all=['upcoming','active','spoken'] as const;
     const maxSize=Math.max(...all.map(state=>appearance(style,state).fontSize));
     const bounceLift=animation.preset==='bounce'?appearance(style,'active').fontSize*.25:0;
