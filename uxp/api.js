@@ -63,10 +63,19 @@ function createHostAPI(options = {}) {
     if (!context.projectPath || !context.projectPath.startsWith('/')) throw new Error('Save the Premiere project first so caption assets have a permanent home.');
     return ensureFolder(context.projectPath.replace(/\/[^/]+$/, '') + '/Better Captions/' + context.id);
   }
+  async function requireService(root, action) {
+    let status;
+    try { status = await readJSON(await root.getEntry('service.json'), 16384); } catch {}
+    const age = Date.now() - status?.updatedAt;
+    if (!record(status) || status.version !== 1 || !/^[a-f0-9]{24}$/.test(status.instanceId) || !Number.isFinite(status.updatedAt) || age < -5000 || age > 10000 || !Array.isArray(status.actions) || !status.actions.includes(action)) {
+      throw new Error('The Better Captions background renderer is unavailable or out of date. Save your work, restart Premiere, then reopen Better Captions to start it.');
+    }
+  }
   async function backend(action, args, sequenceId = currentId) {
     const context = captured(sequenceId);
-    await sequenceContext(context.id);
     const root = await privateRoot('service');
+    await requireService(root, action);
+    await sequenceContext(context.id);
     const requests = await ensureFolder(root.nativePath + '/requests'), responses = await ensureFolder(root.nativePath + '/responses');
     const id = randomId(), name = id + '.json';
     const createdAt = Date.now();

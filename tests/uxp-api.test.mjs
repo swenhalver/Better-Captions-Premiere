@@ -17,6 +17,12 @@ function harness(t, options = {}) {
     const entries=new Map(),value={nativePath:path,getEntry:async name=>{if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
     folders.set(path,value);return value;
   }
+  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection']});
+  function setService(status) {
+    const entries=folder('/private/service').entries;
+    if(status===null)entries.delete('service.json');else entries.set('service.json',{data:status});
+  }
+  setService(Object.hasOwn(options,'service')?options.service:healthyService());
   const storage={
     randomId:()=>String(++counter).padStart(32,'0'),ensureFolder:async path=>folder(path),privateRoot:async scope=>folder('/private/'+scope),readJSON:async file=>file.data,
     writeJSON:async (parent,name,value)=>{
@@ -46,7 +52,7 @@ function harness(t, options = {}) {
   }};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/api.js',import.meta.url),'utf8'),context);
   const api=module.exports.createHostAPI({readTimeoutMs:options.readTimeoutMs??12000});t.after(()=>api.dispose());
-  return {api,writes,requests,respond,advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},get projectReads(){return projectReads;}};
+  return {api,writes,requests,respond,setService,healthyService,advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},get projectReads(){return projectReads;}};
 }
 
 test('direct native requests and slow saves retain the captured sequence after selection changes',async t=>{
@@ -110,4 +116,18 @@ test('an apparently unclaimed request is not treated as proof that no worker can
   h.advanceTime(8000);await delay(190);
   assert.equal(settled,false,'a racy seven-second file check must not release the native lane');
   h.respond();await pending;
+});
+for(const unavailable of ['missing','stale','unsupported'])test(`an unavailable background renderer (${unavailable}) fails before request writes and leaves direct native calls available`,async t=>{
+  const h=harness(t),status=h.healthyService();
+  if(unavailable==='stale')status.updatedAt-=20000;
+  if(unavailable==='unsupported')status.actions=['readTimeline'];
+  h.setService(unavailable==='missing'?null:status);
+  await assert.rejects(h.api.getFonts(),/Save your work, restart Premiere/);
+  assert.equal(h.requests.length,0);assert.equal(h.writes.length,0,'an unavailable service must not leave a request that poisons the serial lane');
+  assert.equal((await h.api.getActiveSequenceInfo()).id,'one');assert.equal(await h.api.fetchTranscriptJSON('one'),'one');
+  h.setService(h.healthyService());assert.deepEqual(Array.from(await h.api.getFonts()),['Arial','Georgia'],'the same API instance can use a recovered service');
+});
+test('a fresh busy background renderer is available and retains the existing in-flight deadline protections',async t=>{
+  const h=harness(t),status=h.healthyService();status.busy=true;h.setService(status);
+  assert.deepEqual(Array.from(await h.api.getFonts()),['Arial','Georgia']);assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,'getFonts');
 });
