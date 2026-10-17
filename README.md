@@ -19,7 +19,7 @@ Each phrase is rendered as a transparent **ProRes 4444 text-area clip** at the s
 
 ## Requirements
 
-The installer supports **Windows and macOS (Apple Silicon or Intel), with Premiere Pro 26.3 or newer**. The same JavaScript plugin and platform-neutral package are used on both systems. Download the complete [0.7.1 Windows/macOS package](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.1). See the [release verification notes](docs/release-0.7.1.md) for tested behavior and remaining native-runtime limits.
+The installer supports **Windows and macOS (Apple Silicon or Intel), with Premiere Pro 26.3 or newer**. The same JavaScript plugin and platform-neutral package are used on both systems. Download the complete [0.7.2 Windows/macOS package](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.2). See the [release notes](docs/release-0.7.2.md) and [native Mac verification](docs/mac-verification-0.7.2.md) for tested behavior and remaining runtime limits.
 
 - Node.js 24 LTS for building/development and the optional agent CLI.
 - Local FFmpeg and FFprobe. The plugin finds WinGet's user links on Windows, Apple Silicon/Intel Homebrew locations on macOS, and absolute directories in `PATH`.
@@ -85,7 +85,7 @@ Use `--sequence <id>` or `--instance <id>` if several editors are open. Use `--f
 
 `read_area` accepts `{"captionId":"…","frame":0}` and returns native area state in `result`. `edit_area` accepts `{"captionId":"…","edit":{...}}` with the latest `result.signature`, a caption-relative integer `frame`, an operation and track. Exact-key operations `set-key`, `move-key` and `remove-key` require the key's source `ticks` as `keyTicks`; moving also requires `targetFrame`. Position values are `[x,y]` pixels; Width and Height values are `[pixels]`. The native backend rejects stale links or signatures and unsupported destructive easing changes before mutation. `undo` and `redo` use the same fresh-signature check.
 
-`set_captions` accepts `{"captions":[...]}` using the caption structure returned by `get_state`. Supply each word's text and timings; caption display text is derived from those words. Existing timeline links are preserved by caption ID. Requests cannot substitute media paths, run arbitrary commands, or remove linked captions. Phrase-specific placement accepts `{"captionId":"…","x":0.5,"y":0.8}`.
+`set_captions` accepts `{"captions":[...]}` using the caption structure returned by `get_state`. Supply each word's text and timings; caption display text is derived from those words. Preserve an optional Boolean `endOfSentence` on words to retain sentence boundaries for later regrouping. Existing timeline links are preserved by caption ID. Requests cannot substitute media paths, run arbitrary commands, or remove linked captions. Phrase-specific placement accepts `{"captionId":"…","x":0.5,"y":0.8}`.
 
 ## Verification and boundaries
 
