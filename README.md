@@ -88,6 +88,8 @@ Use `--sequence <id>` or `--instance <id>` if several editors are open. Use `--f
 
 The preview opened by `npm run dev` uses a fictional transcript for UI evaluation. Its Transcribe and Apply buttons require the installed Premiere panel.
 
+The [online interface review](https://better-captions-premiere-review.swenhalver.chatgpt.site) provides the same interactive editor with browser-only panel-width controls (owner sign-in required). See [interface review and verification](docs/interface-review.md) for the new Transcript / Style / Motion workflow, test results and native runtime limits.
+
 Nested audio sequences, reversed speech, and variable time-remapping need a deliberate workflow; flatten/open the dialogue sequence before transcription. Simultaneously spoken overlapping audio is not a speaker-selection workflow. Transcript corrections in this panel affect generated captions; they are not written back into Premiere's native transcript. Linked captions cannot be deleted/regrouped silently; edit their timeline clips deliberately before replacing the set.
 
 No After Effects, Whisper, audio-export transcription pipeline, paid speech API, or upstream native binary is used. The upstream shell addon is disabled, its shipped binaries are removed, and the production panel blocks remote content through CSP. See [the original audit](SECURITY-AUDIT.md) and [fork security notes](security/FORK-CHANGES.md).

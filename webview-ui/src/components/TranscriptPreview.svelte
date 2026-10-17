@@ -11,6 +11,7 @@
   let { sequenceId, captions, currentTime, maxWords, selectedId = null, onSeek, onSelect, onMaxWordsChange, onUpdate, onShowInPremiere, isDemo = false }: Props = $props();
   let activeId = $derived(captions.find((caption) => currentTime >= caption.startTime && currentTime < caption.endTime)?.id ?? null);
   let selected = $derived(captions.find((caption) => caption.id === selectedId) ?? captions[0]);
+  let query = $state("");
   let draftText = $state("");
   let draftStart = $state(0);
   let draftEnd = $state(0);
@@ -23,7 +24,7 @@
   let canUndo = $derived(!!previous && captions.every((caption) => !caption.clipNodeId || previous!.some((old) => old.id === caption.id)));
   let nextIsLinked = $derived(!!captions[captions.findIndex((caption) => caption.id === selected?.id) + 1]?.clipNodeId);
   let listEl: HTMLDivElement | undefined = $state();
-  $effect(() => { sequenceId; previous = null; error = ""; notice = ""; });
+  $effect(() => { sequenceId; query = ""; previous = null; error = ""; notice = ""; });
   $effect(() => {
     if (!selected) return;
     draftText = selected.text;
@@ -106,75 +107,104 @@
 </script>
 
 <section class="transcript-editor" aria-label="Transcript editor">
-  <div class="transcript-editor__heading"><h2>Transcript <span>{captions.length} captions</span></h2><button class="caption-button" onclick={undo} disabled={!canUndo} title={previous && !canUndo ? "The previous edit would remove a linked Premiere caption" : "Restore the previous transcript edit"}>Undo edit</button></div>
+  <div class="transcript-editor__heading"><label class="transcript-editor__search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.5 12.5 4 4"/></svg><input type="search" aria-label="Search captions" placeholder="Search captions" bind:value={query} /></label><button class="caption-button" onclick={undo} disabled={!canUndo} title="Restore the previous transcript edit">Undo edit</button></div>
   {#if captions.length}
-    <div class="transcript-editor__grouping">
-      <label class="caption-field"><span>Words per caption</span><input type="number" min="1" max="20" step="1" value={maxWords} onchange={(event) => onMaxWordsChange(Math.max(1, Math.min(20, Number((event.target as HTMLInputElement).value))))} /></label>
-      <button class="caption-button" onclick={regroup} disabled={hasLinked} title={hasLinked ? "Regroup before the first apply to Premiere" : "Apply the word limit to the edited transcript"}>Regroup edited words</button>
-    </div>
-    <p class="caption-help transcript-editor__note">{hasLinked ? "Caption boundaries are linked to Premiere clips. Edit timing and words below, or split an individual caption." : "Grouping uses punctuation, pauses and line length. Apply the word limit explicitly; editing it alone preserves your captions."}</p>
-    <div class="transcript-editor__list" bind:this={listEl} aria-label="Caption list">
-      {#each captions as caption, index (caption.id)}
-        <button class="transcript-editor__cue" class:transcript-editor__cue--selected={selected?.id === caption.id} class:transcript-editor__cue--playing={activeId === caption.id} data-caption-id={caption.id} onclick={() => choose(caption)} aria-pressed={selected?.id === caption.id}>
-          <span class="transcript-editor__cue-time">{index + 1} · {formatTime(caption.startTime)}</span><span class="transcript-editor__cue-text">{caption.text}</span>
-        </button>
-      {/each}
-    </div>
-    {#if selected}
-      <div class="transcript-editor__edit">
-        <div class="transcript-editor__edit-heading"><h3>Caption {captions.findIndex((caption) => caption.id === selected.id) + 1}</h3><button class="caption-button" disabled={isDemo} onclick={() => onShowInPremiere?.(selected.startTime)}>Show in Premiere</button></div>
-        <label class="caption-field"><span>Transcription</span><textarea rows="2" bind:value={draftText} spellcheck="true"></textarea></label>
-        <button class="caption-button" onclick={saveText}>Save text</button>
-        {#if selected.timingEstimated}<p class="transcript-editor__estimated">Word timing is estimated after a text edit. Adjust and save word timings to confirm it.</p>{/if}
-        <div class="caption-controls">
-          <label class="caption-field"><span>Caption start, seconds</span><input type="number" min="0" step=".001" bind:value={draftStart} /></label>
-          <label class="caption-field"><span>Caption end, seconds</span><input type="number" min="0" step=".001" bind:value={draftEnd} /></label>
-        </div>
-        <button class="caption-button" onclick={saveTiming}>Save caption timing</button>
-        <details class="transcript-editor__words" open>
-          <summary>Individual word text & timing</summary>
-          <div class="transcript-editor__word-labels" aria-hidden="true"><span>Word</span><span>Start, s</span><span>End, s</span></div>
-          {#each draftWords as word, index}
-            <div class="transcript-editor__word">
-              <input aria-label="Word {index + 1} text" type="text" bind:value={word.text} />
-              <input aria-label="Word {index + 1} start in seconds" type="number" min="0" step=".001" bind:value={word.startTime} />
-              <input aria-label="Word {index + 1} end in seconds" type="number" min="0" step=".001" bind:value={word.endTime} />
-            </div>
-          {/each}
-          <button class="caption-button" onclick={saveWords}>Save word timings</button>
-        </details>
-        {#if selected.words.length > 1}
-          <div class="transcript-editor__split">
-            <label class="caption-field"><span>Split before word</span><select bind:value={splitIndex}>{#each selected.words.slice(1) as word, index}<option value={index + 1}>{index + 2}. {word.text}</option>{/each}</select></label>
-            <button class="caption-button" onclick={splitCaption}>Split caption</button>
-          </div>
-        {/if}
-        <button class="caption-button" onclick={mergeNext} disabled={captions[captions.length - 1].id === selected.id || nextIsLinked} title={nextIsLinked ? "The next caption is already linked to Premiere" : "Merge with the next unlinked caption"}>Merge with next caption</button>
+    <details class="transcript-editor__grouping">
+      <summary>Sentence grouping <span>Up to {maxWords} words</span></summary>
+      <div class="transcript-editor__grouping-body">
+        <div class="transcript-editor__grouping-controls"><label class="caption-field"><span>Words per caption</span><input type="number" min="1" max="20" step="1" value={maxWords} onchange={(event) => onMaxWordsChange(Math.max(1, Math.min(20, Number((event.target as HTMLInputElement).value))))} /></label><button class="caption-button" onclick={regroup} disabled={hasLinked} title={hasLinked ? "Regroup before the first apply to Premiere" : "Apply the word limit to the edited transcript"}>Regroup</button></div>
+        <p class="caption-help">{hasLinked ? "Linked caption boundaries are preserved. Split individual captions below." : "Respects punctuation, pauses and line length. Use Regroup to apply a new limit."}</p>
       </div>
-    {/if}
-  {:else}<p class="transcript-editor__empty">Use Premiere’s native transcription to create timed captions. You can then edit every word, time and frame position here.</p>{/if}
-  {#if error}<p class="caption-message caption-message--error" role="alert">{error}</p>{/if}
-  {#if notice}<p class="caption-message" role="status">{notice}</p>{/if}
-</section>
+    </details>
+    <div class="transcript-editor__workspace">
+      <div class="transcript-editor__browse">
 
+        <div class="transcript-editor__list" bind:this={listEl} aria-label="Caption list">
+          {#each captions.filter((caption) => caption.text.toLowerCase().includes(query.toLowerCase())) as caption (caption.id)}
+            <button class="transcript-editor__cue" class:transcript-editor__cue--selected={selected?.id === caption.id} class:transcript-editor__cue--playing={activeId === caption.id} data-caption-id={caption.id} onclick={() => choose(caption)} aria-pressed={selected?.id === caption.id}>
+              <span class="transcript-editor__cue-number">{String(captions.indexOf(caption) + 1).padStart(2,"0")}</span><span class="transcript-editor__cue-body"><span class="transcript-editor__cue-time">{formatTime(caption.startTime)} — {formatTime(caption.endTime)}</span><span class="transcript-editor__cue-text">{caption.text}</span></span>
+            </button>
+          {:else}<p class="transcript-editor__empty">No captions match “{query}”. Clear the search to see all captions.</p>{/each}
+        </div>
+      </div>
+      {#if selected}
+        <div class="transcript-editor__edit">
+          <div class="transcript-editor__edit-heading"><h3>Caption {captions.findIndex((caption) => caption.id === selected.id) + 1}</h3><button class="caption-button" disabled={isDemo} onclick={() => onShowInPremiere?.(selected.startTime)} title={isDemo ? "Available in the installed Premiere panel" : "Select caption in Premiere"}>Show in Premiere</button></div>
+          <label class="caption-field"><span>Transcription</span><textarea rows="3" bind:value={draftText} spellcheck="true" onkeydown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); saveText(); } }}></textarea></label>
+          <div class="transcript-editor__save"><span class="caption-help">{draftText !== selected.text ? "Unsaved text" : "Text is up to date"}</span><button class="caption-button" onclick={saveText} disabled={draftText === selected.text}>Save text</button></div>
+          {#if error}<p class="caption-message caption-message--error" role="alert">{error}</p>{/if}
+          {#if notice}<p class="caption-message" role="status">{notice}</p>{/if}
+          {#if selected.timingEstimated}<p class="transcript-editor__estimated">Word timings are estimated. Review and save them below.</p>{/if}
+          <details class="transcript-editor__detail">
+            <summary>Caption timing <span>{formatTime(selected.startTime)} — {formatTime(selected.endTime)}</span></summary>
+            <div class="transcript-editor__detail-body"><div class="caption-controls"><label class="caption-field"><span>Caption start, seconds</span><input type="number" min="0" step=".001" bind:value={draftStart} /></label><label class="caption-field"><span>Caption end, seconds</span><input type="number" min="0" step=".001" bind:value={draftEnd} /></label></div><button class="caption-button" onclick={saveTiming}>Save caption timing</button></div>
+          </details>
+          <details class="transcript-editor__words transcript-editor__detail">
+            <summary>Word text & timing <span>{selected.words.length} words</span></summary>
+            <div class="transcript-editor__detail-body">
+              <div class="transcript-editor__word-labels" aria-hidden="true"><span>Word</span><span>Start, s</span><span>End, s</span></div>
+              {#each draftWords as word, index}
+                <div class="transcript-editor__word"><input aria-label="Word {index + 1} text" type="text" bind:value={word.text} /><input aria-label="Word {index + 1} start in seconds" type="number" min="0" step=".001" bind:value={word.startTime} /><input aria-label="Word {index + 1} end in seconds" type="number" min="0" step=".001" bind:value={word.endTime} /></div>
+              {/each}
+              <button class="caption-button" onclick={saveWords}>Save word timings</button>
+            </div>
+          </details>
+          <details class="transcript-editor__detail">
+            <summary>Split & merge</summary>
+            <div class="transcript-editor__detail-body">
+              {#if selected.words.length > 1}<div class="transcript-editor__split"><label class="caption-field"><span>Split before word</span><select bind:value={splitIndex}>{#each selected.words.slice(1) as word, index}<option value={index + 1}>{index + 2}. {word.text}</option>{/each}</select></label><button class="caption-button" onclick={splitCaption}>Split caption</button></div>{/if}
+              <button class="caption-button" onclick={mergeNext} disabled={captions[captions.length - 1].id === selected.id || nextIsLinked} title={nextIsLinked ? "The next caption is already linked to Premiere" : "Merge with the next unlinked caption"}>Merge with next caption</button>
+            </div>
+          </details>
+        </div>
+      {/if}
+    </div>
+  {:else}<div class="transcript-editor__empty"><h3>Ready for your first words</h3><p>Use Transcribe in Premiere to load timed speech. Then select a caption to edit its text and timing.</p></div>{/if}
+</section>
 <style>
-  .transcript-editor { border-block-end: 1px solid var(--color-panel-border); }
-  .transcript-editor__heading { display: flex; justify-content: space-between; align-items: center; gap: var(--caption-space-s); padding: var(--caption-space-m); background: var(--color-surface); & h2 { font-size: .9rem; font-weight: 600; } & h2 span { font-weight: 400; color: var(--color-panel-secondary); font-size: .8rem; } }
-  .transcript-editor__grouping { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--caption-space-s); align-items: end; padding: var(--caption-space-s) var(--caption-space-m) 0; }
-  .transcript-editor__note { padding: var(--caption-space-s) var(--caption-space-m); }
-  .transcript-editor__list { max-block-size: 12rem; overflow-y: auto; border-block: 1px solid var(--color-panel-border); }
-  .transcript-editor__cue { display: grid; inline-size: 100%; grid-template-columns: 6.2rem minmax(0, 1fr); gap: var(--caption-space-s); text-align: start; background: transparent; color: var(--color-panel-text); padding: var(--caption-space-s) var(--caption-space-m); border: 0; border-inline-start: 2px solid transparent; cursor: pointer; &:hover { background: var(--color-surface-raised); } &:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; } }
-  .transcript-editor__cue--selected { background: color-mix(in oklch, var(--color-accent) 12%, var(--color-panel-bg)); border-inline-start-color: var(--color-accent); }
+  .transcript-editor { container-type: inline-size; }
+  .transcript-editor__heading { display: flex; justify-content: space-between; align-items: center; gap: var(--caption-space-s); padding: var(--caption-space-m) var(--caption-space-l); }
+
+
+  .transcript-editor__heading button { background: transparent; }
+  .transcript-editor__grouping { border-block: 1px solid var(--color-panel-border); font-size: var(--caption-type-s); }
+  .transcript-editor__grouping > summary { cursor: pointer; padding: var(--caption-space-m) var(--caption-space-l); }
+  .transcript-editor__grouping summary span { float: right; color: var(--color-panel-secondary); font-size: var(--caption-type-xs); }
+  .transcript-editor__grouping-body { padding: 0 var(--caption-space-l) var(--caption-space-m); }
+  .transcript-editor__grouping-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--caption-space-s); align-items: end; margin-block-end: var(--caption-space-s); }
+  .transcript-editor__search { display: flex; align-items: center; gap: var(--caption-space-s); flex: 1; min-inline-size: 0; margin: 0; padding-inline: .5rem; border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); background: var(--color-input); }
+  .transcript-editor__search svg { inline-size: 1.1rem; block-size: 1.1rem; color: var(--color-panel-secondary); flex-shrink: 0; }
+  .transcript-editor__search input { min-inline-size: 0; inline-size: 100%; padding: .45rem 0; background: transparent; color: var(--color-panel-text); border: 0; font-size: var(--caption-type-s); }
+  .transcript-editor__list { min-block-size: 0; max-block-size: clamp(7rem, 16vh, 12rem); overflow-y: auto; }
+  .transcript-editor__cue { display: flex; align-items: flex-start; inline-size: 100%; gap: var(--caption-space-m); text-align: start; background: transparent; color: var(--color-panel-text); padding: var(--caption-space-m) var(--caption-space-l); border: 0; border-block-end: 1px solid var(--color-panel-border); cursor: pointer; }
+  .transcript-editor__cue:hover { background: var(--color-surface-raised); }
+  .transcript-editor__cue:focus-visible { outline-offset: -2px; }
+  .transcript-editor__cue--selected { background: var(--color-selection); }
   .transcript-editor__cue--playing .transcript-editor__cue-time { color: var(--color-accent); }
-  .transcript-editor__cue-time { font-family: ui-monospace, monospace; color: var(--color-panel-secondary); font-size: .78rem; padding-block-start: .1rem; }
-  .transcript-editor__cue-text { font-size: .9rem; line-height: 1.4; }
-  .transcript-editor__edit { padding: var(--caption-space-m); display: flex; flex-direction: column; gap: var(--caption-space-m); }
-  .transcript-editor__edit-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--caption-space-s); & h3 { font-size: .9rem; font-weight: 600; } }
-  .transcript-editor__estimated { font-size: .8rem; color: var(--color-warning); }
-  .transcript-editor__words { border-block-start: 1px solid var(--color-panel-border); padding-block-start: var(--caption-space-m); & summary { font-size: .85rem; cursor: pointer; font-weight: 600; margin-block-end: var(--caption-space-s); } & > button { inline-size: 100%; margin-block-start: var(--caption-space-s); } }
+  .transcript-editor__cue-number { color: var(--color-panel-secondary); font-variant-numeric: tabular-nums; font-size: var(--caption-type-xs); padding-block-start: .1rem; }
+  .transcript-editor__cue-body { flex: 1; min-inline-size: 0; }
+  .transcript-editor__cue-time { display: block; font-variant-numeric: tabular-nums; color: var(--color-panel-secondary); font-size: var(--caption-type-xs); margin-block-end: .3rem; }
+  .transcript-editor__cue-text { display: block; font-size: var(--caption-type-m); line-height: 1.5; overflow-wrap: anywhere; }
+  .transcript-editor__edit { padding: var(--caption-space-l); display: flex; flex-direction: column; gap: var(--caption-space-m); border-block-start: 1px solid var(--color-panel-border); }
+  .transcript-editor__edit-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--caption-space-s); }
+  .transcript-editor__edit-heading h3 { font-size: var(--caption-type-m); font-weight: 600; }
+  .transcript-editor__edit-heading button { font-size: var(--caption-type-xs); }
+  .transcript-editor__save { display: flex; align-items: center; justify-content: space-between; gap: var(--caption-space-s); }
+  .transcript-editor__estimated { font-size: var(--caption-type-xs); color: var(--color-warning); }
+  .transcript-editor__detail { border-block-start: 1px solid var(--color-panel-border); }
+  .transcript-editor__detail summary { font-size: var(--caption-type-s); cursor: pointer; font-weight: 600; padding-block: var(--caption-space-m); }
+  .transcript-editor__detail summary span { display: block; margin-block-start: .2rem; padding-inline-start: 1rem; color: var(--color-panel-secondary); font-size: var(--caption-type-xs); font-weight: 400; font-variant-numeric: tabular-nums; }
+  .transcript-editor__detail-body { display: flex; flex-direction: column; gap: var(--caption-space-s); padding-block-end: var(--caption-space-m); }
   .transcript-editor__word-labels, .transcript-editor__word { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); gap: var(--caption-space-s); }
-  .transcript-editor__word-labels { font-size: .75rem; color: var(--color-panel-secondary); margin-block-end: var(--caption-space-xs); }
-  .transcript-editor__word { margin-block-end: var(--caption-space-xs); & input { inline-size: 100%; min-inline-size: 0; border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); color: var(--color-panel-text); background: var(--color-surface-raised); font-size: .85rem; padding: .4rem; &:focus-visible { outline: 1px solid var(--color-accent); } } }
+  .transcript-editor__word-labels { font-size: var(--caption-type-xs); color: var(--color-panel-secondary); }
+  .transcript-editor__word input { inline-size: 100%; min-inline-size: 0; border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); color: var(--color-panel-text); background: var(--color-input); font-size: var(--caption-type-s); padding: .4rem; }
   .transcript-editor__split { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--caption-space-s); }
-  .transcript-editor__empty { padding: var(--caption-space-l); color: var(--color-panel-secondary); font-size: .9rem; }
+  .transcript-editor__empty { padding: var(--caption-space-l); color: var(--color-panel-secondary); font-size: var(--caption-type-s); }
+  .transcript-editor__empty h3 { color: var(--color-panel-text); font-weight: 600; margin-block-end: var(--caption-space-s); }
+  .transcript-editor__edit .caption-message { padding: 0; }
+  @container (min-width: 48rem) {
+    .transcript-editor__workspace { display: grid; grid-template-columns: minmax(18rem, .8fr) minmax(22rem, 1fr); }
+    .transcript-editor__list { max-block-size: 60vh; }
+    .transcript-editor__edit { border-block-start: 0; border-inline-start: 1px solid var(--color-panel-border); }
+  }
 </style>

@@ -3,12 +3,13 @@
   interface Props {
     style: StyleConfig;
     fonts?: string[];
+    stateKey?: "activeWord" | "spokenWord";
     onUpdate: (updates: Partial<StyleConfig>) => void;
   }
-  let { style, fonts = [], onUpdate }: Props = $props();
+  let { style, fonts = [], onUpdate, stateKey = "activeWord" }: Props = $props();
   const states = [
-    { key: "activeWord", title: "Currently spoken word", description: "Highlight the word being spoken, with an optional rounded bubble." },
-    { key: "spokenWord", title: "Previously spoken words", description: "Style words after their individual end time. Upcoming words use the base style." },
+    { key: "activeWord", title: "Currently spoken word", description: "The word being spoken. Size is relative to the base text." },
+    { key: "spokenWord", title: "Previously spoken words", description: "Words that have finished speaking. Upcoming words keep the base style." },
   ] as const;
   function update(key: "activeWord" | "spokenWord", patch: Partial<WordAppearance>) {
     onUpdate({ [key]: { ...style[key], ...patch } });
@@ -17,12 +18,10 @@
   function number(event: Event) { return Number(value(event)); }
 </script>
 
-{#each states as state}
+{#each states.filter((item) => item.key === stateKey) as state}
   {@const appearance = style[state.key]}
-  <details class="caption-section word-states" open>
-    <summary class="caption-section__heading">{state.title}</summary>
+  <section class="caption-section word-states" aria-label={state.title}>
     <div class="caption-section__body">
-      <p class="caption-help">{state.description}</p>
       <div class="caption-controls">
         <label class="caption-field caption-field--wide">
           <span>Font family</span>
@@ -51,6 +50,7 @@
           <label class="caption-field"><span>Corner radius, px</span><input type="number" min="0" max="200" step="1" value={appearance.radius} onchange={(event) => update(state.key, { radius: Math.max(0, Math.min(200, number(event))) })} /></label>
         </div>
       {/if}
+      <details class="caption-disclosure"><summary>About this word state</summary><p>{state.description}</p></details>
     </div>
-  </details>
+  </section>
 {/each}

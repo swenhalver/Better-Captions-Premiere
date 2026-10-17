@@ -120,10 +120,10 @@
 
 <div class="caption-export">
   {#if !captions.length || captions.some(caption => !caption.clipNodeId)}
-  <label class="caption-field">
+  <label class="caption-field caption-export__track">
     Caption track
     <select bind:value={selectedTrack} disabled={disabled || isExporting || hostApi.isDemo} title="Place new captions on a video track above the footage.">
-      {#if tracks.length === 0}<option value={-1}>Refresh to load Premiere tracks</option>{/if}
+      {#if tracks.length === 0}<option value={-1}>{hostApi.isDemo ? 'Available in Premiere' : 'Refresh to load Premiere tracks'}</option>{/if}
       {#each tracks as track}
         <option value={track.index} disabled={track.locked}>V{track.index + 1} · {track.name}{track.locked ? ' · locked' : track.clips === 0 ? ' · empty' : ` · ${track.clips} clips`}</option>
       {/each}
@@ -131,17 +131,19 @@
   </label>
   {/if}
   <button class="caption-button caption-button--primary caption-export__apply" onclick={handleApply} disabled={disabled || isExporting || !captions.length || hostApi.isDemo || selectedTrack < 0}>
-    {isExporting ? `${status ?? 'Generating…'}${progress ? ` ${progress.percent}%` : ''}` : hasLinkedCaptions ? 'Update Program Monitor' : 'Show captions in Program Monitor'}
+    {isExporting ? `${status ?? 'Generating…'}${progress ? ` ${progress.percent}%` : ''}` : hasLinkedCaptions ? 'Update Program Monitor' : 'Apply to Program Monitor'}
   </button>
   {#if isExporting && progress}
     <progress class="caption-export__progress" value={progress.current} max={progress.total} aria-label="Caption rendering progress"></progress>
     <button class="caption-button" onclick={cancel}>Cancel before applying</button>
   {/if}
   {#if error}<p class="caption-message caption-message--error" role="alert">{error}</p>{/if}
+  {#if status && !isExporting}<p class="caption-message" role="status">{status}</p>{/if}
 </div>
 
 <style>
-  .caption-export { display: flex; flex-direction: column; gap: var(--caption-space-s); padding: var(--caption-space-m); }
+  .caption-export { display: flex; flex-direction: column; gap: var(--caption-space-s); padding: var(--caption-space-m) var(--caption-space-l); }
   .caption-export__apply { min-block-size: 2.5rem; }
+  .caption-export__track { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--caption-space-m); }
   .caption-export__progress { inline-size: 100%; block-size: .35rem; accent-color: var(--color-accent); }
 </style>

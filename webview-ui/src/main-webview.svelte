@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import * as webviewAPI from "./webview-api";
   import { setSequenceCallbacks } from "./webview-api";
   import { initWebview } from "./webview-setup";
@@ -8,6 +8,7 @@
   import { retime, validateCaptions } from "./lib/transcript/edit";
   import { captionLinks, createCaptionSelectionSync, panelVisibilityMessage, startProgramMonitorWatcher, type CaptionLink, type MotionWatchContext, type ReflowStatus } from "./lib/program-monitor";
   import type { TranscriptJSON, SequenceInfo, SessionState, StyleConfig, CaptionItem, AnimationConfig } from "./lib/types";
+  import PanelTabs from "./components/PanelTabs.svelte";
   import SequenceStatus from "./components/SequenceStatus.svelte";
   import TranscriptPreview from "./components/TranscriptPreview.svelte";
   import StylePanel from "./components/StylePanel.svelte";
@@ -16,6 +17,11 @@
   import ExportButton from "./components/ExportButton.svelte";
 
   const { api } = initWebview(webviewAPI);
+  let activeTab = $state("transcript");
+  let wordState = $state("current");
+  let contentEl: HTMLDivElement | undefined = $state();
+  async function changeWorkspace(value: string) { activeTab = value; await tick(); if (contentEl) contentEl.scrollTop = 0; }
+  async function changeWordState(value: string) { wordState = value; await tick(); if (contentEl) contentEl.scrollTop = 0; }
   let sequenceInfo = $state<SequenceInfo | null>(null);
   let selectedId = $state<string | null>(null);
   let fonts = $state<string[]>([]);
@@ -392,53 +398,72 @@
 
 <main class="caption-app">
   <SequenceStatus session={sessionManager.current} onRefresh={() => { void refreshSequence(); }} onTranscribe={() => { void transcribe(); }} isDemo={api.isDemo} isBusy={isRefreshing || isSyncing || timelineBusy || !!sessionManager.current?.isLoading} {saveStatus} />
-  {#if error}<p class="caption-message caption-message--error caption-app__error" role="alert">{error}</p>{/if}
+  {#if error}<div class="caption-app__error" role="alert"><p>{error}</p><button class="caption-button caption-button--icon" onclick={() => error = ""} aria-label="Dismiss error"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></div>{/if}
   {#if sessionManager.current}
     {@const session = sessionManager.current}
     {@const selected = session.captions.find((caption) => caption.id === selectedId)}
     {@const position = locationScope === "caption" && selected?.position ? selected.position : { x: session.style.positionX, y: session.style.positionY }}
-    <section class="caption-app__output" aria-label="Program Monitor captions">
-      <ExportButton bind:this={exportButton} captions={session.captions} style={session.style} animation={session.animation} frameWidth={session.frameWidth} frameHeight={session.frameHeight} frameRate={session.frameRate} duration={session.duration} sequenceName={session.sequenceName} sequenceId={session.sequenceId} currentTime={session.currentTime} {selectedId} tracks={sequenceInfo?.tracks ?? []} hostApi={api} onUpdated={recordApplied} onApplied={recordMonitorApplied} onBusy={setTimelineBusy} disabled={isRefreshing || isSyncing || session.isLoading} />
-      <div class="caption-app__monitor-tools">
-        <button class="caption-button" onclick={moveSelectedCaption} disabled={api.isDemo || timelineBusy || !selected?.clipNodeId} title="Drag side or corner handles to resize width and height independently. Width reflows text at the same font size. Use Motion’s Position, Scale (height), and Scale Width stopwatches for keyframes.">Move / resize in Program Monitor</button>
-        {#if selected?.layoutOverflow}<p class="caption-app__reflow-status caption-app__reflow-status--error" role="status">Text exceeds this box. Enlarge it or split the caption.</p>{/if}
-        {#if reflowStatus.message && (reflowStatus.phase === "working" || reflowStatus.phase === "error")}<p class="caption-app__reflow-status" class:caption-app__reflow-status--error={reflowStatus.phase === "error"} role={reflowStatus.phase === "error" ? "alert" : "status"}>{reflowStatus.message}</p>{/if}
-      </div>
-    </section>
-    <div class="caption-app__content">
-      <fieldset class="caption-app__editor" disabled={timelineBusy}>
-        {#if transcriptionBackup && transcriptionBackup.sequenceId === session.sequenceId}<div class="caption-app__backup"><button class="caption-button" onclick={restoreTranscription} disabled={session.captions.some((caption) => caption.clipNodeId)} title="Restore before applying the replacement captions to Premiere">Restore transcription before last replacement</button></div>{/if}
-        <TranscriptPreview sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxWords={session.style.maxWords} {selectedId} onSelect={(id) => selectedId = id} onSeek={seekCaption} onMaxWordsChange={(maxWords) => handleStyle({ maxWords })} onUpdate={updateCaptions} onShowInPremiere={seekCaption} isDemo={api.isDemo} />
-        <details class="caption-app__location">
-          <summary class="caption-app__location-heading">Frame location</summary>
-          <div class="caption-app__location-body caption-controls">
-            <label class="caption-field caption-field--wide"><span>Apply position to</span><select bind:value={locationScope}><option value="global">Global default</option><option value="caption" disabled={!selected}>Selected caption</option></select></label>
-            <label class="caption-field"><span>X, % from left</span><input type="number" min="0" max="100" step=".5" value={Number((position.x * 100).toFixed(2))} onchange={(event) => updatePositionAxis("x", event)} /></label>
-            <label class="caption-field"><span>Y, % from top</span><input type="number" min="0" max="100" step=".5" value={Number((position.y * 100).toFixed(2))} onchange={(event) => updatePositionAxis("y", event)} /></label>
-            {#if locationScope === "caption" && selected?.position}<button class="caption-button caption-field--wide" onclick={() => positionCaption(null, "caption")}>Use global position for this caption</button>{/if}
-          </div>
-        </details>
-        <WordStates style={session.style} {fonts} onUpdate={handleStyle} />
-        <StylePanel style={session.style} {fonts} onUpdate={handleStyle} />
-        <AnimationPanel animation={session.animation} onUpdate={handleAnimation} />
-        <div class="caption-app__timeline-sync"><button class="caption-button" onclick={() => { void syncTimeline(); }} disabled={api.isDemo || isSyncing || !session.captions.some((caption) => caption.clipNodeId)}>{isSyncing ? "Syncing…" : "Sync timing from Premiere"}</button><p class="caption-help">After moving or trimming caption clips in Premiere, sync their timing back to this editor.</p>{#if timelineStatus}<p class="caption-message" role="status">{timelineStatus}</p>{/if}</div>
+    <PanelTabs name="workspace" label="Caption workspace" value={activeTab} options={[{value:"transcript",label:"Transcript"},{value:"style",label:"Style"},{value:"motion",label:"Motion"}]} onChange={changeWorkspace} />
+    <div class="caption-app__content" bind:this={contentEl}>
+      <fieldset class="caption-app__editor" disabled={timelineBusy || session.isLoading} aria-label="Caption editing controls">
+        <div id="workspace-panel-transcript" role="tabpanel" aria-labelledby="workspace-tab-transcript" tabindex="0" hidden={activeTab !== "transcript"}>
+          {#if session.isLoading}<div class="caption-app__loading" role="status"><p>Transcribing in Premiere…</p><p class="caption-help">Timed words will appear here when Premiere finishes.</p><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div></div>{/if}
+          {#if transcriptionBackup && transcriptionBackup.sequenceId === session.sequenceId}<div class="caption-app__backup"><button class="caption-button" onclick={restoreTranscription} disabled={session.captions.some((caption) => caption.clipNodeId)}>Restore previous transcription</button></div>{/if}
+          <TranscriptPreview sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxWords={session.style.maxWords} {selectedId} onSelect={(id) => selectedId = id} onSeek={seekCaption} onMaxWordsChange={(maxWords) => handleStyle({ maxWords })} onUpdate={updateCaptions} onShowInPremiere={seekCaption} isDemo={api.isDemo} />
+        </div>
+        <div id="workspace-panel-style" role="tabpanel" aria-labelledby="workspace-tab-style" tabindex="0" hidden={activeTab !== "style"}>
+          <div class="caption-app__section-intro"><h2>Word appearance</h2></div>
+          <PanelTabs name="appearance" label="Word state" value={wordState} compact options={[{value:"upcoming",label:"Upcoming"},{value:"current",label:"Current"},{value:"spoken",label:"Spoken"}]} onChange={changeWordState} />
+          <div id="appearance-panel-upcoming" role="tabpanel" aria-labelledby="appearance-tab-upcoming" tabindex="0" hidden={wordState !== "upcoming"}><StylePanel style={session.style} {fonts} onUpdate={handleStyle} section="base" /></div>
+          <div id="appearance-panel-current" role="tabpanel" aria-labelledby="appearance-tab-current" tabindex="0" hidden={wordState !== "current"}><WordStates style={session.style} {fonts} onUpdate={handleStyle} stateKey="activeWord" /></div>
+          <div id="appearance-panel-spoken" role="tabpanel" aria-labelledby="appearance-tab-spoken" tabindex="0" hidden={wordState !== "spoken"}><WordStates style={session.style} {fonts} onUpdate={handleStyle} stateKey="spokenWord" /></div>
+          <StylePanel style={session.style} {fonts} onUpdate={handleStyle} section="effects" />
+        </div>
+        <div id="workspace-panel-motion" role="tabpanel" aria-labelledby="workspace-tab-motion" tabindex="0" hidden={activeTab !== "motion"}>
+          <div class="caption-app__section-intro"><h2>Motion & placement</h2><p>Captions appear on the main Program Monitor.</p></div>
+          <AnimationPanel animation={session.animation} onUpdate={handleAnimation} />
+          <details class="caption-section" open>
+            <summary class="caption-section__heading">Frame position</summary>
+            <div class="caption-section__body">
+              <div class="caption-controls">
+                <label class="caption-field caption-field--wide"><span>Apply position to</span><select bind:value={locationScope}><option value="global">All captions · default</option><option value="caption" disabled={!selected}>Selected caption</option></select></label>
+                <label class="caption-field"><span>X, % from left</span><input type="number" min="0" max="100" step=".5" value={Number((position.x * 100).toFixed(2))} onchange={(event) => updatePositionAxis("x", event)} /></label>
+                <label class="caption-field"><span>Y, % from top</span><input type="number" min="0" max="100" step=".5" value={Number((position.y * 100).toFixed(2))} onchange={(event) => updatePositionAxis("y", event)} /></label>
+                {#if locationScope === "caption" && selected?.position}<button class="caption-button caption-field--wide" onclick={() => positionCaption(null, "caption")}>Reset to default position</button>{/if}
+              </div>
+              <button class="caption-button" onclick={moveSelectedCaption} disabled={api.isDemo || timelineBusy || !selected?.clipNodeId}>Move / resize in Program Monitor</button>
+              <details class="caption-disclosure"><summary>Resize & keyframe in Premiere</summary><p>Use native Motion controls. Width reflows text at the same font size; height is independent. Use the Position, Scale (height) and Scale Width stopwatches for keyframes.</p></details>
+              {#if selected?.layoutOverflow}<p class="caption-message caption-message--error" role="status">Text exceeds this box. Enlarge it or split the caption.</p>{/if}
+              {#if reflowStatus.message && (reflowStatus.phase === "working" || reflowStatus.phase === "error")}<p class="caption-message" class:caption-message--error={reflowStatus.phase === "error"} role={reflowStatus.phase === "error" ? "alert" : "status"}>{reflowStatus.message}</p>{/if}
+            </div>
+          </details>
+          <div class="caption-app__timeline-sync"><h3>Timeline timing</h3><button class="caption-button" onclick={() => { void syncTimeline(); }} disabled={api.isDemo || isSyncing || !session.captions.some((caption) => caption.clipNodeId)}>{isSyncing ? "Syncing…" : "Sync timing from Premiere"}</button><details class="caption-disclosure"><summary>When to sync</summary><p>After moving or trimming caption clips in Premiere, pull their timing back into this editor.</p></details>{#if timelineStatus}<p class="caption-message" role="status">{timelineStatus}</p>{/if}</div>
+        </div>
       </fieldset>
     </div>
-  {:else}<div class="caption-app__empty"><p>Open a sequence in Premiere Pro to create captions.</p><p>Your transcription, word styling and frame positions will be saved with its caption session.</p></div>{/if}
+    <footer class="caption-app__output" aria-label="Program Monitor captions">
+      <ExportButton bind:this={exportButton} captions={session.captions} style={session.style} animation={session.animation} frameWidth={session.frameWidth} frameHeight={session.frameHeight} frameRate={session.frameRate} duration={session.duration} sequenceName={session.sequenceName} sequenceId={session.sequenceId} currentTime={session.currentTime} {selectedId} tracks={sequenceInfo?.tracks ?? []} hostApi={api} onUpdated={recordApplied} onApplied={recordMonitorApplied} onBusy={setTimelineBusy} disabled={isRefreshing || isSyncing || session.isLoading} />
+    </footer>
+  {:else}<div class="caption-app__empty"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="3" y="6" width="26" height="20" rx="2"/><path d="M8 13h10M8 19h16"/></svg><h2>Start with a sequence</h2><p>Open a sequence in Premiere, then refresh to transcribe and edit its captions.</p><button class="caption-button" onclick={() => { void refreshSequence(); }} disabled={isRefreshing}>{isRefreshing ? "Looking for sequence…" : "Refresh sequence"}</button></div>{/if}
 </main>
 <style>
-  .caption-app { display: flex; flex-direction: column; block-size: 100%; overflow: hidden; }
-  .caption-app__output { flex-shrink: 0; border-block-end: 1px solid var(--color-panel-border); }
-  .caption-app__reflow-status { margin-block-start: var(--caption-space-s); font-size: .8rem; color: var(--color-success); }
-  .caption-app__reflow-status--error { color: #ffb4a9; }
-  .caption-app__monitor-tools { padding: 0 var(--caption-space-m) var(--caption-space-m); & > button { inline-size: 100%; } }
-  .caption-app__location { border-block-end: 1px solid var(--color-panel-border); }
-  .caption-app__location-heading { padding: var(--caption-space-m); cursor: pointer; font-size: .85rem; font-weight: 600; background: var(--color-surface); }
-  .caption-app__location-body { padding: var(--caption-space-m); }
+  .caption-app { display: flex; flex-direction: column; block-size: 100%; overflow: hidden; container-type: inline-size; }
+  .caption-app__output { flex-shrink: 0; border-block-start: 1px solid var(--color-panel-border); background: var(--color-surface); max-block-size: 40%; overflow-y: auto; }
   .caption-app__editor { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
   .caption-app__content { flex: 1; min-block-size: 0; overflow-y: auto; }
-  .caption-app__error { flex-shrink: 0; max-block-size: 8rem; overflow-y: auto; }
-  .caption-app__empty { margin: auto; padding: var(--caption-space-l); text-align: center; color: var(--color-panel-secondary); & p + p { margin-block-start: var(--caption-space-m); font-size: .85rem; } }
-  .caption-app__timeline-sync { padding: var(--caption-space-m); border-block-end: 1px solid var(--color-panel-border); & button { inline-size: 100%; margin-block-end: var(--caption-space-s); } }
-  .caption-app__backup { padding: var(--caption-space-s) var(--caption-space-m); & button { inline-size: 100%; } }
+  .caption-app__error { display: flex; align-items: flex-start; gap: var(--caption-space-s); flex-shrink: 0; max-block-size: 8rem; overflow-y: auto; padding: var(--caption-space-s) var(--caption-space-l); background: #3a2927; color: var(--color-error); font-size: var(--caption-type-s); }
+  .caption-app__error p { flex: 1; overflow-wrap: anywhere; }
+  .caption-app__empty { margin: auto; max-inline-size: 30rem; padding: var(--caption-space-xl); text-align: center; color: var(--color-panel-secondary); }
+  .caption-app__empty svg { inline-size: 2.5rem; block-size: 2.5rem; margin: 0 auto var(--caption-space-l); }
+  .caption-app__empty h2 { font-size: var(--caption-type-l); color: var(--color-panel-text); font-weight: 600; }
+  .caption-app__empty p { margin-block: var(--caption-space-s) var(--caption-space-l); }
+  .caption-app__timeline-sync { padding: var(--caption-space-l); display: flex; flex-direction: column; gap: var(--caption-space-s); }
+  .caption-app__timeline-sync h3 { font-weight: 600; font-size: var(--caption-type-s); }
+  .caption-app__backup { padding: var(--caption-space-s) var(--caption-space-l); }
+  .caption-app__section-intro { padding: var(--caption-space-l) var(--caption-space-l) var(--caption-space-s); }
+  .caption-app__section-intro h2 { font-size: var(--caption-type-l); font-weight: 600; }
+  .caption-app__section-intro p { font-size: var(--caption-type-s); color: var(--color-panel-secondary); margin-block-start: var(--caption-space-xs); }
+  .caption-app__loading { padding: var(--caption-space-l); border-block-end: 1px solid var(--color-panel-border); }
+  .caption-app__loading p { margin-block-end: var(--caption-space-s); }
+  .caption-app__skeleton { block-size: 2.5rem; margin-block-start: var(--caption-space-s); border-radius: var(--caption-radius); background: var(--color-surface-raised); }
 </style>
