@@ -16,7 +16,7 @@ Transcribe in Premiere, correct timed words, group sentences, style captions and
 
 ## Operating Context
 
-One visible UXP panel and an invisible CEP renderer. The Svelte browser preview uses synthetic data; native actions require Premiere. The user subsequently authorized opening and using Premiere on this Windows PC. Do not rearrange native workspaces. Premiere 26.5.2 launches but Adobe's device activation limit currently blocks the workspace.
+One visible UXP panel and an invisible CEP renderer. The Svelte browser preview uses synthetic data; native actions require Premiere. The user subsequently authorized opening and using Premiere on this Windows PC. Do not rearrange native workspaces. Premiere 26.5.2 now opens normally after the user resolved activation. Better Captions is not installed here; its existing installer and native file/media paths require macOS.
 
 ## Capabilities and Constraints
 

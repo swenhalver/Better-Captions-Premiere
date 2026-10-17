@@ -18,7 +18,9 @@ For future preview updates, reuse Site project `appgprj_6ad2dbaa92d881919fd7f5ec
 
 ## Native verification boundary
 
-Premiere Pro 2026 launched on SwenHalver-PC-2020, but Adobe's device activation limit blocks the workspace. No other device was signed out. Actual Speech to Text, clip application, native move/resize handles, constant-font reflow and animated Position/Width/Height need runtime verification. The supported installer and media paths currently target Apple Silicon macOS; this redesign does not add a Windows installer or port native runtime dependencies.
+On October 16, 2026, the user resolved activation and Premiere Pro 26.5.2 opened normally on SwenHalver-PC-2020. The agent did not sign out another device. Window → UXP Plugins lists only Browse Plugins and Manage Plugins; Better Captions is not installed. The inspected user UXP directory contains Photoshop plugins, and the user CEP extensions directory is empty. No native workspace was rearranged.
+
+Native validation remains unavailable on this Windows installation: `scripts/install-cep.sh` targets macOS, `uxp/storage.js` explicitly requires a macOS Library folder and Unix absolute paths, `uxp/api.js` assumes Unix project paths, and `cep/runtime.cjs` uses Homebrew FFmpeg/font tools. Installing the current files alone would not make the native workflow work on Windows. Actual Speech to Text, clip application, native move/resize handles, constant-font reflow and animated Position/Width/Height still need verification in the supported Mac/Premiere runtime. This redesign does not add a Windows installer or port native runtime dependencies.
 
 ## Merge-sensitive files
 
