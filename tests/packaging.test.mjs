@@ -23,7 +23,7 @@ test('service-only installation requires the matching registered Premiere UXP ve
 
 test('portable plugin archives retain UTF-8 names, binary contents and executable Mac wrappers', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'caption-zip-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.mkdirSync(path.join(root, 'Café')); fs.writeFileSync(path.join(root, 'Café', 'panel.txt'), 'Editable caption ✓'); fs.writeFileSync(path.join(root, 'install.sh'), '#!/bin/zsh\n');
+  fs.mkdirSync(path.join(root, 'Café')); fs.writeFileSync(path.join(root, 'Café', 'panel.txt'), 'Editable caption ✓'); fs.writeFileSync(path.join(root, 'install.sh'), '#!/bin/zsh\r\n');
   const archive = path.join(root, 'plugin.ccx'); writeZip(archive, root, ['Café', 'install.sh']);
   const bytes = fs.readFileSync(archive), end = bytes.length - 22;
   assert.equal(bytes.readUInt32LE(end), 0x06054b50); assert.equal(bytes.readUInt16LE(end + 10), 2);

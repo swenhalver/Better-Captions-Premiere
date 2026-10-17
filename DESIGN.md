@@ -77,11 +77,11 @@ components:
     padding: ".8rem .15rem"
   workspace-tab-selected:
     textColor: "{colors.accent}"
-  word-state-tab-selected:
+  word-state-selected:
     backgroundColor: "{colors.selection}"
-    textColor: "{colors.panel-text}"
+    textColor: "{colors.accent}"
     rounded: "{rounded.control}"
-    padding: ".45rem .2rem"
+    padding: ".4rem .3rem"
   status-tag:
     backgroundColor: "transparent"
     textColor: "{colors.panel-secondary}"
@@ -91,6 +91,20 @@ components:
     backgroundColor: "{colors.selection}"
     textColor: "{colors.panel-text}"
     padding: ".875rem 1.125rem"
+  word-timing-block:
+    backgroundColor: "{colors.surface-raised}"
+    textColor: "{colors.panel-text}"
+    padding: ".3rem"
+    height: "2.3rem"
+  word-timing-block-selected:
+    backgroundColor: "{colors.selection}"
+    textColor: "{colors.panel-text}"
+  text-area-key-selected:
+    backgroundColor: "{colors.selection}"
+    textColor: "{colors.accent}"
+    rounded: "{rounded.control}"
+    padding: ".25rem"
+    width: "1.8rem"
   settings-section:
     backgroundColor: "transparent"
     textColor: "{colors.panel-text}"
@@ -105,7 +119,7 @@ components:
 
 Better Captions belongs beside footage in Premiere: calm charcoal surfaces, compact system typography and familiar rectangular controls. Blue identifies selection, focus and the main action; neutral hierarchy keeps the transcript readable under controlled ambient light.
 
-The interface is dense without hiding state. Labels stay explicit, timing uses tabular figures, and supporting detail opens through native disclosures. The browser review shell is a fixture, not part of the installed panel’s visual system.
+The interface is dense without hiding state. Labels stay explicit, timing uses tabular figures, and supporting detail opens through native disclosures. Selection connects sentence timing, word appearance and caption placement without adding a video canvas. The browser review shell remains a fixture around the installed panel’s visual system.
 
 **Key Characteristics:**
 
@@ -113,6 +127,7 @@ The interface is dense without hiding state. Labels stay explicit, timing uses t
 - Compact, familiar rectangular controls.
 - Restrained blue action and selection.
 - Flat surfaces with visible keyboard states.
+- Explicit selection and editing scope.
 
 ## Colors
 
@@ -121,8 +136,8 @@ A neutral editor palette uses blue for interaction and soft semantic colors for 
 ### Primary
 
 - **Action Blue** (`primary`, `primary-hover`): the apply action and its hover state.
-- **Selection Slate** (`selection`): selected cues and the active compact word-state tab.
-- **Focus Blue** (`accent`): keyboard outlines, active workspace tabs, playback timing and native range controls.
+- **Selection Slate** (`selection`): selected cues, words, appearance states and enabled keyframe controls.
+- **Focus Blue** (`accent`): keyboard outlines, active workspace tabs, selected word boundaries, enabled keyframe icons, playback timing and range controls.
 
 ### Neutral
 
@@ -163,6 +178,10 @@ Use the shared spacing rhythm for section padding and gaps. Field groups use two
 
 Transcript list and editor stack below the container breakpoint (48rem, or 624px at the base size). At that breakpoint, they form columns `minmax(18rem, .8fr)` and `minmax(22rem, 1fr)`. The stacked list is bounded by `clamp(7rem, 16vh, 12rem)`; expanded lists allow (60vh). Use container width, not the outer browser window, to choose this topology.
 
+The current panel has two workspaces: Transcript and Styling. Transcript puts search and sentence grouping above the caption list, then anchors the selected sentence’s word lane and timing controls in its editor. Sentence text, caption timing, and split/merge controls use disclosures below that lane. Styling remains a single column at all panel widths, with appearance selection, a type sample, selected-caption geometry, and disclosed appearance/layout controls. Selection persists when switching workspaces.
+
+The word lane scrolls horizontally inside its own bordered region. Its width follows the sentence length and zoom, with a minimum of (320px) before zoom and at least the available container width. It never wraps into multiple timing lanes. Narrow panels retain the same controls; toolbar buttons may wrap, text wraps, and X/Y fields stay in two columns.
+
 ## Elevation & Depth
 
 A darker field ground, stepped charcoal surfaces and single-pixel separators establish hierarchy. Controls remain flat at rest and during interaction.
@@ -171,7 +190,7 @@ A darker field ground, stepped charcoal surfaces and single-pixel separators est
 
 ## Shapes
 
-Controls, tags and loading placeholders share gently squared corners through `rounded.control`. Panels, rows and workspace tabs keep straight section edges. Borders and dividers use a single-pixel stroke; workspace selection uses a two-pixel underline. Icons are simple inline strokes, usually (1.25rem) inside a square (2.25rem) action.
+Controls, tags and loading placeholders share gently squared corners through `rounded.control`. Panels, rows, word-timing blocks and workspace tabs keep straight section edges. Borders and dividers use a single-pixel stroke; workspace selection uses a two-pixel underline. Icons are simple inline strokes, usually (1.25rem) inside a square (2.25rem) action. The compact keyframe toolbar uses (1.1rem) SVG icons inside (1.8rem) controls.
 
 ## Components
 
@@ -187,7 +206,7 @@ Explicit labels sit above dark recessed fields with a small gap (0.375rem). Inpu
 
 ### Navigation
 
-Workspace tabs use muted text, semibold weight and an accent underline when selected. Compact word-state tabs sit inside a dark bordered group and use a filled selection state. Preserve tab semantics and Arrow, Home and End keyboard navigation.
+The Transcript and Styling workspace tabs use muted text, semibold weight and an accent underline when selected. Preserve tab semantics and Arrow, Home and End keyboard navigation. Word appearance uses a separate three-button group labeled Past words, Current word and Next words. These equal-width buttons use caption-size text; the pressed state combines Selection Slate with an accent border and text. Preserve their pressed-button semantics rather than presenting them as additional workspaces.
 
 ### Tags
 
@@ -197,9 +216,29 @@ The browser-demo status tag is a small outlined rectangle with muted caption tex
 
 Settings use flat, full-width sections separated by thin borders. Native summary markers and compact semibold headings reveal secondary controls. There is no floating card style or shadow treatment.
 
+Typography is open by default for the chosen word state. Stroke, Shadow and Word bubble are collapsed groups whose summaries show On or Off; their fields remain visible but disabled when the effect is disabled. Caption layout & background, animation, initial placement and timing sync remain secondary to the active editing task.
+
 ### Caption Cues
 
 Each full-width row combines a muted ordinal, tabular timecode and wrapping caption text. Selection uses Selection Slate; hover uses Raised Charcoal; playing timing uses Focus Blue. Keyboard focus is drawn inside the row with outline-offset (-2px).
+
+### Sentence Word Lane
+
+The selected sentence has clickable words above a single horizontal time lane. Timing blocks have widths and positions proportional to the word’s duration and start time. Selected blocks use Selection Slate with an accent border; the selected word has two narrow accent handles. A three-label ruler, zoom selector, frame count, start/end fields, one-frame nudge buttons and a playhead range expose timing without a second timeline row.
+
+**The Single Lane Rule.** Keep the selected sentence’s words on one time-based lane. Edges snap to sequence frames, stop at adjacent boundaries, and move together where connected. Preserve both draggable handles and explicit numeric/frame controls.
+
+### Word Appearances and Type Sample
+
+Each of Past words, Current word and Next words has independent font family, size, weight, italic, color, opacity, letter spacing, case, stroke, shadow and word-bubble settings. The sample uses these content styles on clickable words, wraps them inside a recessed rectangular field, and is explicitly labeled “Type sample.” It is an interactive specimen; Premiere’s Program Monitor remains the video output surface. User-chosen caption colors, bubble corners and text effects do not become panel UI tokens.
+
+### Position & Size
+
+A flat disclosure labeled Selected caption groups Position, Width and Height. Position exposes X/Y fields; width and height each occupy a full field row. Each track has a stopwatch, static/key count, previous/add-or-remove/next keyframe icons, and interpolation. Pressed stopwatches and key diamonds use Selection Slate with accent icons. The compact toolbars retain the common keyboard outline and disabled states.
+
+A caption-frame field and range control lead the tracks; refresh and Undo remain visible above them. The geometry controls apply across all word states of the selected caption. Width reflows text at its existing font size, while height is independent. The browser fixture labels its sample interactions; native Motion controls require an applied caption.
+
+**The Explicit Scope Rule.** Label all-caption appearance controls separately from selected-caption Position & size controls. Keep the selected sentence visible in Styling and retain its selection when changing workspaces.
 
 ## Do's and Don'ts
 
@@ -210,6 +249,8 @@ Each full-width row combines a muted ordinal, tabular timecode and wrapping capt
 - **Do** preserve visible keyboard focus, explicit field labels and tabular timing.
 - **Do** use muted semantic status colors with actionable text.
 - **Do** keep details in named disclosures when they would crowd a narrow panel.
+- **Do** expose selected-caption geometry separately from the three all-caption word appearances.
+- **Do** keep the word lane horizontally scrollable and provide numeric and frame-step timing controls.
 
 ### Don't:
 
@@ -219,4 +260,4 @@ Each full-width row combines a muted ordinal, tabular timecode and wrapping capt
 - **Don't** confuse user-configurable caption output styling with panel UI tokens.
 - **Don't** carry the browser review toolbar or synthetic fixture labels into native chrome.
 
-<!-- Extracted from app.css, main-webview.svelte and components/*.svelte; reviewed against desktop and docked QA captures. BrowserPreview.svelte is a review wrapper only. -->
+<!-- Updated from app.css, main-webview.svelte, PanelTabs, TranscriptPreview, WordTimeline, WordStates, WordSample, TextAreaControls and StylePanel for the approved 2026-10-17 production composition. Browser desktop, docked and keyframe captures support the visual rules; Adobe runtime acceptance remains unverified. BrowserPreview.svelte is a review wrapper only. -->

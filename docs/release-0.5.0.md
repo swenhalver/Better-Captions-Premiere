@@ -21,9 +21,9 @@ The CCX alone is not the complete installation: rendering also requires the back
 
 ## Verification
 
-- Automated tests cover the real native-action adapter with a Premiere SDK fixture, clip-identity changes during asynchronous preparation, refused/silent transactions, source-time keys, independent dimensions, Undo, per-state rendering, timing invariants, protocol isolation, native paths and package permissions.
+- The local Windows suite passed all **215 tests**. Automated tests cover the real native-action adapter with a Premiere SDK fixture, clip-identity changes during asynchronous preparation, refused/silent transactions, source-time keys, independent dimensions, Undo, per-state rendering, timing invariants, protocol isolation, native paths and package permissions.
 - Svelte/TypeScript and both production bundles are checked during packaging.
-- GitHub Actions runs the test/build/package workflow on macOS and Windows. Consult the linked run for the actual result; a CI build does not run Adobe Premiere.
+- The [GitHub Actions test/build/package run](https://github.com/swenhalver/Better-Captions-Premiere/actions/runs/39009788040) passed on macOS and Windows. CI does not run Adobe Premiere.
 - Browser review uses synthetic captions and sample keyframes. It does not control a remote Premiere installation.
 
 Actual **0.5.0 installation and keyframe behavior inside Premiere on macOS have not been exercised** on this Windows development machine. The current Windows Adobe installation attempt for 0.4.0 was blocked by UPIA `-903`. Earlier host verification files describe earlier native builds, not a live 0.5.0 acceptance test. This release is marked prerelease pending that host acceptance.

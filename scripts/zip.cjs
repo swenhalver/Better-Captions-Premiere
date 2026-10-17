@@ -14,7 +14,10 @@ function writeZip(destination, root, names) {
   if (files.length > 65535) throw new Error('Plugin archive has too many files.');
   const parts = [], central = []; let offset = 0;
   for (const file of files) {
-    const name = Buffer.from(file.name), data = fs.readFileSync(file.source), compressed = zlib.deflateRawSync(data), crc = crc32(data);
+    const name = Buffer.from(file.name), source = fs.readFileSync(file.source);
+    // A Windows checkout can use CRLF; macOS shell wrappers must still contain LF.
+    const data = file.name.endsWith('.sh') ? Buffer.from(source.toString('utf8').replace(/\r\n/g,'\n')) : source;
+    const compressed = zlib.deflateRawSync(data), crc = crc32(data);
     if (data.length > 0xffffffff || offset + compressed.length > 0xffffffff) throw new Error('Plugin archive exceeds ZIP size limits.');
     const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x800, 6); local.writeUInt16LE(8, 8); local.writeUInt16LE(0x21, 12);
     local.writeUInt32LE(crc, 14); local.writeUInt32LE(compressed.length, 18); local.writeUInt32LE(data.length, 22); local.writeUInt16LE(name.length, 26);
