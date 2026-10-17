@@ -68,6 +68,8 @@ function nativeTransport(host: UXPMessageHost, webviewAPI: unknown) {
         case 'agent.setCaptions': if (!handler) throw new Error('The caption editor is not ready.'); result = await handler.setCaptions(args[0] as Parameters<AgentHandler['setCaptions']>[0]); break;
         case 'agent.refresh': if (!handler) throw new Error('The caption editor is not ready.'); result = await handler.refresh(); break;
         case 'agent.apply': if (!handler) throw new Error('The caption editor is not ready.'); result = await handler.apply(); break;
+        case 'agent.readArea': if (!handler?.readArea) throw new Error('Caption area inspection is unavailable.'); result = await handler.readArea(args[0]); break;
+        case 'agent.editArea': if (!handler?.editArea) throw new Error('Caption area editing is unavailable.'); result = await handler.editArea(args[0]); break;
         default: throw new Error('Unsupported caption editor method.');
       }
       if (data.id) send({ id: data.id, result: result === undefined ? null : result });

@@ -68,6 +68,13 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
       const context=await checkSequence(sequenceId);
       return readJob('readCaptionAreaDescriptor',{sequenceId:context.id,projectPath:context.projectPath,cues:[{id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,renderBounds:caption.renderBounds}]});
     },
+    async patchCaptionKeyValues(caption:CaptionItem,patch:unknown,sequenceId=currentId){
+      const context=await checkSequence(sequenceId);
+      const file=jobFile(context,'key-value-job',{sequenceId:context.id,projectPath:context.projectPath,cues:[{id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,renderBounds:caption.renderBounds}],patch});
+      const result=await host('patchCaptionKeyValues',[file]);
+      try{runtime.fs.unlinkSync(file);}catch{} // Failed mutations retain their recovery job.
+      return result;
+    },
     async readCaptionArea(_caption:CaptionItem,_sequenceId:string,_frame:number):Promise<import('./lib/text-area').TextAreaState>{throw new Error('Native text-area editing requires the UXP panel.');},
     async editCaptionArea(_caption:CaptionItem,_sequenceId:string,_request:import('./lib/text-area').TextAreaEdit):Promise<import('./lib/text-area').TextAreaState>{throw new Error('Native text-area editing requires the UXP panel.');},
     isDemo: !cep,

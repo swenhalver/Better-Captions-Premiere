@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-import {validateStylePatch,validateCaptionPatch} from '../webview-ui/src/lib/agent-bridge.ts';
+import {validateStylePatch,validateCaptionPatch,validateAreaRead,validateAreaEdit} from '../webview-ui/src/lib/agent-bridge.ts';
 import {DEFAULT_STYLE,DEFAULT_ANIMATION} from '../webview-ui/src/lib/types.ts';
 
 const ROOT='/Users/test/Library/Application Support/Better Captions/agent';
@@ -54,6 +54,8 @@ async function fixture(){
     async setCaptions(captions){calls.push(['setCaptions',clone(captions)]);state.captions=validateCaptionPatch(captions,state.captions);await Promise.resolve();},
     async refresh(){calls.push(['refresh']);await Promise.resolve();state.refreshed=true;},
     async apply(){calls.push(['apply']);await Promise.resolve();state.applied=true;},
+    async readArea(payload){const safe=validateAreaRead(payload,state.captions);calls.push(['readArea',clone(safe)]);return {signature:'area-confirmed',frame:safe.frame??0,tracks:{width:{value:[640],keys:[]}}};},
+    async editArea(payload){const safe=validateAreaEdit(payload,state.captions);calls.push(['editArea',clone(safe)]);return {signature:'area-updated',frame:safe.edit.frame,tracks:{width:{value:safe.edit.value??[640],keys:[]}}};},
   };
   const module={exports:{}};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/agent.js',import.meta.url),'utf8'),{module,exports:module.exports,require(name){required.push(name);assert.equal(name,'./storage.js');return storage;},Date:{now:()=>clock},console:{error:error=>errors.push(error)},setInterval(callback,ms){const id=++timerId;timers.set(id,{callback,ms});return id;},clearInterval(id){timers.delete(id);}}, {filename:'uxp/agent.js'});
@@ -72,7 +74,7 @@ test('UXP agent discovers the same private CLI root and publishes resolved async
   assert.deepEqual(f.required,['./storage.js']);assert.ok(f.entries.has(ROOT+'/requests'));assert.ok(f.entries.has(ROOT+'/responses'));
   const initial=JSON.parse((await f.instances.getEntries())[0].text);
   assert.equal(initial.version,1);assert.match(initial.instanceId,/^[a-f0-9]{32}$/);assert.equal(initial.sequenceId,'sequence-a');assert.equal(initial.busy,false);
-  assert.deepEqual(initial.capabilities,['get_state','patch_style','patch_animation','set_captions','set_position','refresh','apply']);
+  assert.deepEqual(initial.capabilities,['get_state','patch_style','patch_animation','set_captions','set_position','read_area','edit_area','refresh','apply']);
   f.state.sequenceName='New name';f.advance(5000);await f.tick(5000);
   const latest=JSON.parse((await f.instances.getEntries())[0].text);assert.equal(latest.sequenceName,'New name');assert.equal(latest.updatedAt,initial.updatedAt+5000);assert.equal(f.errors.length,0);
 });
@@ -92,6 +94,19 @@ test('global and per-caption locations use trusted validators and keep timeline 
   const replacement={...f.state.captions[0],mediaPath:'/unrelated.mov',clipNodeId:'wrong',words:[{text:'Changed',startTime:0,endTime:.9,isActive:false}]};
   const words=await f.request('set_captions',{captions:[replacement]});await f.tick(500);assert.equal((await f.response(words.id)).ok,true);assert.equal(f.state.captions[0].text,'Changed');assert.equal(f.state.captions[0].mediaPath,'/managed/caption.mov');assert.equal(f.state.captions[0].clipNodeId,'timeline-clip');
   const invalid=await f.request('set_position',{captionId:'cue-1',x:2,y:.6});await f.tick(500);assert.equal((await f.response(invalid.id)).ok,false);assert.deepEqual(f.state.captions[0].position,{x:.4,y:.6});
+});
+
+test('private area hooks return confirmed native results and reject untrusted targets before edits',async t=>{
+  const f=await fixture();t.after(f.stop);
+  const read=await f.request('read_area',{captionId:'cue-1',frame:12});await f.tick(500);
+  const result=await f.response(read.id);assert.equal(result.ok,true);assert.equal(result.result.signature,'area-confirmed');assert.equal(result.result.frame,12);
+  const edit=await f.request('edit_area',{captionId:'cue-1',edit:{operation:'set',signature:'area-confirmed',frame:12,track:'width',value:[700]}});await f.tick(500);
+  const updated=await f.response(edit.id);assert.equal(updated.ok,true);assert.equal(updated.result.tracks.width.value.length,1);assert.equal(updated.result.tracks.width.value[0],700);
+  const mutations=f.calls.filter(call=>call[0]==='editArea').length;
+  for(const payload of [{captionId:'missing',edit:{}},{captionId:'cue-1',edit:{operation:'exec'}},{captionId:'cue-1',mediaPath:'/unrelated.mov',edit:{operation:'undo',signature:'ok',frame:0}}]){
+    const bad=await f.request('edit_area',payload);await f.tick(500);assert.equal((await f.response(bad.id)).ok,false);
+  }
+  assert.equal(f.calls.filter(call=>call[0]==='editArea').length,mutations);
 });
 
 test('requests are bound to instance, sequence, finite expiry and allowlisted action before any mutation',async t=>{

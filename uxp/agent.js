@@ -1,7 +1,7 @@
 'use strict';
 const { privateRoot, ensureFolder, readJSON, writeJSON, randomId } = require('./storage.js');
 const MAX_BYTES = 5000000;
-const ACTIONS = ['get_state', 'patch_style', 'patch_animation', 'set_captions', 'set_position', 'refresh', 'apply'];
+const ACTIONS = ['get_state', 'patch_style', 'patch_animation', 'set_captions', 'set_position', 'read_area', 'edit_area', 'refresh', 'apply'];
 const NONCE = /^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i;
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function bounded(value) {
@@ -54,6 +54,12 @@ async function startAgentBridge(handler) {
       }
       case 'refresh': await handler.refresh(); return;
       case 'apply': await handler.apply(); return;
+      case 'read_area':
+        if(typeof handler.readArea!=='function')throw new Error('Caption area controls are unavailable.');
+        return handler.readArea(payload);
+      case 'edit_area':
+        if(typeof handler.editArea!=='function')throw new Error('Caption area controls are unavailable.');
+        return handler.editArea(payload);
       default: throw new Error('Unsupported caption action.');
     }
   }
@@ -85,10 +91,10 @@ async function startAgentBridge(handler) {
           if (!alive) throw new Error('The caption agent stopped before the request could run.');
           // Claim before any UI action. A replay cannot repeat a timeline edit.
           await entry.delete(); claimed = true;
-          await dispatch(request, state);
+          const result = await dispatch(request, state);
           const latest = await handler.getState();
           if (latest?.sequenceId !== request.sequenceId) throw new Error('The active sequence changed while the request was running. Read state again.');
-          await writeJSON(responses, entry.name, bounded({ version: 1, id, ok: true, completedAt: Date.now(), state: latest }));
+          await writeJSON(responses, entry.name, bounded({ version: 1, id, ok: true, completedAt: Date.now(), state: latest, ...(result===undefined?{}:{result}) }));
         } catch (error) {
           const message = String(error?.message || error).slice(0, 2000);
           await writeJSON(responses, entry.name, { version: 1, id, ok: false, completedAt: Date.now(), error: message });

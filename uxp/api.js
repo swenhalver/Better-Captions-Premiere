@@ -188,7 +188,10 @@ function createHostAPI(options = {}) {
       const link={id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,renderBounds:caption.renderBounds?JSON.parse(JSON.stringify(caption.renderBounds)):undefined};
       const revalidate=()=>backend('readCaptionAreaDescriptor',[link],id);
       const descriptor=await revalidate(), {project,sequence}=await sequenceContext(id);
-      return require('./text-area.js').editArea(ppro,project,sequence,descriptor,request,revalidate);
+      // Call the internal backend directly while this native lane is occupied.
+      // Re-entering the public serialized API here would deadlock the edit.
+      const patchKeyValues=patch=>backend('patchCaptionKeyValues',[link,patch],id);
+      return require('./text-area.js').editArea(ppro,project,sequence,descriptor,request,revalidate,{patchKeyValues});
     },
     async getColorScheme() { return { theme: 'darkest', colors: {} }; },
     async startAgentBridge(proxy) { return require('./agent.js').startAgentBridge(proxy); },

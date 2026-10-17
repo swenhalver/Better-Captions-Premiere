@@ -34,7 +34,7 @@ function harness(t, ports = {}) {
     getTime: async captured => ports.getTime ? ports.getTime(captured) : nativeTime ?? current.currentTime,
     seek: async (captured, time) => { if (ports.seek) await ports.seek(captured, time); current = { ...current, currentTime: time }; controller.sync(); },
     state: next => { view = next; published.push(next); }, busy: value => busy.push(value), error: message => errors.push(message),
-    changed: async () => { changed++; },
+    changed: async (...args) => { changed++; await ports.changed?.(...args); },
   });
   t.after(() => controller.stop());
   return { controller, reads, edits, busy, errors, published, get view() { return view; }, get changed() { return changed; },
@@ -93,6 +93,50 @@ test('changing X rebases Y from the current frame before writing the shared Posi
   await h.controller.change({ operation: 'set', track: 'position' }, { index: 0, value: 777 });
   assert.deepEqual(h.edits[0].request.value, [777, 248]);
 });
+function keyedState(frame) {
+  const next = state(frame);
+  next.tracks.position.keys = [
+    { ticks: '0', frame: 0, value: [100, 200], interpolation: 'native' },
+    { ticks: '254016000000', frame: 24, value: [500, 600], interpolation: 'linear' },
+  ];
+  next.tracks.position.animated = true; return next;
+}
+test('selected-key value edits retain exact ticks and rebase XY from that key after the playhead moves', async t => {
+  const h = harness(t, { read: (_context, frame) => keyedState(frame) }); await h.controller.sync();
+  h.context = { ...h.context, currentTime: 13 }; h.nativeTime = 13;
+  await h.controller.sync();
+  await h.controller.change({ operation: 'set-key', track: 'position', keyTicks: '254016000000' }, { index: 0, value: 777 });
+  assert.equal(h.edits[0].request.frame, 72); assert.equal(h.edits[0].request.keyTicks, '254016000000');
+  assert.deepEqual(h.edits[0].request.value, [777, 600], 'Keep the selected key’s Y instead of copying playhead Y');
+});
+test('selected-key move, delete and interpolation commands keep their exact target at a different native frame', async t => {
+  for (const request of [
+    { operation: 'move-key', targetFrame: 48 }, { operation: 'remove-key' }, { operation: 'interpolation', interpolation: 'hold' },
+  ]) {
+    const h = harness(t, { read: (_context, frame) => keyedState(frame) }); await h.controller.sync(); h.nativeTime = 13;
+    await h.controller.change({ ...request, track: 'position', keyTicks: '254016000000' });
+    assert.equal(h.edits[0].request.frame, 72); assert.equal(h.edits[0].request.keyTicks, '254016000000');
+    if (request.operation === 'move-key') assert.equal(h.edits[0].request.targetFrame, 48);
+  }
+});
+test('a selected key removed by a native drag is never silently redirected to the playhead key', async t => {
+  let removed = false;
+  const h = harness(t, { read: (_context, frame) => removed ? state(frame) : keyedState(frame) }); await h.controller.sync(); removed = true;
+  await h.controller.change({ operation: 'set-key', track: 'position', keyTicks: '254016000000' }, { index: 0, value: 777 });
+  assert.equal(h.edits.length, 0); assert.match(h.errors[0], /selected keyframe changed/);
+});
+test('selected-key timing rejects non-frame or out-of-caption destinations before dispatch', async t => {
+  const h = harness(t, { read: (_context, frame) => keyedState(frame) }); await h.controller.sync();
+  for (const targetFrame of [-1, 96, 3.5, NaN]) {
+    await h.controller.refresh(); await h.controller.change({ operation: 'move-key', track: 'position', keyTicks: '254016000000', targetFrame });
+  }
+  assert.equal(h.edits.length, 0); assert.equal(h.errors.length, 4);
+});
+test('confirmed edit state is returned to the caller and change callback, including Redo capability', async t => {
+  let confirmed; const h = harness(t, { edit: (_context, request) => ({ ...state(request.frame), canUndo: true, canRedo: true }), changed: (_context, next) => { confirmed = next; } });
+  await h.controller.sync(); const result = await h.controller.change({ operation: 'redo' });
+  assert.equal(result.canRedo, true); assert.equal(confirmed, result); assert.equal(h.view, result);
+});
 test('pending transcript timings cannot offset keyframe edits from the real native clip', async t => {
   const h = harness(t); h.context = { ...h.context, currentTime: 12, caption: { ...h.context.caption, startTime: 11 } };
   await h.controller.sync();
@@ -111,6 +155,15 @@ test('playhead changes coalesce to one latest read without overlapping native wo
   assert.deepEqual(h.reads.map(read => read.frame), [0, 72]); assert.equal(h.view, null);
   latest.resolve(state(72)); await settle(); assert.equal(h.view.frame, 72); assert.equal(maximum, 1);
   await settle(); assert.equal(h.reads.length, 2, 'No timer or automatic read retry is installed');
+});
+test('multiple native dirty refreshes during a read coalesce into one latest read-only refresh', async t => {
+  const first = deferred(); let reads = 0;
+  const h = harness(t, { read: (_context, frame) => ++reads === 1 ? first.promise : state(frame) });
+  const pending = h.controller.sync(); await settle();
+  h.nativeTime = 13; h.controller.refresh(); h.controller.refresh(); h.controller.refresh();
+  assert.equal(h.reads.length, 1); first.resolve(state(0)); await pending; await settle();
+  assert.deepEqual(h.reads.map(read => read.frame), [0, 72]); assert.equal(h.view.frame, 72); assert.equal(h.edits.length, 0);
+  await settle(); assert.equal(h.reads.length, 2);
 });
 test('hiding the panel invalidates a pending read and retains its busy ownership until it returns', async t => {
   const pending = deferred(); const h = harness(t, { read: () => pending.promise });
@@ -222,14 +275,16 @@ test('presentation values cannot cross captions, sequences or hidden-panel lifet
 test('playhead frames are bounded to the selected caption', () => {
   assert.equal(captionFrame(context(), 2), 0); assert.equal(captionFrame(context(), 100), 95);
 });
-test('area and export busy owners cannot unlock each other', () => {
+test('area, agent and export busy owners cannot unlock each other', () => {
   const main = readFileSync(new URL('../webview-ui/src/main-webview.svelte', import.meta.url), 'utf8');
-  const functions = main.match(/  function setTimelineBusy\(busy: boolean\) \{[\s\S]*?\n  function setAreaBusy\(busy: boolean\) \{[^\n]+\}/)?.[0];
+  const functions = main.match(/  function setTimelineBusy\(busy: boolean\) \{[\s\S]*?\n  function setAgentAreaBusy\(busy: boolean\) \{[^\n]+\}/)?.[0];
   assert.ok(functions, 'Exercise the production busy aggregation functions');
-  const compiled = ts.transpileModule(`let exportBusy=false,areaBusy=false,timelineBusy=false,automaticReflow=false;const motionWatcher={reset(){}};${functions}\nexport const apply=setTimelineBusy,area=setAreaBusy,busy=()=>timelineBusy;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const compiled = ts.transpileModule(`let exportBusy=false,areaBusy=false,agentAreaBusy=false,timelineBusy=false,automaticReflow=false;const motionWatcher={reset(){}};${functions}\nexport const apply=setTimelineBusy,area=setAreaBusy,agent=setAgentAreaBusy,busy=()=>timelineBusy;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const api = {}; vm.runInNewContext(compiled, { exports: api });
   api.apply(true); api.area(true); api.apply(false); assert.equal(api.busy(), true); api.area(false); assert.equal(api.busy(), false);
   api.area(true); api.apply(true); api.area(false); assert.equal(api.busy(), true); api.apply(false); assert.equal(api.busy(), false);
+  api.agent(true); api.area(false); api.apply(false); assert.equal(api.busy(), true); api.agent(false); assert.equal(api.busy(), false);
+  api.agent(true); api.apply(true); api.agent(false); assert.equal(api.busy(), true); api.apply(false); assert.equal(api.busy(), false);
 });
 function selectionHarness(nativeSelect = async () => ({ ok: true, time: 10.2 })) {
   const main = readFileSync(new URL('../webview-ui/src/main-webview.svelte', import.meta.url), 'utf8');

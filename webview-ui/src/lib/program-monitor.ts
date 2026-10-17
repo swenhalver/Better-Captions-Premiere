@@ -6,6 +6,20 @@ export function captionLinks(captions: CaptionItem[]): CaptionLink[] {
     id: caption.id, clipNodeId: caption.clipNodeId, projectItemId: caption.projectItemId, mediaPath: caption.mediaPath,
   }));
 }
+export interface CaptionGeometryCue {
+  id: string; clipNodeId: string; projectItemId: string; path: string;
+  watchSignature: string; controlRevision?: string;
+}
+/** Accept read-only control updates only for the exact still-selected link. */
+export function confirmCaptionGeometry(captured: CaptionItem, current: CaptionItem, cue: CaptionGeometryCue | undefined) {
+  const link = (caption: CaptionItem) => JSON.stringify([caption.id, caption.clipNodeId, caption.projectItemId,
+    caption.mediaPath, caption.startTime, caption.endTime, caption.renderBounds]);
+  if (link(captured) !== link(current)) throw new Error('The caption link changed while its controls were being read. Refresh the selected caption.');
+  if (!cue || cue.id !== captured.id || cue.clipNodeId !== captured.clipNodeId || cue.projectItemId !== captured.projectItemId || cue.path !== captured.mediaPath) throw new Error('Premiere did not confirm the selected caption controls.');
+  const valid = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 4096;
+  if (!valid(cue.watchSignature) || cue.controlRevision !== undefined && !valid(cue.controlRevision)) throw new Error('Premiere returned an invalid caption control revision.');
+  return { watchSignature: cue.watchSignature, controlRevision: cue.controlRevision ?? null };
+}
 export function panelVisibilityMessage(value: unknown): boolean | null {
   let message = value;
   if (typeof message === 'string') {

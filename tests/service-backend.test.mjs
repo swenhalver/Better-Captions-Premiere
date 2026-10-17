@@ -120,3 +120,15 @@ test('geometry and opt-in diagnostics preserve captured sequence identity and re
   const data=request('readCaptionGeometry',[[]]);data.expiresAt=data.createdAt+11000;
   assert.throws(()=>service.validateServiceRequest(data,data.id+'.json'),/expired before execution/);
 });
+
+test('existing-key patch transport preserves bounded payload and inserts only the captured sequence identity', async () => {
+  const caption = { id: 'cue', clipNodeId: 'node', projectItemId: 'item', mediaPath: '/caption.mov' };
+  const patch = { version: 1, descriptor: { nativeMotion: {} }, updates: [{ property: 'width', ticks: '0', expectedValue: 100, value: 65 }] };
+  const calls = [], api = { getActiveSequenceInfo: info, patchCaptionKeyValues: (...args) => { calls.push(args); return { ok: true }; } };
+  const data = request('patchCaptionKeyValues', [caption, patch]);
+  assert.equal(service.validateServiceRequest(data, data.id + '.json').action, 'patchCaptionKeyValues');
+  await service.dispatchServiceRequest(api, data);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[caption, patch, 'seq-a']]);
+  const injected = request('patchCaptionKeyValues', [caption, patch, 'other-sequence']);
+  assert.throws(() => service.validateServiceRequest(injected, injected.id + '.json'), /arguments/);
+});

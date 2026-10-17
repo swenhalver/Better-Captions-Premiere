@@ -343,6 +343,22 @@ var BetterCaptionsHost = (function () {
         }
         return curveSignature({ sourceIn: String(sourceIn), ticksPerFrame: String(tpf), count: count, curves: curves, probes: sampled }).replace('motion-v1-', 'geometry-v1-');
     }
+    function controlRevision(clip, firstFrame, count, tpf, params, sizeSignature) {
+        var curve = copyCurve(parameterCurve(params.position, 256), 'position'), probes = [], sourceIn = Number(clip.inPoint.ticks);
+        if (curve.animated) {
+            var times = [], seen = {}, end = sourceIn + count * tpf;
+            function add(ticks) { ticks = Math.round(ticks); if (ticks >= sourceIn && ticks < end && !seen[String(ticks)]) { seen[String(ticks)] = true; times.push(ticks); } }
+            add(sourceIn + tpf / 2); add(end - tpf / 2); add(sourceIn + count * tpf / 2);
+            for (var i = 0; i + 1 < curve.keys.length; i++) {
+                var lo = Math.max(sourceIn, Number(curve.keys[i].ticks)), hi = Math.min(end, Number(curve.keys[i + 1].ticks));
+                if (hi > lo) { add(lo + (hi - lo) / 4); add(lo + (hi - lo) / 2); add(lo + 3 * (hi - lo) / 4); }
+            }
+            times.sort(function (a, b) { return a - b; });
+            var limit = Math.min(24, times.length);
+            for (var n = 0; n < limit; n++) { var at = times.length <= limit ? times[n] : times[Math.round(n * (times.length - 1) / (limit - 1))]; probes.push({ ticks: String(at), value: motionValue(params.position.getValueAtTime(ticksTime(at)), 'position') }); }
+        }
+        return curveSignature({ size: sizeSignature, position: curve, probes: probes }).replace('motion-v1-', 'controls-v1-');
+    }
     function motionProfile(clip, firstFrame, count, tpf) {
         assertNormalSpeed(clip);
         var params = motionParameters(clip), height = copyCurve(parameterCurve(params.height), 'height'), width = copyCurve(parameterCurve(params.width), 'width'), uniform = copyCurve(parameterCurve(params.uniform), 'uniform'), samples = [], values = [], fps = TICKS / tpf;
@@ -392,27 +408,90 @@ var BetterCaptionsHost = (function () {
                 if (!isFinite(requestedStart) || !isFinite(requestedEnd) || requestedStart < 0 || requestedEnd <= requestedStart) throw new Error('The caption has invalid box-animation timing.');
                 var firstFrame = Math.floor(requestedStart * fps + 0.0000001), endFrame = Math.ceil(requestedEnd * fps - 0.0000001), count = endFrame - firstFrame;
                 if (count < 1 || count > 100000000) throw new Error('The caption has invalid automatic-reflow timing.');
-                var signature = geometrySignature(clip, firstFrame, count, tpf, motionParameters(clip));
-                out.push({ id: caption.id, clipNodeId: String(clip.nodeId), projectItemId: String(clip.projectItem.nodeId), path: clip.projectItem.getMediaPath(), watchSignature: signature });
+                var params = motionParameters(clip), signature = geometrySignature(clip, firstFrame, count, tpf, params);
+                out.push({ id: caption.id, clipNodeId: String(clip.nodeId), projectItemId: String(clip.projectItem.nodeId), path: clip.projectItem.getMediaPath(), watchSignature: signature, controlRevision: controlRevision(clip, firstFrame, count, tpf, params, signature) });
             }
             return reply({ ok: true, cues: out });
         } catch (e) { return reply({ error: e.toString() }); }
     }
+    function areaDescriptor(p) {
+        var c = p.cues && p.cues.length === 1 ? p.cues[0] : null;
+        if (!p.sequenceId || !p.projectPath || !c || !c.id || !c.clipNodeId || !c.projectItemId || !c.mediaPath) throw new Error('Apply this caption before editing native keyframes.');
+        var s = sequence(p.sequenceId, p.projectPath), found = findClip(s, c.clipNodeId);
+        if (!found || !sameNode(found.clip.projectItem.nodeId, c.projectItemId) || found.clip.projectItem.getMediaPath() !== c.mediaPath) throw new Error('The caption timeline link changed. Sync timing from Premiere.');
+        var clip = found.clip, track = s.videoTracks[found.track];
+        if (track.isLocked()) throw new Error('Unlock the caption video track before editing its text area.');
+        assertNormalSpeed(clip);
+        var b = renderBounds(c.renderBounds, s), binding = {}, params = motionParameters(clip, binding), uniformAnimated = !!params.uniform.isTimeVarying();
+        binding.uniform = { animated: uniformAnimated, value: uniformAnimated ? null : !!motionValue(params.uniform.getValue(), 'uniform') };
+        var nativeMotion = {}, total = 0;
+        for (var i = 0; i < motionNames.length; i++) {
+            var name = motionNames[i]; nativeMotion[name] = copyCurve(parameterCurve(params[name], 256), name); total += nativeMotion[name].keys.length;
+        }
+        if (total > 1536) throw new Error('The caption has too many Motion keys for a bounded text-area edit.');
+        return { clip: clip, params: params, descriptor: {ok:true,sequenceId:p.sequenceId,projectPath:p.projectPath,clipNodeId:String(clip.nodeId),projectItemId:String(clip.projectItem.nodeId),path:c.mediaPath,track:found.track,startTicks:String(clip.start.ticks),endTicks:String(clip.end.ticks),inTicks:String(clip.inPoint.ticks),outTicks:String(clip.outPoint.ticks),ticksPerFrame:Number(s.timebase),frameWidth:s.frameSizeHorizontal,frameHeight:s.frameSizeVertical,bounds:b,motionBinding:binding,nativeMotion:nativeMotion} };
+    }
     function readCaptionAreaDescriptor(file) {
+        try { return reply(areaDescriptor(readPayload(file)).descriptor); }
+        catch (e) { return reply({error:e.toString()}); }
+    }
+    function sameAreaIdentity(expected, actual) {
+        if (!expected || expected.ok !== true) return false;
+        var names = ['sequenceId','projectPath','clipNodeId','projectItemId','path','track','startTicks','endTicks','inTicks','outTicks','ticksPerFrame','frameWidth','frameHeight'];
+        for (var i = 0; i < names.length; i++) if (expected[names[i]] !== actual[names[i]]) return false;
+        return stringify(expected.bounds) === stringify(actual.bounds) && stringify(expected.motionBinding) === stringify(actual.motionBinding);
+    }
+    function sameMotion(expected, actual) {
+        if (!expected || !actual) return false;
+        for (var i = 0; i < motionNames.length; i++) {
+            var name = motionNames[i], a = expected[name], b = actual[name];
+            if (!a || typeof a.animated !== 'boolean' || !(a.keys instanceof Array) || a.keys.length > 256 || a.animated !== b.animated || a.keys.length !== b.keys.length) return false;
+            if (!a.animated && !sameValue(a.value, b.value) || a.animated && a.value !== null) return false;
+            for (var k = 0; k < a.keys.length; k++) if (!a.keys[k] || typeof a.keys[k].ticks !== 'string' || a.keys[k].ticks !== b.keys[k].ticks || !sameValue(a.keys[k].value, b.keys[k].value)) return false;
+        }
+        return true;
+    }
+    function patchCaptionKeyValues(file) {
+        var attempted = [], before, p, info, rollbackErrors = [];
         try {
-            var p = readPayload(file), c = p.cues && p.cues.length === 1 ? p.cues[0] : null;
-            if (!c || !c.id || !c.clipNodeId || !c.projectItemId || !c.mediaPath) throw new Error('Apply this caption before editing native keyframes.');
-            var s = sequence(p.sequenceId, p.projectPath), found = findClip(s,c.clipNodeId);
-            if (!found || !sameNode(found.clip.projectItem.nodeId,c.projectItemId) || found.clip.projectItem.getMediaPath() !== c.mediaPath) throw new Error('The caption timeline link changed. Sync timing from Premiere.');
-            var clip = found.clip, track = s.videoTracks[found.track];
-            if (track.isLocked()) throw new Error('Unlock the caption video track before editing its text area.');
-            assertNormalSpeed(clip);
-            var b = renderBounds(c.renderBounds,s);
-            if (!b) throw new Error('Update Program Monitor once to create the caption text area.');
-            var binding = {}, params = motionParameters(clip,binding), uniformAnimated = !!params.uniform.isTimeVarying();
-            binding.uniform = { animated: uniformAnimated, value: uniformAnimated ? null : !!motionValue(params.uniform.getValue(),'uniform') };
-            return reply({ok:true,sequenceId:p.sequenceId,projectPath:p.projectPath,clipNodeId:String(clip.nodeId),projectItemId:String(clip.projectItem.nodeId),path:c.mediaPath,track:found.track,startTicks:String(clip.start.ticks),endTicks:String(clip.end.ticks),inTicks:String(clip.inPoint.ticks),ticksPerFrame:Number(s.timebase),frameWidth:s.frameSizeHorizontal,frameHeight:s.frameSizeVertical,bounds:b,motionBinding:binding});
-        } catch (e) { return reply({error:e.toString()}); }
+            p = readPayload(file); var patch = p.patch;
+            if (!patch || patch.version !== 1 || !(patch.updates instanceof Array) || patch.updates.length < 1 || patch.updates.length > 32) throw new Error('Invalid existing-key value patch.');
+            for (var patchKey in patch) if (Object.prototype.hasOwnProperty.call(patch, patchKey) && patchKey !== 'version' && patchKey !== 'descriptor' && patchKey !== 'updates') throw new Error('Unknown existing-key patch property.');
+            info = areaDescriptor(p); before = info.descriptor;
+            if (!sameAreaIdentity(patch.descriptor, before) || !sameMotion(patch.descriptor.nativeMotion, before.nativeMotion)) throw new Error('Motion or the caption timeline identity changed before the key edit. Refresh and try again.');
+            var desired = parseJSON(stringify(before.nativeMotion)), planned = [], seen = {};
+            for (var i = 0; i < patch.updates.length; i++) {
+                var update = patch.updates[i];
+                if (!update || (update.property !== 'position' && update.property !== 'width' && update.property !== 'height') || typeof update.ticks !== 'string' || !/^\d+$/.test(update.ticks) || !isFinite(Number(update.ticks))) throw new Error('Invalid existing-key property or time.');
+                for (var updateKey in update) if (Object.prototype.hasOwnProperty.call(update, updateKey) && updateKey !== 'property' && updateKey !== 'ticks' && updateKey !== 'expectedValue' && updateKey !== 'value') throw new Error('Unknown existing-key update property.');
+                var keyId = update.property + ':' + update.ticks;
+                if (seen[keyId]) throw new Error('Duplicate existing-key update.'); seen[keyId] = true;
+                var curve = desired[update.property], found = null;
+                for (var k = 0; k < curve.keys.length; k++) if (curve.keys[k].ticks === update.ticks) found = curve.keys[k];
+                if (!curve.animated || !found || Number(update.ticks) < Number(before.inTicks) || Number(update.ticks) >= Number(before.outTicks)) throw new Error('Choose an existing key inside this caption. No key was added.');
+                if (!sameValue(found.value, update.expectedValue)) throw new Error('The existing key value changed. Refresh before editing it.');
+                var value = motionValue(update.value, update.property);
+                if (update.property === 'position' && (value[0] < -2 || value[0] > 3 || value[1] < -2 || value[1] > 3)) throw new Error('Caption Position must stay within the supported frame range.');
+                if (typeof info.params[update.property].setValueAtKey !== 'function') throw new Error('Premiere did not expose an in-place key value setter.');
+                planned.push({ property: update.property, ticks: update.ticks, previous: motionValue(found.value, update.property), value: value }); found.value = value;
+            }
+            // Every identity, key and old value is checked before the first write.
+            for (i = 0; i < planned.length; i++) {
+                var entry = planned[i]; attempted.push(entry);
+                var status = info.params[entry.property].setValueAtKey(ticksTime(entry.ticks), entry.value, 1);
+                if (status === false || !sameValue(info.params[entry.property].getValueAtKey(ticksTime(entry.ticks)), entry.value)) throw new Error('Premiere did not keep the existing key value.');
+            }
+            var after = areaDescriptor(p).descriptor;
+            if (!sameAreaIdentity(before, after) || !sameMotion(desired, after.nativeMotion)) throw new Error('Premiere changed another Motion value while applying the key patch.');
+            return reply({ok:true,descriptor:after,updates:planned});
+        } catch (e) {
+            for (var r = attempted.length - 1; r >= 0; r--) try {
+                var old = attempted[r]; info.params[old.property].setValueAtKey(ticksTime(old.ticks), old.previous, 1);
+                if (!sameValue(info.params[old.property].getValueAtKey(ticksTime(old.ticks)), old.previous)) throw new Error('The previous key value was not restored.');
+            } catch (restoreError) { rollbackErrors.push(restoreError.toString()); }
+            if (attempted.length && before) try { var restored = areaDescriptor(p).descriptor; if (!sameAreaIdentity(before, restored) || !sameMotion(before.nativeMotion, restored.nativeMotion)) throw new Error('The original Motion state could not be fully verified.'); } catch (verifyError) { rollbackErrors.push(verifyError.toString()); }
+            return reply({error:e.toString(),rolledBack:rollbackErrors.length===0,rollbackErrors:rollbackErrors,recoveryJob:file});
+        }
     }
     function readCaptionMotion(file) {
         try {
@@ -702,5 +781,5 @@ var BetterCaptionsHost = (function () {
             return reply({ ok: true, cues: out });
         } catch (e) { return reply({ error: e.toString() }); }
     }
-    return { context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, readCaptionAreaDescriptor: readCaptionAreaDescriptor, preflight: preflight, apply: apply, readTimeline: readTimeline };
+    return { context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, readCaptionAreaDescriptor: readCaptionAreaDescriptor, patchCaptionKeyValues: patchCaptionKeyValues, preflight: preflight, apply: apply, readTimeline: readTimeline };
 })();

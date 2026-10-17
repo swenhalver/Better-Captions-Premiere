@@ -19,7 +19,7 @@ function harness(t, options = {}) {
     const entries=new Map(),value={nativePath:path,getEntry:async name=>{if(path==='/private/service'&&name==='service.json')serviceReads++;if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
     folders.set(path,value);return value;
   }
-  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection']});
+  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues']});
   function setService(status) {
     const entries=folder('/private/service').entries;
     if(status===null)entries.delete('service.json');else entries.set('service.json',{data:status});
@@ -33,7 +33,7 @@ function harness(t, options = {}) {
         requests.push(value);
         // The real worker can claim a file before getEntry resolves: no input
         // remains, but its matching response is already available.
-        if(options.autoRespond!==false)respond(value,['Arial','Georgia']);
+        if(options.autoRespond!==false)respond(value,options.serviceResult?await options.serviceResult(value):['Arial','Georgia']);
         else parent.entries.set(name,{data:value,delete:async()=>parent.entries.delete(name)});
       }else parent.entries.set(name,{data:value,delete:async()=>{}});
     },
@@ -51,6 +51,7 @@ function harness(t, options = {}) {
     if(name==='./storage.js')return storage;
     if(name==='./transcript.js')return native;
     if(name==='./paths.js')return require('../uxp/paths.js');
+    if(name==='./text-area.js'&&options.textArea)return options.textArea;
     throw new Error('Unexpected import '+name);
   }};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/api.js',import.meta.url),'utf8'),context);
@@ -187,4 +188,31 @@ test('disposing during startup stops heartbeat polling without writing a service
   const h=harness(t,{service:null,serviceStartupGraceMs:100});
   const pending=assert.rejects(h.api.getFonts(),/plugin closed/);await tick();const reads=h.serviceReads;h.api.dispose();
   await pending;await delay(15);assert.equal(h.serviceReads,reads);assert.equal(h.requests.length,0);
+});
+
+test('native key edits use the internal CEP lane without deadlock or exposing a public arbitrary patch method',async t=>{
+  let editStarted,continueEdit;const entered=new Promise(resolve=>{editStarted=resolve;}),gate=new Promise(resolve=>{continueEdit=resolve;});
+  const descriptor={ok:true,path:'/projects/caption.mov',nativeMotion:{test:'captured'}};
+  const caption={id:'cue',clipNodeId:'clip',projectItemId:'item',mediaPath:descriptor.path,renderBounds:{width:576,height:512},words:[{text:'private words'}]};
+  const patch={version:1,descriptor,updates:[{property:'width',ticks:'0',expectedValue:100,value:125}]};
+  const request={signature:'sig',frame:23,operation:'set-key',track:'width',keyTicks:'0',value:[720]};
+  const h=harness(t,{serviceResult:input=>input.action==='readCaptionAreaDescriptor'?descriptor:{ok:true,descriptor,updates:patch.updates},textArea:{
+    editArea:async(ppro,project,sequence,captured,input,revalidate,options)=>{
+      assert.equal(sequence.name,'one');assert.deepEqual(captured,descriptor);assert.deepEqual(input,request);
+      editStarted();await gate;
+      caption.projectItemId='UI-mutated';caption.mediaPath='/unrelated.mov';caption.renderBounds.width=1;
+      const fresh=await revalidate();assert.deepEqual(fresh,descriptor);
+      return options.patchKeyValues(patch);
+    },
+  }});
+  await h.api.getActiveSequenceInfo();h.select('two');await h.api.getActiveSequenceInfo();
+  const editing=h.api.editCaptionArea(caption,'one',request);await entered;
+  const before=h.projectReads,queued=h.api.getActiveSequenceInfo();await tick();assert.equal(h.projectReads,before,'the outer edit retains the serial native lane');
+  continueEdit();assert.equal((await editing).ok,true);assert.equal((await queued).id,'two');
+  assert.deepEqual(h.requests.map(r=>r.action),['readCaptionAreaDescriptor','readCaptionAreaDescriptor','patchCaptionKeyValues']);
+  assert.ok(h.requests.every(r=>r.sequenceId==='one'));
+  for(const input of h.requests){assert.equal(input.args[0].projectItemId,'item');assert.equal(input.args[0].mediaPath,descriptor.path);assert.equal(input.args[0].renderBounds.width,576);assert.equal(Object.hasOwn(input.args[0],'words'),false);}
+  assert.deepEqual(h.requests.at(-1).args[1],patch);
+  assert.equal(Object.hasOwn(h.requests.at(-1),'expiresAt'),false,'a mutation must not acquire the read-expiry contract');
+  assert.equal(h.api.patchCaptionKeyValues,undefined,'only the trusted native editor gets the bounded internal callback');
 });

@@ -1,5 +1,6 @@
 import type {SessionState,StyleConfig,CaptionItem,AnimationConfig} from './types';
 import {validateCaptions} from './transcript/edit.ts';
+import type {TextAreaEdit} from './text-area';
 
 export interface AgentHandler {
   getState:()=>SessionState|null;
@@ -8,6 +9,8 @@ export interface AgentHandler {
   refresh:()=>unknown|Promise<unknown>;
   apply:()=>unknown|Promise<unknown>;
   patchAnimation?:(patch:Partial<AnimationConfig>)=>unknown|Promise<unknown>;
+  readArea?:(payload:unknown)=>unknown|Promise<unknown>;
+  editArea?:(payload:unknown)=>unknown|Promise<unknown>;
 }
 const styleNumbers:Record<string,[number,number]>={fontSize:[8,400],fontWeight:[100,1000],strokeOpacity:[0,1],strokeWidth:[0,30],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],backgroundOpacity:[0,1],backgroundPadding:[0,100],backgroundRadius:[0,200],positionX:[0,1],positionY:[0,1],maxWidth:[.1,1],lineHeight:[.6,3],maxWords:[1,30]};
 const stateNumbers:Record<string,[number,number]>={fontSize:[8,1200],letterSpacing:[-10,40],strokeWidth:[0,30],strokeOpacity:[0,1],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],fontWeight:[100,1000],sizeScale:[.4,3],opacity:[0,1],bubbleOpacity:[0,1],padding:[0,100],radius:[0,200]};
@@ -16,6 +19,35 @@ function number(value:unknown,min:number,max:number){if(typeof value!=='number'|
 function font(value:unknown){if(typeof value!=='string'||value.length>160||/[\u0000-\u001f]/.test(value))throw new Error('Invalid font family.');}
 function color(value:unknown){if(typeof value!=='string'||!/^#[0-9a-f]{6}$/i.test(value))throw new Error('Colors must be six-digit hex values.');}
 function bool(value:unknown){if(typeof value!=='boolean')throw new Error('Expected true or false.');}
+function allowedProperties(value:Record<string,unknown>,names:string[]){for(const key of Object.keys(value))if(!names.includes(key))throw new Error('Unknown caption area option: '+key);}
+function areaCaption(value:unknown,current:CaptionItem[]):string {
+  if(typeof value!=='string'||!/^[\w-]{1,160}$/.test(value)||!current.some(caption=>caption.id===value&&caption.clipNodeId&&caption.projectItemId&&caption.mediaPath))throw new Error('Choose an existing applied caption identity.');
+  return value;
+}
+function areaFrame(value:unknown){number(value,0,1000000);if(!Number.isInteger(value))throw new Error('Caption area frames must be integers.');}
+export function validateAreaRead(value:unknown,current:CaptionItem[]):{captionId:string;frame?:number}{
+  object(value);allowedProperties(value,['captionId','frame']);const captionId=areaCaption(value.captionId,current);
+  if(value.frame!==undefined)areaFrame(value.frame);
+  return {captionId,...(value.frame!==undefined?{frame:value.frame as number}:{})};
+}
+export function validateAreaEdit(value:unknown,current:CaptionItem[]):{captionId:string;edit:TextAreaEdit}{
+  object(value);allowedProperties(value,['captionId','edit']);const captionId=areaCaption(value.captionId,current),edit=value.edit;object(edit);
+  allowedProperties(edit,['signature','frame','track','operation','value','interpolation','keyTicks','targetFrame']);
+  const operations=['set','set-key','toggle','key','interpolation','move-key','remove-key','undo','redo'];
+  if(typeof edit.operation!=='string'||!operations.includes(edit.operation))throw new Error('Unknown caption area operation.');
+  if(typeof edit.signature!=='string'||!edit.signature||edit.signature.length>300000)throw new Error('Read the caption area signature before editing.');
+  areaFrame(edit.frame);
+  if(!['undo','redo'].includes(edit.operation)&&!['position','width','height'].includes(String(edit.track)))throw new Error('Choose Position, Width or Height.');
+  if(edit.track!==undefined&&!['position','width','height'].includes(String(edit.track)))throw new Error('Unknown caption area track.');
+  if(edit.keyTicks!==undefined&&(typeof edit.keyTicks!=='string'||!/^\d{1,21}$/.test(edit.keyTicks)))throw new Error('Invalid caption keyframe source ticks.');
+  if(['set-key','move-key','remove-key'].includes(edit.operation)&&edit.keyTicks===undefined)throw new Error('Choose an exact caption keyframe.');
+  if(edit.operation==='move-key'||edit.targetFrame!==undefined)areaFrame(edit.targetFrame);
+  if(edit.value!==undefined){if(!Array.isArray(edit.value)||edit.value.length!==(edit.track==='position'?2:1))throw new Error('Invalid caption area dimensions.');for(const item of edit.value)number(item,-10000000,10000000);}
+  if(['set','set-key'].includes(edit.operation)&&edit.value===undefined)throw new Error('Supply the caption area value.');
+  if(edit.interpolation!==undefined&&!['linear','hold','bezier'].includes(String(edit.interpolation)))throw new Error('Unknown caption interpolation preset.');
+  if(edit.operation==='interpolation'&&edit.interpolation===undefined)throw new Error('Choose an interpolation preset.');
+  return {captionId,edit:JSON.parse(JSON.stringify(edit)) as TextAreaEdit};
+}
 export function validateStylePatch(value:unknown):Partial<StyleConfig>{
   object(value);
   for(const [key,v] of Object.entries(value)){
@@ -62,7 +94,7 @@ export function startAgentBridge(handler:AgentHandler):()=>void {
   const instanceId=crypto.randomBytes(10).toString('hex'),instance=path.join(root,'instances',instanceId+'.json');
   let busy=false,alive=true;
   const atomic=(file:string,data:unknown)=>{const temp=file+'.tmp-'+instanceId;fs.writeFileSync(temp,JSON.stringify(data,null,2),{mode:0o600});fs.renameSync(temp,file);};
-  function announce(){const s=handler.getState();atomic(instance,{version:1,instanceId,sequenceId:s?.sequenceId??null,sequenceName:s?.sequenceName??null,updatedAt:Date.now(),busy,capabilities:['get_state','patch_style','patch_animation','set_captions','set_position','refresh','apply']});}
+  function announce(){const s=handler.getState();atomic(instance,{version:1,instanceId,sequenceId:s?.sequenceId??null,sequenceName:s?.sequenceName??null,updatedAt:Date.now(),busy,capabilities:['get_state','patch_style','patch_animation','set_captions','set_position','read_area','edit_area','refresh','apply']});}
   async function poll(){
     if(!alive||busy)return;busy=true;
     try{
@@ -75,7 +107,7 @@ export function startAgentBridge(handler:AgentHandler):()=>void {
         try{
           if(request.version!==1||request.id!==id||!Number.isFinite(request.createdAt)||Math.abs(Date.now()-request.createdAt)>120000)throw new Error('Invalid or expired agent request.');
           const state=handler.getState();if(!state)throw new Error('No active caption session.');if(request.sequenceId!==state.sequenceId)throw new Error('The active sequence changed. Read state again.');
-          const payload=request.payload??{};
+          const payload=request.payload??{};let result:unknown;
           switch(request.action){
             case 'get_state':break;
             case 'patch_style':await handler.patchStyle(validateStylePatch(payload));break;
@@ -92,9 +124,11 @@ export function startAgentBridge(handler:AgentHandler):()=>void {
             }
             case 'refresh':await handler.refresh();break;
             case 'apply':await handler.apply();break;
+            case 'read_area':if(!handler.readArea)throw new Error('Caption area controls are unavailable.');result=await handler.readArea(validateAreaRead(payload,state.captions));break;
+            case 'edit_area':if(!handler.editArea)throw new Error('Caption area controls are unavailable.');result=await handler.editArea(validateAreaEdit(payload,state.captions));break;
             default:throw new Error('Unsupported caption action.');
           }
-          atomic(response,{version:1,id,ok:true,completedAt:Date.now(),state:handler.getState()});
+          atomic(response,{version:1,id,ok:true,completedAt:Date.now(),state:handler.getState(),...(result===undefined?{}:{result})});
         }catch(e){atomic(response,{version:1,id,ok:false,completedAt:Date.now(),error:e instanceof Error?e.message:String(e)});}
         fs.unlinkSync(requestPath);
       }

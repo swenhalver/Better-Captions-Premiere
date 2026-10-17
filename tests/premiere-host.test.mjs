@@ -378,11 +378,11 @@ function countMotionReads(params){
 
 test('static long-caption geometry polling performs constant native work with no Time allocations or diagnostics',()=>{
   const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,1000000/FPS),params=attachNativeMotion(clip),calls=countMotionReads(params);
-  for(const name of ['position','anchor','rotation'])for(const method of ['getValue','getKeys','getValueAtTime','isTimeVarying'])params[name][method]=()=>{throw new Error('Unrelated Motion control must not be polled');};
+  for(const name of ['anchor','rotation'])for(const method of ['getValue','getKeys','getValueAtTime','isTimeVarying'])params[name][method]=()=>{throw new Error('Unrelated Motion control must not be polled');};
   clip.projectItem.getProjectMetadata=clip.projectItem.getXMPMetadata=()=>{throw new Error('Metadata must not be polled');};
   const result=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip)));
   assert.equal(result.ok,true);assert.match(result.cues[0].watchSignature,/^geometry-v1-/);assert.equal(result.cues[0].clipNodeId,clip.nodeId);assert.equal(result.cues[0].path,clip.projectItem.media);
-  assert.deepEqual(calls,{isTimeVarying:3,getValue:3,getKeys:0,getValueAtKey:0,getValueAtTime:0});assert.equal(f.nativeCalls.timeObjects,0);assert.equal(result.cues[0].samples,undefined);assert.equal(result.cues[0].motionInfo,undefined);
+  assert.deepEqual(calls,{isTimeVarying:4,getValue:4,getKeys:0,getValueAtKey:0,getValueAtTime:0});assert.equal(f.nativeCalls.timeObjects,0);assert.equal(result.cues[0].samples,undefined);assert.equal(result.cues[0].motionInfo,undefined);
 });
 
 test('animated geometry fingerprint bounds native key and interpolation reads independently of cue length',()=>{
@@ -464,4 +464,95 @@ test('older-host geometry lookup refuses an unbounded timeline scan',()=>{
   for(let i=0;i<2001;i++)f.clips.push({get nodeId(){inspected++;return 'unrelated-'+i;}});
   const result=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip)));
   assert.match(result.error,/too large for automatic caption geometry lookup/);assert.equal(inspected,2000);assert.equal(f.nativeCalls.timeObjects,0);
+});
+
+function keyPatchPayload(f, clip, updates, descriptor) {
+  const link = { id: 'caption', clipNodeId: clip.nodeId, projectItemId: clip.projectItem.nodeId, mediaPath: clip.projectItem.media, renderBounds: bounds() };
+  descriptor ??= JSON.parse(f.host.readCaptionAreaDescriptor(motionPayload(f, clip, { renderBounds: bounds() })));
+  f.files.set('/key-patch.json', JSON.stringify({ sequenceId: f.sequence.sequenceID, projectPath: f.project.path, cues: [link], patch: { version: 1, descriptor, updates } }));
+  return '/key-patch.json';
+}
+const keyUpdate = (property, seconds, expectedValue, value) => ({ property, ticks: new Time(seconds).ticks, expectedValue, value });
+function assertNoKeyRebuild(params) {
+  for (const parameter of Object.values(params)) for (const method of ['addKey', 'removeKey', 'removeKeyRange', 'setInterpolationTypeAtKey', 'setTimeVarying']) parameter[method] = () => assert.fail('In-place patch cannot call ' + method);
+}
+test('existing Position and sizing key values update in place without replacing native easing or key objects', () => {
+  const f = hostFixture(), clip = f.addClip(f.item('/caption.mov'), 0, 2), params = attachNativeMotion(clip, {
+    position: { keys: [{ time: 0, value: [.5, .5], customHandles: { incoming: [.1, .2] } }, { time: 1, value: [.6, .6] }] },
+    width: { keys: [{ time: 0, value: 100, customHandles: { outgoing: [.8, .9] } }, { time: 1, value: 120 }] },
+    height: { keys: [{ time: 0, value: 99 }, { time: 1, value: 105 }] }, uniform: { value: false }
+  });
+  assertNoKeyRebuild(params); const position = params.position.keys[0], width = params.width.keys[0], before = currentMotion(params), heightKeys = structuredClone(params.height.keys);
+  const result = JSON.parse(f.host.patchCaptionKeyValues(keyPatchPayload(f, clip, [keyUpdate('position', 0, [.5, .5], [.3, .7]), keyUpdate('width', 0, 100, 65)])));
+  assert.equal(result.ok, true); assert.equal(params.position.keys[0], position); assert.equal(params.width.keys[0], width);
+  assert.deepEqual(position.customHandles, { incoming: [.1, .2] }); assert.deepEqual(width.customHandles, { outgoing: [.8, .9] });
+  assert.deepEqual(position.value, [.3, .7]); assert.equal(width.value, 65); assert.deepEqual(params.height.keys, heightKeys);
+  assert.equal(result.descriptor.nativeMotion.width.keys[0].value, 65); assert.equal(result.descriptor.outTicks, clip.outPoint.ticks);
+  assert.equal(f.imports.length, 0); assert.equal(f.overwrites.length, 0); assert.equal(clip.projectItem.media, '/caption.mov');
+  const undo = JSON.parse(f.host.patchCaptionKeyValues(keyPatchPayload(f, clip, result.updates.map(update => ({ property: update.property, ticks: update.ticks, expectedValue: update.value, value: update.previous })), result.descriptor)));
+  assert.equal(undo.ok, true); assert.deepEqual(currentMotion(params), before); assert.equal(params.position.keys[0], position);
+});
+test('all stale clip identities, source clocks, bounds and untouched native curves reject before key writes', () => {
+  for (const field of ['sequenceId', 'projectPath', 'clipNodeId', 'projectItemId', 'path', 'track', 'startTicks', 'endTicks', 'inTicks', 'outTicks', 'ticksPerFrame', 'frameWidth', 'frameHeight', 'bounds', 'motionBinding', 'nativeMotion']) {
+    const f = hostFixture(), clip = f.addClip(f.item('/caption.mov'), 0, 2), params = attachNativeMotion(clip, { position: { keys: [{ time: 0, value: [.5, .5] }] } });
+    const descriptor = JSON.parse(f.host.readCaptionAreaDescriptor(motionPayload(f, clip, { renderBounds: bounds() })));
+    if (field === 'bounds') descriptor.bounds.width++;
+    else if (field === 'motionBinding') descriptor.motionBinding.parameterCount++;
+    else if (field === 'nativeMotion') descriptor.nativeMotion.rotation.value = 20;
+    else descriptor[field] = typeof descriptor[field] === 'number' ? descriptor[field] + 1 : descriptor[field] + '-stale';
+    const result = JSON.parse(f.host.patchCaptionKeyValues(keyPatchPayload(f, clip, [keyUpdate('position', 0, [.5, .5], [.3, .7])], descriptor)));
+    assert.match(result.error, /changed before the key edit/, field); assert.ok(Object.values(params).every(param => param.writes.length === 0), field);
+  }
+});
+test('key patches reject unknown actions, missing keys, duplicate updates and invalid values without any native edits', () => {
+  for (const updates of [[], Array.from({ length: 33 }, () => keyUpdate('width', 0, 100, 65)),
+    [keyUpdate('anchor', 0, [.5, .5], [.2, .2])], [keyUpdate('width', 0, 99, 65)], [keyUpdate('width', 1, 100, 65)],
+    [keyUpdate('width', 0, 100, 65), keyUpdate('width', 0, 100, 66)], [keyUpdate('width', 0, 100, 0)],
+    [keyUpdate('width', 0, 100, '65')], [keyUpdate('position', 0, [.5, .5], [4, .5])],
+    [{ ...keyUpdate('width', 0, 100, 65), command: 'removeKey' }]]) {
+    const f = hostFixture(), clip = f.addClip(f.item('/caption.mov'), 0, 2), params = attachNativeMotion(clip, { width: { keys: [{ time: 0, value: 100 }] }, position: { keys: [{ time: 0, value: [.5, .5] }] } });
+    const result = JSON.parse(f.host.patchCaptionKeyValues(keyPatchPayload(f, clip, updates)));
+    assert.ok(result.error, JSON.stringify(updates)); assert.ok(Object.values(params).every(param => param.writes.length === 0));
+  }
+});
+test('full Motion key counts, times and values are checked even on untouched controls', () => {
+  for (const change of ['count', 'time', 'value']) {
+    const f = hostFixture(), clip = f.addClip(f.item('/caption.mov'), 0, 2), params = attachNativeMotion(clip, { position: { keys: [{ time: 0, value: [.5, .5] }] }, anchor: { keys: [{ time: 0, value: [.5, .5] }] } });
+    const descriptor = JSON.parse(f.host.readCaptionAreaDescriptor(motionPayload(f, clip, { renderBounds: bounds() })));
+    if (change === 'count') params.anchor.keys.push({ time: 1, value: [.5, .5] });
+    if (change === 'time') params.anchor.keys[0].time = .5;
+    if (change === 'value') params.anchor.keys[0].value = [.4, .4];
+    const result = JSON.parse(f.host.patchCaptionKeyValues(keyPatchPayload(f, clip, [keyUpdate('position', 0, [.5, .5], [.3, .7])], descriptor)));
+    assert.match(result.error, /changed before the key edit/); assert.equal(params.position.writes.length, 0);
+  }
+});
+test('an ignored or later failing key value write rolls earlier edits back through the same keys', () => {
+  for (const failure of ['ignored', 'throw']) {
+    const f = hostFixture(), clip = f.addClip(f.item('/caption.mov'), 0, 2), params = attachNativeMotion(clip, { width: { keys: [{ time: 0, value: 100 }] }, height: { keys: [{ time: 0, value: 99 }] } });
+    const before = currentMotion(params), key = params.width.keys[0], original = params.height.setValueAtKey; let writes = 0;
+    params.height.setValueAtKey = function (...args) { if (++writes === 1) { if (failure === 'throw') throw new Error('native write failed'); return 0; } return original.apply(this, args); };
+    const result = JSON.parse(f.host.patchCaptionKeyValues(keyPatchPayload(f, clip, [keyUpdate('width', 0, 100, 65), keyUpdate('height', 0, 99, 80)])));
+    assert.ok(result.error); assert.equal(result.rolledBack, true); assert.deepEqual(currentMotion(params), before); assert.equal(params.width.keys[0], key);
+    assertNoKeyRebuild(params);
+  }
+});
+test('rollback failures report retained recovery details rather than false success', () => {
+  const f = hostFixture(), clip = f.addClip(f.item('/caption.mov'), 0, 2), params = attachNativeMotion(clip, { width: { keys: [{ time: 0, value: 100 }] }, height: { keys: [{ time: 0, value: 99 }] } });
+  params.height.setValueAtKey = () => { throw new Error('native disk/state refusal'); };
+  const result = JSON.parse(f.host.patchCaptionKeyValues(keyPatchPayload(f, clip, [keyUpdate('width', 0, 100, 65), keyUpdate('height', 0, 99, 80)])));
+  assert.equal(result.rolledBack, false); assert.ok(result.rollbackErrors.length); assert.equal(result.recoveryJob, '/key-patch.json');
+});
+test('control revisions change for native Position and width edits while size-only watch signatures ignore Position', () => {
+  const f = hostFixture(), clip = f.addClip(f.item('/caption.mov'), 0, 2), params = attachNativeMotion(clip, { uniform: { value: false } });
+  const read = () => JSON.parse(f.host.readCaptionGeometry(motionPayload(f, clip))).cues[0];
+  const before = read(); assert.match(before.controlRevision, /^controls-v1-/);
+  params.position.value = [.3, .7]; const moved = read();
+  assert.equal(moved.watchSignature, before.watchSignature); assert.notEqual(moved.controlRevision, before.controlRevision);
+  f.sequence.playhead.seconds = 1; assert.equal(read().controlRevision, moved.controlRevision);
+  params.width.value = 65; const resized = read(); assert.notEqual(resized.watchSignature, moved.watchSignature); assert.notEqual(resized.controlRevision, moved.controlRevision);
+});
+test('animated Position controls have bounded key and interpolation sampling independent of cue duration', () => {
+  const f = hostFixture(), clip = f.addClip(f.item('/caption.mov'), 0, 1000000/FPS), params = attachNativeMotion(clip, { position: { keys: Array.from({ length: 256 }, (_, index) => ({ time: index / 10, value: [.5 + index / 1000, .5] })) } });
+  const counts = countMotionReads(params), result = JSON.parse(f.host.readCaptionGeometry(motionPayload(f, clip)));
+  assert.equal(result.ok, true); assert.equal(counts.getValueAtKey, 256); assert.ok(counts.getValueAtTime <= 24); assert.equal(f.nativeCalls.timeObjects, counts.getValueAtTime);
 });

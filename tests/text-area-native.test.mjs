@@ -5,12 +5,13 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 const require=createRequire(import.meta.url),{readArea,editArea}=require('../uxp/text-area.js');
 const TICKS=254016000000,TPF=TICKS/24;
-const time=ticks=>({ticks:String(Math.round(Number(ticks))),seconds:Number(ticks)/TICKS});
+const time=ticks=>({ticks:typeof ticks==='string'?ticks:String(Math.round(Number(ticks))),seconds:Number(ticks)/TICKS});
 const clone=structuredClone;
-function harness({sourceIn=0,uniform=true,pointKeys=false}={}){
+function harness({sourceIn=0,uniform=true,pointKeys=false,float32Native=false}={}){
  const m={LINEAR:0,HOLD:4,BEZIER:5},ppro={Constants:{InterpolationMode:m,TrackItemType:{CLIP:1}},TickTime:{createWithTicks:time},PointF:class{constructor(x,y){this.x=x;this.y=y;}},ClipProjectItem:{cast:x=>x}};
  let prepared=0,lockDepth=0,transactionDepth=0;
  const createdActions=[];
+ const stored=value=>float32Native?(Array.isArray(value)?value.map(Math.fround):typeof value==='number'?Math.fround(value):clone(value)):clone(value);
  const action=(kind,run)=>{assert.ok(lockDepth>0&&transactionDepth>0,kind+' must be created inside the synchronous lock and transaction');createdActions.push(kind);return run;};
  function param(displayName,value){
    const p={displayName,value,animated:false,keys:[],evaluated:[],isTimeVarying(){return this.animated;},areKeyframesSupported:async()=>true,
@@ -19,26 +20,35 @@ function harness({sourceIn=0,uniform=true,pointKeys=false}={}){
      getValueAtTime:async t=>{p.evaluated.push(t.ticks);let value=p.value;if(p.animated&&p.keys.length){const a=[...p.keys].reverse().find(k=>Number(k.ticks)<=Number(t.ticks))??p.keys[0],b=p.keys.find(k=>Number(k.ticks)>Number(t.ticks))??a;let f=a===b||a.mode===m.HOLD?0:Math.max(0,(Number(t.ticks)-Number(a.ticks))/(Number(b.ticks)-Number(a.ticks)));if(a.mode===m.BEZIER)f=f*f*(3-2*f);value=Array.isArray(a.value)?a.value.map((v,i)=>v+(b.value[i]-v)*f):a.value+(b.value-a.value)*f;}return {value:clone(value)};},
      createKeyframe:v=>{if(pointKeys&&displayName==='Position')assert.ok(lockDepth>0&&transactionDepth>0,'PointKeyframe must be constructed in the synchronous locked transaction');prepared++;return {value:v instanceof ppro.PointF?[v.x,v.y]:clone(v),position:time(0),mode:m.LINEAR,...(!pointKeys||displayName!=='Position'?{async setTemporalInterpolationMode(mode){this.mode=mode;return true;},async getTemporalInterpolationMode(){return this.mode;}}:{})};},
      createSetTimeVaryingAction:v=>action('timeVarying',()=>{p.animated=v;if(!v)p.keys=[];}),
-     createSetValueAction:k=>action('setValue',()=>{p.value=clone(k.value);}),
+     createSetValueAction:k=>action('setValue',()=>{p.value=stored(k.value);}),
      createRemoveKeyframeAction:t=>action('removeKey',()=>{p.keys=p.keys.filter(k=>k.ticks!==t.ticks);}),
-     createAddKeyframeAction:k=>action('addKey',()=>{p.keys=p.keys.filter(old=>old.ticks!==k.position.ticks);p.keys.push({ticks:k.position.ticks,value:clone(k.value),mode:k.mode});p.keys.sort((a,b)=>Number(a.ticks)-Number(b.ticks));}),
+     createAddKeyframeAction:k=>action('addKey',()=>{p.keys=p.keys.filter(old=>old.ticks!==k.position.ticks);p.keys.push({ticks:k.position.ticks,value:stored(k.value),mode:k.mode});p.keys.sort((a,b)=>Number(a.ticks)-Number(b.ticks));}),
      createSetInterpolationAtKeyframeAction:(t,mode)=>action('interpolation',()=>{const key=p.keys.find(k=>k.ticks===t.ticks);key.mode=mode;if(pointKeys&&displayName==='Position')key.value=[0,0];})
    };return p;
  }
  const params={position:param('Position',[.5,.5]),height:param('Scale',100),width:param('Scale Width',75),uniform:param('Uniform Scale',uniform),rotation:param('Rotation',0),anchor:param('Anchor Point',[.5,.5])};
  let activeParams=params;
- const descriptor={ok:true,sequenceId:'seq-'+Math.random(),projectPath:'/project/test.prproj',clipNodeId:'clip',projectItemId:'item',path:'/project/caption.mov',track:0,startTicks:String(TICKS*10),endTicks:String(TICKS*12),inTicks:String(TICKS*sourceIn),ticksPerFrame:TPF,frameWidth:1920,frameHeight:1080,bounds:{width:1200,height:400}};
+ const descriptor={ok:true,sequenceId:'seq-'+Math.random(),projectPath:'/project/test.prproj',clipNodeId:'clip',projectItemId:'item',path:'/project/caption.mov',track:0,startTicks:String(TICKS*10),endTicks:String(TICKS*12),inTicks:String(TICKS*sourceIn),outTicks:String(TICKS*(sourceIn+2)),ticksPerFrame:TPF,frameWidth:1920,frameHeight:1080,bounds:{width:1200,height:400}};
  const freshDescriptor=clone(descriptor);
- const clip={getStartTime:async()=>time(descriptor.startTicks),getEndTime:async()=>time(descriptor.endTicks),getInPoint:async()=>time(descriptor.inTicks),getProjectItem:async()=>({getMediaFilePath:async()=>'/project/caption.mov'}),getComponentChain:async()=>({getComponentCount:()=>1,getComponentAtIndex:()=>({getMatchName:async()=> 'AE.ADBE Motion',getParamCount:()=>Object.keys(activeParams).length,getParam:i=>Object.values(activeParams)[i]})})};
+ const clip={getStartTime:async()=>time(descriptor.startTicks),getEndTime:async()=>time(descriptor.endTicks),getInPoint:async()=>time(descriptor.inTicks),getProjectItem:async()=>({getMediaFilePath:async()=>descriptor.path}),getComponentChain:async()=>({getComponentCount:()=>1,getComponentAtIndex:()=>({getMatchName:async()=> 'AE.ADBE Motion',getParamCount:()=>Object.keys(activeParams).length,getParam:i=>Object.values(activeParams)[i]})})};
  const sequence={getVideoTrack:async()=>({getTrackItems:async()=>[clip]})};
  let transactions=0,reject=false,revalidations=0,revalidator=async()=>clone(freshDescriptor);
- const revalidate=async()=>{revalidations++;return revalidator();};
+ const nativeMotion=()=>Object.fromEntries(Object.entries(activeParams).filter(([name])=>['position','width','height','uniform','rotation','anchor'].includes(name)).map(([name,p])=>[name,{animated:p.animated,value:p.animated?null:clone(p.value),keys:p.keys.map(k=>({ticks:k.ticks,value:clone(k.value)}))}]));
+ const revalidate=async()=>{revalidations++;return {...await revalidator(),nativeMotion:nativeMotion()};};
+ const patches=[];
+ let patcher=async patch=>{
+   patches.push(clone(patch));
+   assert.deepEqual(patch.descriptor.nativeMotion,nativeMotion(),'CEP must receive the complete expected raw Motion state');
+   for(const update of patch.updates){const p=activeParams[update.property],key=p.keys.find(k=>k.ticks===update.ticks);assert.ok(p.animated&&key);assert.deepEqual(key.value,update.expectedValue);key.value=stored(update.value);}
+   return {ok:true,descriptor:await revalidate(),updates:clone(patch.updates)};
+ };
+ const applyPatch=patcher,patchKeyValues=patch=>patcher(patch);
  const project={afterCommit:null,lockedAccess:cb=>{lockDepth++;try{const value=cb();assert.ok(!value||typeof value.then!=='function','lockedAccess callback must remain synchronous');return value;}finally{lockDepth--;}} ,executeTransaction:cb=>{assert.ok(lockDepth>0);const actions=[];transactionDepth++;try{const value=cb({addAction:a=>{actions.push(a);return true;}});assert.ok(!value||typeof value.then!=='function','transaction callback must remain synchronous');}finally{transactionDepth--;}transactions++;if(reject)return false;for(const action of actions)action();project.afterCommit?.();return true;}};
- return {ppro,project,sequence,descriptor,freshDescriptor,params,clip,param,revalidate,createdActions,
+ return {ppro,project,sequence,descriptor,freshDescriptor,params,clip,param,revalidate,createdActions,patches,patchKeyValues,applyPatch,nativeMotion,
    get transactions(){return transactions;},get prepared(){return prepared;},get revalidations(){return revalidations;},
-   reject:()=>{reject=true;},useParams:next=>{activeParams=next;},setRevalidator:fn=>{revalidator=fn;},
+   reject:()=>{reject=true;},useParams:next=>{activeParams=next;},setRevalidator:fn=>{revalidator=fn;},setPatcher:fn=>{patcher=fn;},relink:path=>{descriptor.path=path;freshDescriptor.path=path;},
    read:frame=>readArea(ppro,sequence,descriptor,frame,revalidate),
-   edit:async(state,operation,extra={})=>editArea(ppro,project,sequence,descriptor,{signature:state.signature,frame:state.frame,operation,...extra},revalidate)};
+   edit:async(state,operation,extra={})=>editArea(ppro,project,sequence,descriptor,{signature:state.signature,frame:state.frame,operation,...extra},revalidate,{patchKeyValues})};
 }
 test('native Position uses source time, shares X/Y keys and reads back interpolation',async()=>{
  const h=harness();let s=await h.read(0);assert.deepEqual(s.tracks.position.value,[960,540]);
@@ -46,7 +56,7 @@ test('native Position uses source time, shares X/Y keys and reads back interpola
  s=await h.read(24);s=await h.edit(s,'set',{track:'position',value:[1200,700]});s=await h.edit(s,'set',{track:'position',value:[1300,700]});assert.equal(h.params.position.keys.length,2);
  s=await h.read(12);assert.ok(Math.abs(s.tracks.position.value[0]-1130)<1e-6);assert.equal(s.tracks.position.value[1],620);
  s=await h.read(0);s=await h.edit(s,'interpolation',{track:'position',interpolation:'hold'});s=await h.read(12);assert.deepEqual(s.tracks.position.value,[960,540]);
- assert.equal(h.transactions,4);
+ assert.equal(h.transactions,3);assert.equal(h.patches.length,1,'editing an existing key uses the native in-place setter');
 });
 test('width unlocks uniform scale without changing height and Undo restores its original native state',async()=>{
  const h=harness();let s=await h.read(0);assert.deepEqual(s.tracks.width.value,[1200]);
@@ -67,7 +77,7 @@ test('stale Motion, invalid dimensions and changed links cannot start a transact
 test('transaction rejection leaves all tracks intact, and unrelated keyframes are never rebuilt',async()=>{
  const h=harness();let s=await h.read(0);s=await h.edit(s,'toggle',{track:'position'});s=await h.read(24);s=await h.edit(s,'set',{track:'position',value:[1200,700]});
  const first=h.params.position.keys[0];first.customHandles='native handles';
- s=await h.read(24);s=await h.edit(s,'interpolation',{track:'position',interpolation:'bezier'});assert.equal(h.params.position.keys[0],first);assert.equal(first.customHandles,'native handles');
+ s=await h.read(24);s=await h.edit(s,'interpolation',{track:'position',interpolation:'hold'});assert.equal(h.params.position.keys[0],first);assert.equal(first.customHandles,'native handles');
  const before=clone(h.params.position.keys);h.reject();await assert.rejects(h.edit(s,'set',{track:'width',value:[900]}),/did not commit/);assert.deepEqual(h.params.position.keys,before);assert.equal(h.params.uniform.value,true);assert.equal(h.params.width.value,75);
 });
 test('silent native refusal is reported instead of confirming an edit',async()=>{
@@ -179,7 +189,8 @@ test('unsupported uniform animation can be disabled without copying its unknown 
  assert.equal(h.params.uniform.value,true);
  assert.equal(h.params.width.value,75);
  assert.deepEqual(h.params.width.keys,[]);
- await assert.rejects(h.edit(state,'undo'),/Uniform Scale/);
+ assert.equal(state.canUndo,false);assert.equal(state.canRedo,false);
+ await assert.rejects(h.edit(state,'undo'),/No matching plugin Undo/);
  assert.equal(h.transactions,1,'panel Undo must not recreate unsupported uniform curves');
 });
 
@@ -194,34 +205,38 @@ test('removing one uniform animated key preserves every remaining custom handle'
  assert.deepEqual(last.customHandles,{outgoing:[.7,.08]});
 });
 
-test('changing an existing Bezier key value refuses to discard its unknown easing handles',async()=>{
+test('changing an existing Bezier key uses only the in-place setter and preserves native key objects and handles',async()=>{
  const h=harness({uniform:false});
  animate(h.params.position,[[.5,.5],[.7,.7]],h.ppro.Constants.InterpolationMode.BEZIER);
  const first=h.params.position.keys[0];first.customHandles={outgoing:[.9,.1]};
- await assert.rejects(h.edit(await h.read(0),'set',{track:'position',value:[700,500]}),/custom interpolation/);
+ let state=await h.edit(await h.read(0),'set',{track:'position',value:[700,500]});
+ assert.deepEqual(state.tracks.position.value,[700,500]);
+ assert.equal(h.patches.length,1);
+ state=await h.edit(state,'undo');assert.deepEqual(state.tracks.position.value,[960,540]);
+ state=await h.edit(state,'redo');assert.deepEqual(state.tracks.position.value,[700,500]);
  assert.equal(h.params.position.keys[0],first);
  assert.deepEqual(first.customHandles,{outgoing:[.9,.1]});
- assert.equal(h.transactions,0);
+ assert.equal(h.transactions,0);assert.deepEqual(h.createdActions,[]);
 });
 
-test('panel Undo cannot claim to restore the hidden handles of a deleted Bezier key',async()=>{
+test('deleting a Bezier key refuses before mutation when exact Undo and Redo cannot restore its handles',async()=>{
  const h=harness({uniform:false});
  animate(h.params.position,[[.5,.5],[.7,.7]],h.ppro.Constants.InterpolationMode.BEZIER);
- const state=await h.edit(await h.read(0),'key',{track:'position'}),remaining=h.params.position.keys[0];
- await assert.rejects(h.edit(state,'undo'),/custom interpolation/);
- assert.equal(h.params.position.keys.length,1);
- assert.equal(h.params.position.keys[0],remaining);
- assert.equal(h.transactions,1);
+ const first=h.params.position.keys[0],state=await h.read(0);
+ for(const operation of ['key','remove-key','move-key','toggle']) await assert.rejects(h.edit(state,operation,{track:'position',keyTicks:'0',targetFrame:12}),/custom interpolation/);
+ assert.equal(h.params.position.keys.length,2);
+ assert.equal(h.params.position.keys[0],first);
+ assert.equal(h.transactions,0);assert.equal(h.prepared,0);assert.deepEqual(h.createdActions,[]);
 });
 
-test('explicit native Bezier interpolation remains available, but panel Undo cannot invent the prior custom curve',async()=>{
+test('destructive custom interpolation changes refuse before mutation instead of promising false Undo',async()=>{
  const h=harness({uniform:false});
  animate(h.params.position,[[.5,.5],[.7,.7]],h.ppro.Constants.InterpolationMode.BEZIER);
- let state=await h.edit(await h.read(0),'interpolation',{track:'position',interpolation:'linear'});
- await assert.rejects(h.edit(state,'undo'),/custom interpolation/);
+ let state=await h.read(0);
+ await assert.rejects(h.edit(state,'interpolation',{track:'position',interpolation:'linear'}),/custom interpolation/);
  state=await h.edit(state,'interpolation',{track:'position',interpolation:'bezier'});
  assert.equal(state.tracks.position.keys[0].interpolation,'bezier');
- assert.equal(h.transactions,2);
+ assert.equal(h.transactions,0);assert.equal(h.prepared,0);assert.deepEqual(h.createdActions,[]);
 });
 
 test('fresh private CEP identities are checked after asynchronous action preparation, including same-media replacements',async()=>{
@@ -272,9 +287,10 @@ function apiHarness(t,h){
    writeJSON:async(parent,name,data)=>{
      requests.push(clone(data));
      const path='/private/service/responses/'+name;
-     entries.set(path,{data:{version:1,id:data.id,sequenceId:data.sequenceId,projectPath:data.projectPath,result:clone(h.freshDescriptor)},delete:async()=>entries.delete(path)});
+     const result=data.action==='patchCaptionKeyValues'?await h.patchKeyValues(data.args[1]):await h.revalidate();
+     entries.set(path,{data:{version:1,id:data.id,sequenceId:data.sequenceId,projectPath:data.projectPath,result:clone(result)},delete:async()=>entries.delete(path)});
    }};
- entries.set('/private/service/service.json',{data:{version:1,instanceId:'a'.repeat(24),updatedAt:Date.now(),actions:['readCaptionAreaDescriptor']}});
+ entries.set('/private/service/service.json',{data:{version:1,instanceId:'a'.repeat(24),updatedAt:Date.now(),actions:['readCaptionAreaDescriptor','patchCaptionKeyValues']}});
  Object.assign(h.sequence,{guid:{toString:()=>h.descriptor.sequenceId},name:'Native area test',getSettings:async()=>({getVideoFrameRect:async()=>({width:1920,height:1080})}),getTimebase:async()=>TPF,getEndTime:async()=>time(12*TICKS),getPlayerPosition:async()=>time(10*TICKS),getVideoTrackCount:async()=>0});
  Object.assign(h.project,{path:h.descriptor.projectPath,getActiveSequence:async()=>h.sequence,getSequences:async()=>[h.sequence]});
  h.ppro.Project={getActiveProject:async()=>h.project};
@@ -381,14 +397,14 @@ test('documented PointKeyframe shape supports Position animation without scalar 
  assert.ok(state.tracks.position.keys.every(key=>key.interpolation==='native'));
  assert.equal(h.createdActions.filter(kind=>kind==='interpolation').length,0,'PointKeyframe insertion must never emit scalar interpolation Actions');
  const first=h.params.position.keys[0],last=h.params.position.keys[1],transactions=h.transactions;
- await assert.rejects(h.edit(state,'set',{track:'position',value:[1300,700]}),/custom interpolation/);
+ state=await h.edit(state,'set-key',{track:'position',keyTicks:last.ticks,value:[1300,700]});
+ assert.deepEqual(state.tracks.position.value,[1300,700]);assert.equal(h.patches.length,1);
  await assert.rejects(h.edit(state,'interpolation',{track:'position',interpolation:'hold'}),/interpolation for readback/);
  assert.equal(h.params.position.keys[0],first);assert.equal(h.params.position.keys[1],last);
  assert.equal(h.transactions,transactions);
- state=await h.read(12);assert.deepEqual(state.tracks.position.value,[1080,620]);
- state=await h.edit(state,'toggle',{track:'position'});
- assert.equal(state.tracks.position.animated,false);
- assert.deepEqual(state.tracks.position.value,[1080,620]);
+ state=await h.read(12);assert.ok(Math.abs(state.tracks.position.value[0]-1130)<1e-8);assert.equal(state.tracks.position.value[1],620);
+ await assert.rejects(h.edit(state,'toggle',{track:'position'}),/custom interpolation/);
+ assert.equal(state.tracks.position.animated,true);
 });
 
 test('bounded value unwrapping accepts raw and nested native PointF/scalar wrappers without changing units',async()=>{
@@ -488,5 +504,188 @@ test('CEP binding structure or checkbox changes during preparation cannot reach 
    };
    await assert.rejects(h.edit(state,'set',{track:'position',value:[800,500]}),/timeline link changed|Uniform Scale changed/);
    assert.equal(h.transactions,0);assert.deepEqual(h.createdActions,[]);
+ }
+});
+
+test('exact source ticks edit the selected unknown Point key while the playhead remains at a different key',async()=>{
+ const h=harness({uniform:false,pointKeys:true});
+ animate(h.params.position,[[.5,.5],[.75,.75]],h.ppro.Constants.InterpolationMode.BEZIER);
+ const first=h.params.position.keys[0],last=h.params.position.keys[1];
+ first.customHandles={incoming:[.13,.9],outgoing:[.87,.05]};
+ let state=await h.read(24);
+ assert.equal(state.tracks.position.keys[0].ticks,'0');
+ assert.equal(state.tracks.position.keys[0].interpolation,'native');
+ state=await h.edit(state,'set-key',{track:'position',keyTicks:'0',value:[600,300]});
+ assert.equal(state.frame,24);assert.deepEqual(state.tracks.position.value,[1440,810]);
+ assert.deepEqual(first.value,[600/1920,300/1080]);assert.equal(h.params.position.keys[0],first);assert.equal(h.params.position.keys[1],last);
+ assert.deepEqual(first.customHandles,{incoming:[.13,.9],outgoing:[.87,.05]});
+ assert.equal(h.patches[0].updates[0].ticks,'0');
+ state=await h.edit(state,'undo');assert.deepEqual(first.value,[.5,.5]);assert.equal(state.canRedo,true);
+ state=await h.edit(state,'redo');assert.deepEqual(first.value,[600/1920,300/1080]);
+ assert.equal(h.transactions,0);assert.deepEqual(h.createdActions,[]);
+});
+
+test('independent scalar key retiming, interpolation and deletion support complete bounded Undo and Redo',async()=>{
+ const h=harness({uniform:false});
+ animate(h.params.width,[100,150],h.ppro.Constants.InterpolationMode.HOLD);
+ let state=await h.read(24);
+ state=await h.edit(state,'move-key',{track:'width',keyTicks:'0',targetFrame:12});
+ assert.deepEqual(state.tracks.width.keys.map(k=>[k.ticks,k.frame,k.interpolation]),[[String(12*TPF),12,'hold'],[String(TICKS),24,'hold']]);
+ state=await h.edit(state,'undo');assert.deepEqual(state.tracks.width.keys.map(k=>k.ticks),['0',String(TICKS)]);assert.equal(state.canRedo,true);
+ state=await h.edit(state,'redo');
+ state=await h.edit(state,'interpolation',{track:'width',keyTicks:String(12*TPF),interpolation:'linear'});
+ assert.equal(state.tracks.width.keys[0].interpolation,'linear');assert.equal(state.tracks.width.keys[1].interpolation,'hold');
+ state=await h.edit(state,'remove-key',{track:'width',keyTicks:String(12*TPF)});
+ assert.deepEqual(state.tracks.width.keys.map(k=>k.ticks),[String(TICKS)]);
+ state=await h.edit(state,'undo');assert.equal(state.tracks.width.keys.length,2);assert.equal(state.tracks.width.keys[0].interpolation,'linear');
+ state=await h.edit(state,'undo');assert.equal(state.tracks.width.keys[0].interpolation,'hold');
+ state=await h.edit(state,'undo');assert.equal(state.tracks.width.keys[0].ticks,'0');assert.equal(state.canUndo,false);assert.equal(state.canRedo,true);
+ state=await h.edit(state,'redo');state=await h.edit(state,'redo');state=await h.edit(state,'redo');
+ assert.deepEqual(state.tracks.width.keys.map(k=>k.ticks),[String(TICKS)]);assert.equal(state.canRedo,false);
+ assert.equal(h.patches.length,0,'structural edits use the native action transaction, not in-place value setters');
+});
+
+test('missing, off-clip, occupied and stale exact key targets fail before native Actions or setters',async()=>{
+ const h=harness({uniform:false});animate(h.params.height,[100,150]);
+ const state=await h.read(24),keys=clone(h.params.height.keys);
+ for(const [operation,extra]of [
+   ['set-key',{keyTicks:String(TPF),value:[600]}],['set-key',{keyTicks:String(2*TICKS),value:[600]}],
+   ['remove-key',{keyTicks:'-1'}],['remove-key',{keyTicks:'1e2'}],
+   ['move-key',{keyTicks:'0',targetFrame:24}],['move-key',{keyTicks:'0',targetFrame:48}],
+   ['move-key',{keyTicks:'0',targetFrame:-1}],['move-key',{keyTicks:'0',targetFrame:2.5}],
+ ])await assert.rejects(h.edit(state,operation,{track:'height',...extra}),/keyframe|frame|text-area/i);
+ assert.deepEqual(h.params.height.keys,keys);assert.equal(h.transactions,0);assert.equal(h.prepared,0);assert.equal(h.patches.length,0);
+ h.params.height.keys[0].value=110;
+ await assert.rejects(h.edit(state,'set-key',{track:'height',keyTicks:'0',value:[600]}),/Motion changed/);
+ assert.equal(h.patches.length,0);assert.deepEqual(h.createdActions,[]);
+});
+
+test('value Undo and Redo survive a verified caption media relink, while old request signatures remain invalid',async()=>{
+ const h=harness({uniform:false,pointKeys:true});animate(h.params.position,[[.5,.5],[.7,.7]],5);animate(h.params.height,[100,150],5);
+ const point=h.params.position.keys[0],size=h.params.height.keys[0];point.customHandles={outgoing:[.9,.1]};size.customHandles={incoming:[.2,.8]};
+ let state=await h.edit(await h.read(0),'set-key',{track:'position',keyTicks:'0',value:[700,400]});
+ state=await h.edit(state,'set-key',{track:'height',keyTicks:'0',value:[600]});
+ const stale=state;
+ h.relink('/project/reflow-0002.mov');
+ await assert.rejects(h.edit(stale,'undo'),/Motion changed/);
+ state=await h.read(0);assert.equal(state.canUndo,true);
+ state=await h.edit(state,'undo');assert.equal(size.value,100);assert.deepEqual(point.value,[700/1920,400/1080]);
+ state=await h.edit(state,'undo');assert.deepEqual(point.value,[.5,.5]);assert.equal(state.canUndo,false);assert.equal(state.canRedo,true);
+ state=await h.edit(state,'redo');state=await h.edit(state,'redo');assert.equal(size.value,150);
+ assert.equal(h.params.position.keys[0],point);assert.equal(h.params.height.keys[0],size);
+ assert.deepEqual(point.customHandles,{outgoing:[.9,.1]});assert.deepEqual(size.customHandles,{incoming:[.2,.8]});
+ assert.ok(h.patches.slice(2).every(p=>p.descriptor.path==='/project/reflow-0002.mov'),'inverse patches always use the current strict media identity');
+ assert.equal(h.transactions,0);
+ h.descriptor.bounds.width=1000;h.freshDescriptor.bounds.width=1000;
+ assert.equal((await h.read(0)).canUndo,false,'a changed text-box geometry is a different history context');
+});
+
+test('external Motion changes invalidate both history stacks and a new edit discards its Redo branch',async()=>{
+ const h=harness({uniform:false});let state=await h.read(0);
+ state=await h.edit(state,'set',{track:'height',value:[500]});state=await h.edit(state,'set',{track:'height',value:[600]});
+ state=await h.edit(state,'undo');assert.equal(state.canUndo,true);assert.equal(state.canRedo,true);
+ state=await h.edit(state,'set',{track:'height',value:[550]});assert.equal(state.canRedo,false);
+ h.params.rotation.value=12;state=await h.read(0);assert.equal(state.canUndo,false);assert.equal(state.canRedo,false);
+ await assert.rejects(h.edit(state,'undo'),/No matching plugin Undo/);
+});
+
+test('plugin history retains at most 32 native edits per caption and replays them in order',async()=>{
+ const h=harness({uniform:false});let state=await h.read(0);
+ for(let value=401;value<=435;value++)state=await h.edit(state,'set',{track:'height',value:[value]});
+ for(let i=0;i<32;i++){assert.equal(state.canUndo,true);state=await h.edit(state,'undo');}
+ assert.deepEqual(state.tracks.height.value,[403]);assert.equal(state.canUndo,false);
+ for(let i=0;i<32;i++){assert.equal(state.canRedo,true);state=await h.edit(state,'redo');}
+ assert.ok(Math.abs(state.tracks.height.value[0]-435)<1e-8);assert.equal(state.canRedo,false);
+});
+
+test('existing-key edits require the bounded CEP callback and verify all untouched native Motion controls',async()=>{
+ const h=harness({uniform:false});animate(h.params.height,[100,150],5);
+ const state=await h.read(0);
+ await assert.rejects(editArea(h.ppro,h.project,h.sequence,h.descriptor,{signature:state.signature,frame:0,operation:'set-key',track:'height',keyTicks:'0',value:[600]},h.revalidate),/in-place Premiere keyframe service/);
+ assert.equal(h.transactions,0);assert.equal(h.patches.length,0);assert.equal(h.prepared,0);
+ h.setPatcher(async patch=>{const receipt=await h.applyPatch(patch);h.params.rotation.value=22;return receipt;});
+ await assert.rejects(h.edit(state,'set-key',{track:'height',keyTicks:'0',value:[600]}),/did not confirm every Motion change/);
+ assert.equal((await h.read(0)).canUndo,false);assert.equal((await h.read(0)).canRedo,false);
+ assert.equal(h.transactions,0);
+});
+
+test('source tick strings and frame destinations remain exact above JavaScript integer precision',async()=>{
+ const h=harness({uniform:false}),tpf=10000000001,frame=990001,exact=(BigInt(tpf)*BigInt(frame)).toString(),end=(BigInt(tpf)*1000000n).toString();
+ assert.equal(Number.isSafeInteger(Number(exact)),false);
+ for(const d of [h.descriptor,h.freshDescriptor])Object.assign(d,{startTicks:'0',endTicks:end,inTicks:'0',outTicks:end,ticksPerFrame:tpf});
+ h.params.height.animated=true;h.params.height.keys=[{ticks:'0',value:50,mode:4},{ticks:exact,value:100,mode:4}];
+ const key=h.params.height.keys[1];
+ let state=await h.read(frame);assert.equal(h.params.height.evaluated.at(-1),exact);
+ state=await h.edit(state,'set-key',{track:'height',keyTicks:exact,value:[600]});
+ assert.equal(h.patches[0].updates[0].ticks,exact);assert.equal(h.params.height.keys[1],key);assert.equal(key.ticks,exact);
+ state=await h.edit(state,'move-key',{track:'height',keyTicks:exact,targetFrame:frame+1});
+ assert.equal(state.tracks.height.keys[1].ticks,(BigInt(tpf)*BigInt(frame+1)).toString());
+ state=await h.edit(state,'undo');assert.equal(state.tracks.height.keys[1].ticks,exact);
+});
+
+test('the real API routes unknown scalar key edits through CEP and keeps verified relink Undo in the same lane',async t=>{
+ const h=harness({uniform:false});animate(h.params.height,[100,150],5);
+ const nativeKey=h.params.height.keys[0];nativeKey.customHandles={incoming:[.1,.9],outgoing:[.8,.3]};
+ const a=apiHarness(t,h);await a.api.getActiveSequenceInfo();
+ const caption={id:'cue',clipNodeId:'clip',projectItemId:'item',mediaPath:h.descriptor.path,renderBounds:clone(h.descriptor.bounds)};
+ let state=await a.api.readCaptionArea(caption,h.descriptor.sequenceId,24);
+ state=await a.api.editCaptionArea(caption,h.descriptor.sequenceId,{signature:state.signature,frame:24,operation:'set-key',track:'height',keyTicks:'0',value:[600]});
+ assert.equal(nativeKey.value,150);assert.equal(state.canUndo,true);
+ h.relink('/project/caption-reflow.mov');caption.mediaPath=h.descriptor.path;
+ state=await a.api.readCaptionArea(caption,h.descriptor.sequenceId,24);assert.equal(state.canUndo,true);
+ state=await a.api.editCaptionArea(caption,h.descriptor.sequenceId,{signature:state.signature,frame:24,operation:'undo'});
+ assert.equal(nativeKey.value,100);assert.equal(state.canRedo,true);
+ const edits=a.requests.filter(r=>r.action==='patchCaptionKeyValues');assert.equal(edits.length,2);
+ assert.equal(edits[0].args[0].mediaPath,'/project/caption.mov');assert.equal(edits[1].args[0].mediaPath,'/project/caption-reflow.mov');
+ assert.equal(h.params.height.keys[0],nativeKey);assert.deepEqual(nativeKey.customHandles,{incoming:[.1,.9],outgoing:[.8,.3]});
+ assert.equal(h.transactions,0);assert.deepEqual(h.createdActions,[]);
+});
+
+test('native Float32 key storage confirms 480px in a 576px text box and preserves structural Undo and Redo',async()=>{
+ const h=harness({uniform:false,float32Native:true});
+ for(const d of [h.descriptor,h.freshDescriptor])d.bounds.width=576;
+ h.params.width.value=100;
+ let state=await h.edit(await h.read(0),'toggle',{track:'width'});
+ state=await h.read(24);
+ state=await h.edit(state,'set',{track:'width',value:[480]});
+ const rounded=Math.fround(480/576*100);
+ assert.equal(rounded,83.33333587646484,'matches the real Premiere acceptance readback');
+ assert.equal(h.params.width.keys[1].ticks,String(TICKS));assert.equal(h.params.width.keys[1].value,rounded);
+ assert.notEqual(state.tracks.width.value[0],480);assert.ok(Math.abs(state.tracks.width.value[0]-480)<0.0001);
+ assert.equal(state.canUndo,true);
+ state=await h.edit(state,'undo');assert.equal(state.tracks.width.keys.length,1);assert.equal(state.canRedo,true);
+ state=await h.edit(state,'redo');assert.equal(state.tracks.width.keys.length,2);assert.equal(h.params.width.keys[1].value,rounded);assert.equal(state.canUndo,true);
+ h.relink('/project/float32-reflow.mov');state=await h.read(24);assert.equal(state.canUndo,true);
+});
+
+test('in-place CEP Float32 scalar and Point values keep exact native keys and reversible history',async()=>{
+ const h=harness({uniform:false,pointKeys:true,float32Native:true});
+ for(const d of [h.descriptor,h.freshDescriptor])d.bounds.width=576;
+ animate(h.params.width,[100,120],5);animate(h.params.position,[[.5,.5],[.75,.75]],5);
+ const width=h.params.width.keys[1],position=h.params.position.keys[0];width.customHandles={outgoing:[.9,.1]};position.customHandles={incoming:[.1,.9]};
+ let state=await h.edit(await h.read(24),'set-key',{track:'width',keyTicks:String(TICKS),value:[480]});
+ const roundedWidth=Math.fround(480/576*100);
+ assert.equal(width.value,roundedWidth);assert.equal(state.canUndo,true);
+ state=await h.edit(state,'set-key',{track:'position',keyTicks:'0',value:[700.25,401.33]});
+ const roundedPosition=[Math.fround(700.25/1920),Math.fround(401.33/1080)];
+ assert.deepEqual(position.value,roundedPosition);assert.equal(state.canUndo,true);
+ state=await h.edit(state,'undo');assert.deepEqual(position.value,[.5,.5]);
+ state=await h.edit(state,'undo');assert.equal(width.value,120);assert.equal(state.canRedo,true);
+ state=await h.edit(state,'redo');state=await h.edit(state,'redo');
+ assert.equal(width.value,roundedWidth);assert.deepEqual(position.value,roundedPosition);
+ assert.equal(h.params.width.keys[1],width);assert.equal(h.params.position.keys[0],position);
+ assert.deepEqual(width.customHandles,{outgoing:[.9,.1]});assert.deepEqual(position.customHandles,{incoming:[.1,.9]});
+ assert.equal(h.transactions,0);assert.deepEqual(h.createdActions,[]);assert.equal(h.patches.length,6);
+});
+
+test('Float32 rounding allowance still rejects wrong native add-key and CEP post-read values',async()=>{
+ for(const path of ['native-add','cep-patch']){
+   const h=harness({uniform:false,float32Native:true});for(const d of [h.descriptor,h.freshDescriptor])d.bounds.width=576;
+   animate(h.params.width,path==='native-add'?[100]:[100,120]);
+   const state=await h.read(24);
+   if(path==='native-add')h.project.afterCommit=()=>{h.params.width.keys[1].value+=0.001;};
+   else h.setPatcher(async patch=>{const receipt=await h.applyPatch(patch);h.params.width.keys[1].value+=0.001;return receipt;});
+   await assert.rejects(h.edit(state,path==='native-add'?'set':'set-key',{track:'width',keyTicks:String(TICKS),value:[480]}),/did not confirm every Motion change/,path);
+   assert.equal((await h.read(24)).canUndo,false,path);assert.equal((await h.read(24)).canRedo,false,path);
  }
 });

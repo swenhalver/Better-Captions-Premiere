@@ -4,13 +4,13 @@ import { createHostAPI } from '../webview-ui/src/cep-api';
 export const SERVICE_ACTIONS = [
   'getFonts', 'beginCaption', 'saveCaptionFrames', 'finishCaption',
   'preflightCaptionClips', 'applyCaptionClips', 'readTimeline', 'showInPremiere',
-  'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor',
+  'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'patchCaptionKeyValues',
 ] as const;
 const READ_ACTIONS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor']);
 const ARG_COUNTS: Record<string, number[]> = {
   getFonts: [0], beginCaption: [1], saveCaptionFrames: [3], finishCaption: [3, 4],
   preflightCaptionClips: [2], applyCaptionClips: [2, 3], readTimeline: [1], showInPremiere: [1],
-  selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1], readCaptionAreaDescriptor: [1],
+  selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1], readCaptionAreaDescriptor: [1], patchCaptionKeyValues: [2],
 };
 interface Request { version: number; id: string; createdAt: number; expiresAt?: number; sequenceId: string; projectPath: string; action: string; args: any[]; }
 interface ServiceOptions { api?: any; fs?: any; path?: any; os?: any; crypto?: any; process?: any; platform?: any; root?: string; intervalMs?: number; maxRequestsPerPoll?: number; }
@@ -53,6 +53,7 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
     case 'readCaptionMotion': return b === undefined ? api.readCaptionMotion(a, id) : api.readCaptionMotion(a, id, b);
     case 'readCaptionGeometry': return api.readCaptionGeometry(a, id);
     case 'readCaptionAreaDescriptor': return api.readCaptionAreaDescriptor(a, id);
+    case 'patchCaptionKeyValues': return api.patchCaptionKeyValues(a, b, id);
     case 'readCaptionSelection': return api.readCaptionSelection(a, id);
     default: throw new Error('Unsupported caption service action.');
   }
