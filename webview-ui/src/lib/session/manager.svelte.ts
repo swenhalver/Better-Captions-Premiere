@@ -1,9 +1,11 @@
+import { SvelteMap } from "svelte/reactivity";
 import {
   type SessionState,
   type SequenceInfo,
   type TranscriptJSON,
   type StyleConfig,
   type AnimationConfig,
+  type CaptionItem,
   DEFAULT_STYLE,
   DEFAULT_ANIMATION,
 } from "../types";
@@ -11,13 +13,18 @@ import { parseTranscript } from "../transcript/parser";
 
 const STORAGE_KEY = "better-captions-sessions";
 
+function reactiveSession(value: SessionState): SessionState {
+  const session = $state<SessionState>(value);
+  return session;
+}
+
 function createDefaultSession(info: SequenceInfo): SessionState {
-  return {
+  return reactiveSession({
     sequenceId: info.id,
     sequenceName: info.name,
     transcriptJson: null,
     captions: [],
-    style: { ...DEFAULT_STYLE },
+    style: { ...DEFAULT_STYLE, activeWord: { ...DEFAULT_STYLE.activeWord }, spokenWord: { ...DEFAULT_STYLE.spokenWord } },
     animation: { ...DEFAULT_ANIMATION },
     hasTranscript: false,
     isLoading: false,
@@ -26,7 +33,7 @@ function createDefaultSession(info: SequenceInfo): SessionState {
     frameRate: info.frameRate,
     frameWidth: info.frameWidth,
     frameHeight: info.frameHeight,
-  };
+  });
 }
 
 function loadPersistedSessions(): Map<string, { style: StyleConfig; animation: AnimationConfig }> {
@@ -56,8 +63,12 @@ function persistSessions(sessions: Map<string, SessionState>) {
 }
 
 class SessionManager {
-  sessions = $state(new Map<string, SessionState>());
+  sessions = new SvelteMap<string, SessionState>();
   activeSequenceId = $state<string | null>(null);
+  saveHandler: ((session:SessionState)=>void) | null = null;
+  persist() { persistSessions(this.sessions);const current=this.current;if(current)this.saveHandler?.(current); }
+  restore(session:SessionState) { this.sessions.set(session.sequenceId,reactiveSession({...session,style:{...DEFAULT_STYLE,...session.style,activeWord:{...DEFAULT_STYLE.activeWord,...session.style?.activeWord},spokenWord:{...DEFAULT_STYLE.spokenWord,...session.style?.spokenWord}},animation:{...DEFAULT_ANIMATION,...session.animation},isLoading:false}));this.activeSequenceId=session.sequenceId; }
+  updateCaptions(captions:CaptionItem[]) { const s=this.current;if(!s)return;s.captions=captions;s.hasTranscript=captions.length>0;this.sessions.set(s.sequenceId,s);this.persist(); }
 
   current = $derived.by(() => {
     if (!this.activeSequenceId) return null;
@@ -74,7 +85,7 @@ class SessionManager {
       const persisted = loadPersistedSessions();
       const saved = persisted.get(info.id);
       if (saved) {
-        session.style = { ...DEFAULT_STYLE, ...saved.style };
+        session.style = { ...DEFAULT_STYLE, ...saved.style, activeWord: { ...DEFAULT_STYLE.activeWord, ...saved.style?.activeWord }, spokenWord: { ...DEFAULT_STYLE.spokenWord, ...saved.style?.spokenWord } };
         session.animation = { ...DEFAULT_ANIMATION, ...saved.animation };
       }
       this.sessions.set(info.id, session);
@@ -127,11 +138,8 @@ class SessionManager {
     const session = this.sessions.get(this.activeSequenceId);
     if (!session) return;
     session.style = { ...session.style, ...updates };
-    if (updates.maxWords !== undefined && session.transcriptJson) {
-      session.captions = parseTranscript(session.transcriptJson, updates.maxWords);
-    }
     this.sessions.set(this.activeSequenceId, session);
-    persistSessions(this.sessions);
+    this.persist();
   }
 
   updateAnimation(updates: Partial<AnimationConfig>) {
@@ -140,7 +148,7 @@ class SessionManager {
     if (!session) return;
     session.animation = { ...session.animation, ...updates };
     this.sessions.set(this.activeSequenceId, session);
-    persistSessions(this.sessions);
+    this.persist();
   }
 
   setCurrentTime(time: number) {

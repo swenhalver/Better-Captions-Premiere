@@ -3,223 +3,158 @@
   import type { CaptionItem, StyleConfig, AnimationConfig } from "../lib/types";
   import { CaptionRenderer } from "../lib/canvas/engine";
   import { getCaptionAtTime, formatTime } from "../lib/transcript/parser";
-
   interface Props {
-    captions: CaptionItem[];
-    currentTime: number;
-    duration: number;
-    style: StyleConfig;
-    animation: AnimationConfig;
-    frameWidth: number;
-    frameHeight: number;
+    captions: CaptionItem[]; currentTime: number; duration: number; style: StyleConfig;
+    animation: AnimationConfig; disabled?: boolean; frameWidth: number; frameHeight: number; selectedId?: string | null;
     onTimeChange: (time: number) => void;
+    onPositionChange: (position: { x: number; y: number } | null, scope: "global" | "caption") => void;
   }
-
-  let {
-    captions,
-    currentTime,
-    duration,
-    style,
-    animation,
-    frameWidth,
-    frameHeight,
-    onTimeChange,
-  }: Props = $props();
-
+  let { captions, currentTime, duration, style, animation, frameWidth, frameHeight, selectedId = null, disabled = false, onTimeChange, onPositionChange }: Props = $props();
   let canvasEl: HTMLCanvasElement | undefined = $state();
   let renderer: CaptionRenderer | undefined;
-  let ctx: CanvasRenderingContext2D | undefined;
+  let ready = $state(false);
   let isPlaying = $state(false);
   let animFrameId = 0;
   let playStartTime = 0;
   let playStartOffset = 0;
-
-  const CANVAS_WIDTH = 480;
-  const CANVAS_HEIGHT = 120;
-
-  function getCaptionStyle(): StyleConfig {
-    const scale = CANVAS_WIDTH / Math.max(frameWidth, 1);
-    return {
-      ...style,
-      fontSize: style.fontSize * scale,
-      strokeWidth: style.strokeWidth * scale,
-      backgroundPadding: style.backgroundPadding * scale,
-      shadowBlur: style.shadowBlur * scale,
-      shadowOffsetX: style.shadowOffsetX * scale,
-      shadowOffsetY: style.shadowOffsetY * scale,
-      positionX: 0.5,
-      positionY: 0.5,
-    };
-  }
+  let scope = $state<"global" | "caption">("global");
+  let dragPosition = $state<{ x: number; y: number } | null>(null);
+  let dragging = false;
+  let selected = $derived(captions.find((caption) => caption.id === selectedId));
+  let position = $derived(dragPosition ?? (scope === "caption" && selected?.position ? selected.position : { x: style.positionX, y: style.positionY }));
+  let currentCaption = $derived(getCaptionAtTime(captions, currentTime));
+  const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
   function renderAtTime(time: number) {
     if (!renderer) return;
-    const caption = getCaptionAtTime(captions, time);
-    renderer.renderFrame(caption, time, getCaptionStyle(), animation);
+    let caption = getCaptionAtTime(captions, time);
+    let previewStyle = style;
+    if (dragPosition) {
+      if (scope === "global") previewStyle = { ...style, positionX: dragPosition.x, positionY: dragPosition.y };
+      else if (caption?.id === selectedId) caption = { ...caption, position: dragPosition };
+    }
+    renderer.renderFrame(caption, time, previewStyle, animation);
   }
-
   onMount(() => {
     if (!canvasEl) return;
-    canvasEl.width = CANVAS_WIDTH;
-    canvasEl.height = CANVAS_HEIGHT;
-    ctx = canvasEl.getContext("2d", { alpha: true })!;
-    renderer = new CaptionRenderer(ctx, CANVAS_WIDTH, CANVAS_HEIGHT);
-    renderAtTime(currentTime);
-
-    return () => {
-      cancelAnimationFrame(animFrameId);
-    };
+    const ctx = canvasEl.getContext("2d", { alpha: true });
+    if (!ctx) return;
+    renderer = new CaptionRenderer(ctx, frameWidth, frameHeight);
+    ready = true;
+    return () => cancelAnimationFrame(animFrameId);
   });
-
   $effect(() => {
-    const _ct = currentTime;
-    const _ff = style.fontFamily;
-    const _fs = style.fontSize;
-    const _fw = style.fontWeight;
-    const _tc = style.textColor;
-    const _se = style.strokeEnabled;
-    const _sc = style.strokeColor;
-    const _so = style.strokeOpacity;
-    const _sw = style.strokeWidth;
-    const _she = style.shadowEnabled;
-    const _shc = style.shadowColor;
-    const _sho = style.shadowOpacity;
-    const _sb = style.shadowBlur;
-    const _sox = style.shadowOffsetX;
-    const _soy = style.shadowOffsetY;
-    const _be = style.backgroundEnabled;
-    const _bc = style.backgroundColor;
-    const _bo = style.backgroundOpacity;
-    const _bp = style.backgroundPadding;
-    const _mw = style.maxWidth;
-    const _ta = style.textAlign;
-    const _tt = style.textTransform;
-    const _ap = animation.preset;
-    const _fi = animation.fadeInDuration;
-    const _fo = animation.fadeOutDuration;
-    const _hc = animation.highlightColor;
-    const _cl = captions.length;
-
-    if (!renderer || isPlaying) return;
-    renderAtTime(_ct);
-  });
-
-  function togglePlay() {
-    if (isPlaying) {
-      stopPlayback();
-    } else {
-      startPlayback();
+    // Svelte tracks the complete nested style and caption state used during drawing.
+    JSON.stringify({ style, animation, captions, dragPosition });
+    if (!ready || !canvasEl || !renderer) return;
+    if (canvasEl.width !== frameWidth || canvasEl.height !== frameHeight) {
+      canvasEl.width = frameWidth;
+      canvasEl.height = frameHeight;
+      renderer.resize(frameWidth, frameHeight);
     }
-  }
-
-  function startPlayback() {
+    renderAtTime(currentTime);
+  });
+  function stopPlayback() { isPlaying = false; cancelAnimationFrame(animFrameId); }
+  function togglePlay() {
+    if (isPlaying) return stopPlayback();
+    if (!captions.length) return;
     isPlaying = true;
     playStartTime = performance.now();
-    playStartOffset = currentTime;
+    playStartOffset = currentTime >= duration ? 0 : currentTime;
     tick();
   }
-
-  function stopPlayback() {
-    isPlaying = false;
-    cancelAnimationFrame(animFrameId);
-  }
-
   function tick() {
     if (!isPlaying) return;
-    const elapsed = (performance.now() - playStartTime) / 1000;
-    let newTime = playStartOffset + elapsed;
-    if (newTime >= duration) {
-      newTime = 0;
-      playStartTime = performance.now();
-      playStartOffset = 0;
-    }
-
-    renderAtTime(newTime);
-    onTimeChange(newTime);
-
+    const time = playStartOffset + (performance.now() - playStartTime) / 1000;
+    if (time >= duration) { onTimeChange(duration); stopPlayback(); return; }
+    onTimeChange(time);
     animFrameId = requestAnimationFrame(tick);
   }
-
-  function handleScrub(e: MouseEvent) {
-    const target = e.currentTarget as HTMLDivElement;
-    const rect = target.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    onTimeChange(ratio * duration);
+  function pointerPosition(event: PointerEvent) {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    return { x: clamp((event.clientX - rect.left) / rect.width), y: clamp((event.clientY - rect.top) / rect.height) };
   }
-
-  function handleScrubMove(e: MouseEvent) {
-    if (e.buttons !== 1) return;
-    handleScrub(e);
+  function startDrag(event: PointerEvent) {
+    if (disabled || !captions.length || (scope === "caption" && !selected)) return;
+    stopPlayback();
+    dragging = true;
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    dragPosition = pointerPosition(event);
   }
-
-  let progressPercent = $derived(duration > 0 ? (currentTime / duration) * 100 : 0);
+  function moveDrag(event: PointerEvent) { if (dragging) dragPosition = pointerPosition(event); }
+  function finishDrag() {
+    if (!dragging) return;
+    dragging = false;
+    if (dragPosition) onPositionChange({ ...dragPosition }, scope);
+    dragPosition = null;
+  }
+  function keyboardPosition(event: KeyboardEvent) {
+    if (disabled) return;
+    const delta = event.shiftKey ? .05 : .01;
+    const next = { ...position };
+    if (event.key === "ArrowLeft") next.x -= delta;
+    else if (event.key === "ArrowRight") next.x += delta;
+    else if (event.key === "ArrowUp") next.y -= delta;
+    else if (event.key === "ArrowDown") next.y += delta;
+    else return;
+    event.preventDefault();
+    onPositionChange({ x: clamp(next.x), y: clamp(next.y) }, scope);
+  }
+  function updateAxis(axis: "x" | "y", event: Event) {
+    if (disabled) return;
+    const value = Number((event.target as HTMLInputElement).value);
+    if (Number.isFinite(value)) onPositionChange({ ...position, [axis]: clamp(value / 100) }, scope);
+  }
 </script>
 
-<div class="flex flex-col border-b border-panel-border">
-  <div class="relative flex items-center justify-center overflow-hidden py-2 checkerboard-bg">
-    <canvas
-      bind:this={canvasEl}
-      width={CANVAS_WIDTH}
-      height={CANVAS_HEIGHT}
-      style="width: {CANVAS_WIDTH}px; height: {CANVAS_HEIGHT}px; max-width: 100%;"
-    ></canvas>
-    {#if captions.length === 0}
-      <div class="absolute inset-0 flex items-center justify-center">
-        <span class="text-[13px] text-white/40">No captions to preview</span>
-      </div>
-    {/if}
-  </div>
-
-  <div class="px-3 py-2 bg-surface flex items-center gap-2">
-    <button
-      onclick={togglePlay}
-      class="p-1 rounded hover:bg-panel-hover-bg text-panel-text transition-colors border-none bg-transparent cursor-pointer"
-      title={isPlaying ? "Pause" : "Play"}
-      aria-label={isPlaying ? "Pause" : "Play"}
-    >
-      {#if isPlaying}
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-          <rect x="6" y="4" width="4" height="16" rx="1" />
-          <rect x="14" y="4" width="4" height="16" rx="1" />
-        </svg>
+<section class="canvas-preview" aria-label="Caption preview and frame position">
+  <div class="canvas-preview__stage">
+    <div class="canvas-preview__frame" style="aspect-ratio: {frameWidth} / {frameHeight}; --preview-aspect: {frameWidth / frameHeight}" role="slider" tabindex={disabled ? -1 : 0} aria-disabled={disabled} aria-label="Caption frame position" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(position.y * 100)} aria-valuetext="X {Math.round(position.x * 100)} percent, Y {Math.round(position.y * 100)} percent. Drag or use arrow keys." onpointerdown={startDrag} onpointermove={moveDrag} onpointerup={finishDrag} onpointercancel={() => { dragging = false; dragPosition = null; }} onkeydown={keyboardPosition}>
+      <canvas bind:this={canvasEl} width={frameWidth} height={frameHeight} aria-label="Captions rendered at the sequence frame size"></canvas>
+      <div class="canvas-preview__safe-area" aria-hidden="true"></div>
+      {#if currentCaption}
+        <div class="canvas-preview__anchor" style="left: {(dragPosition ?? (currentCaption.position ?? { x: style.positionX, y: style.positionY })).x * 100}%; top: {(dragPosition ?? (currentCaption.position ?? { x: style.positionX, y: style.positionY })).y * 100}%" aria-hidden="true"></div>
       {:else}
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-          <polygon points="5,3 19,12 5,21" />
-        </svg>
+        <p class="canvas-preview__empty">{captions.length ? "No caption at this time" : "Transcribe your sequence to begin"}</p>
       {/if}
-    </button>
-
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="flex-1 h-3 bg-panel-border rounded-full cursor-pointer relative group"
-      onmousedown={handleScrub}
-      onmousemove={handleScrubMove}
-    >
-      <div
-        class="absolute inset-y-0 left-0 bg-accent rounded-full"
-        style="width: {progressPercent}%"
-      ></div>
-      <div
-        class="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
-        style="left: {progressPercent}%"
-      ></div>
     </div>
-
-    <span class="text-[12px] text-panel-secondary font-mono min-w-[80px] text-right">
-      {formatTime(currentTime)} / {formatTime(duration)}
-    </span>
   </div>
-</div>
+  <div class="canvas-preview__transport">
+    <button class="caption-button canvas-preview__play" onclick={togglePlay} disabled={disabled || !captions.length} aria-label={isPlaying ? "Pause caption preview" : "Play caption preview"}>{isPlaying ? "Pause" : "Play"}</button>
+    <input {disabled} class="canvas-preview__scrubber" type="range" aria-label="Preview time" min="0" max={Math.max(.01, duration)} step=".01" value={currentTime} oninput={(event) => { stopPlayback(); onTimeChange(Number((event.target as HTMLInputElement).value)); }} />
+    <span class="canvas-preview__time">{formatTime(currentTime)}</span>
+  </div>
+  <details class="canvas-preview__placement">
+    <summary>Frame location <span class="canvas-preview__hint">Drag in preview</span></summary>
+    <div class="canvas-preview__position-controls">
+      <label class="caption-field caption-field--wide"><span>Apply position to</span><select {disabled} bind:value={scope}><option value="global">Global default</option><option value="caption" disabled={!selected}>Selected caption</option></select></label>
+      <label class="caption-field"><span>X, % from left</span><input {disabled} type="number" min="0" max="100" step=".5" value={Number((position.x * 100).toFixed(2))} onchange={(event) => updateAxis("x", event)} /></label>
+      <label class="caption-field"><span>Y, % from top</span><input {disabled} type="number" min="0" max="100" step=".5" value={Number((position.y * 100).toFixed(2))} onchange={(event) => updateAxis("y", event)} /></label>
+      {#if scope === "caption" && selected?.position}<button class="caption-button caption-field--wide" disabled={disabled} onclick={() => onPositionChange(null, "caption")}>Use global position for this caption</button>{/if}
+    </div>
+    <p class="caption-help">{scope === "global" && selected?.position ? "This caption has its own position. Choose Selected caption to move it. " : ""}Full {frameWidth} × {frameHeight} frame. Preview plays captions without sequence audio. Arrow keys move 1%; Shift moves 5%.</p>
+  </details>
+</section>
 
 <style>
-  .checkerboard-bg {
-    background-image:
-      linear-gradient(45deg, #808080 25%, transparent 25%),
-      linear-gradient(-45deg, #808080 25%, transparent 25%),
-      linear-gradient(45deg, transparent 75%, #808080 75%),
-      linear-gradient(-45deg, transparent 75%, #808080 75%);
-    background-size: 16px 16px;
-    background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
-    background-color: #c0c0c0;
+  .canvas-preview { --preview-height: clamp(8rem, 27vh, 18rem); border-block-end: 1px solid var(--color-panel-border); }
+  .canvas-preview__stage { display: flex; justify-content: center; background: var(--color-preview-stage); padding: var(--caption-space-s); }
+  .canvas-preview__frame {
+    position: relative; inline-size: min(100%, calc(var(--preview-height) * var(--preview-aspect))); max-block-size: var(--preview-height); overflow: hidden; cursor: crosshair; touch-action: none; background-color: var(--color-surface-raised);
+    background-image: linear-gradient(45deg, #424242 25%, transparent 25%), linear-gradient(-45deg, #424242 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #424242 75%), linear-gradient(-45deg, transparent 75%, #424242 75%);
+    background-size: 1rem 1rem; background-position: 0 0, 0 .5rem, .5rem -.5rem, -.5rem 0;
+    &:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+    & canvas { display: block; inline-size: 100%; block-size: 100%; }
   }
+  .canvas-preview__safe-area { position: absolute; inset: 5%; border: 1px dashed color-mix(in oklch, var(--color-panel-text) 17%, transparent); pointer-events: none; }
+  .canvas-preview__anchor { position: absolute; inline-size: .45rem; block-size: .45rem; border-radius: 50%; border: 1px solid var(--color-panel-text); background: var(--color-accent); transform: translate(-50%, -50%); pointer-events: none; opacity: .65; }
+  .canvas-preview__empty { position: absolute; inset: 0; display: grid; place-items: center; padding: var(--caption-space-m); color: var(--color-panel-secondary); text-align: center; pointer-events: none; }
+  .canvas-preview__transport { display: flex; align-items: center; gap: var(--caption-space-s); padding: var(--caption-space-s) var(--caption-space-m); background: var(--color-surface); }
+  .canvas-preview__play { min-inline-size: 3.6rem; }
+  .canvas-preview__scrubber { flex: 1; min-inline-size: 0; accent-color: var(--color-accent); }
+  .canvas-preview__time { font-family: ui-monospace, monospace; font-size: .8rem; }
+  .canvas-preview__placement { padding: var(--caption-space-s) var(--caption-space-m); }
+  .canvas-preview__placement > summary { cursor: pointer; font-size: .85rem; font-weight: 600; }
+  .canvas-preview__hint { float: inline-end; font-weight: 400; font-size: .78rem; color: var(--color-panel-secondary); }
+  .canvas-preview__position-controls { display: grid; grid-template-columns: 1fr 1fr; gap: var(--caption-space-s); margin-block: var(--caption-space-s); }
 </style>

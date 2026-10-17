@@ -92,87 +92,11 @@ namespace {
         #endif
     }
 
-std::string exec(const char* cmd) {
-    char buffer[128];
-    std::string result = "";
-    
-    #ifdef __APPLE__
-        FILE* pipe = popen(cmd, "r");
-    #elif _WIN32
-        FILE* pipe = _popen(cmd, "r");
-    #endif
-    
-    
-    if (!pipe) throw std::runtime_error("popen() failed!");
-    try {
-        while (fgets(buffer, sizeof buffer, pipe) != NULL) {
-            result += buffer;
-        }
-    }
-    catch (...) {
-        #ifdef __APPLE__
-            pclose(pipe);
-        #elif _WIN32
-            _pclose(pipe);
-        #endif
-        throw;
-    }
-    #ifdef __APPLE__
-        pclose(pipe);
-    #elif _WIN32
-        _pclose(pipe);
-    #endif
-    return result;
-}
-
+// Retired shell entrypoint. This fork never loads or packages the native addon.
 addon_value ExecSync(addon_env env, addon_callback_info info)
 {
-    addon_status status;
-    addon_value msg;
-    size_t argc = 1;
-    addon_value argv[1];
-
-    status = UxpAddonApis.uxp_addon_get_cb_info(env, info, &argc, argv, NULL, NULL);
-    if (status != addon_ok)
-    {
-        UxpAddonApis.uxp_addon_throw_error(env, NULL, "Failed to pass the arguments");
-    }
-
-    // Get length of param
-    size_t name_length;
-    status = UxpAddonApis.uxp_addon_get_value_string_utf8(env, argv[0], NULL, 0, &name_length);
-
-    char *name = new char[name_length + 1];
-    if (name == nullptr)
-    {
-        UxpAddonApis.uxp_addon_throw_error(env, NULL, "Invalid function name allocation");
-        return nullptr;
-    }
-
-    // Get value of param
-    status = UxpAddonApis.uxp_addon_get_value_string_utf8(env, argv[0], name, name_length + 1, &name_length);
-    name[name_length] = '\0';
-
-    std::string output;
-
-#ifdef __APPLE__
-    // Mac Code
-    output = exec(name);
-#elif _WIN32
-    output = execWin(name);
-#else
-
-#endif
-
-
-    status = UxpAddonApis.uxp_addon_create_string_utf8(env, output.c_str(), output.size(), &msg);
-    if (status != addon_ok) {
-        UxpAddonApis.uxp_addon_throw_error(env, NULL, "Unable to create string");
-    }
-    delete[] name; // Don't forget to delete the dynamically allocated memory
-    return msg;
-
-    //return nullptr;
+    UxpAddonApis.uxp_addon_throw_error(env, NULL, "Shell execution is disabled in this fork.");
+    return nullptr;
 }
 
 /*
@@ -313,19 +237,6 @@ addon_value Init(addon_env env, addon_value exports, const addon_apis& addonAPIs
         }
 
         status = addonAPIs.uxp_addon_set_named_property(env, exports, "my_echo_async", fn);
-        if (status != addon_ok) {
-            addonAPIs.uxp_addon_throw_error(env, NULL, "Unable to populate exports");
-        }
-    }
-
-        // execSync
-    {
-        status = addonAPIs.uxp_addon_create_function(env, NULL, 0, ExecSync, NULL, &fn);
-        if (status != addon_ok) {
-            addonAPIs.uxp_addon_throw_error(env, NULL, "Unable to wrap native function");
-        }
-
-        status = addonAPIs.uxp_addon_set_named_property(env, exports, "execSync", fn);
         if (status != addon_ok) {
             addonAPIs.uxp_addon_throw_error(env, NULL, "Unable to populate exports");
         }

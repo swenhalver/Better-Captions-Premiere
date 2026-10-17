@@ -1,0 +1,77 @@
+{
+  "date": "2026-10-16",
+  "scope": "Disposable Premiere sequence; no production sequence edits and no project save",
+  "sequence": {
+    "name": "Better Captions Verification 2026-10-16",
+    "width": 720,
+    "height": 1280,
+    "frameRate": 24,
+    "captionTrack": "V2"
+  },
+  "liveChecks": {
+    "insertTwoCaptionClips": true,
+    "clipRangesSeconds": [
+      [
+        0,
+        1
+      ],
+      [
+        1.25,
+        2.25
+      ]
+    ],
+    "exactSequenceTickReadback": true,
+    "mediaRelinkPreservedClipNodeIds": true,
+    "manualMotionPositionPreserved": [
+      0.41,
+      0.46
+    ],
+    "manualMotionScalePreserved": 118,
+    "manualOpacityPreserved": 87,
+    "unrelatedTrackCollisionRejectedBeforeMutation": true,
+    "sourceClipUnchangedAfterCollisionAttempt": true,
+    "premiereCompositePngVisuallyInspected": true,
+    "originalSequencePlayheadPreservedSeconds": 34.7916666666667,
+    "singleMainUXPPanelLoaded": true,
+    "directNativeTranscriptInMainPanel": {
+      "captions": 2,
+      "words": 12
+    },
+    "localAgentGetState": true,
+    "localAgentStylePatchSavedReadback": {
+      "activeWordSizeScale": 1.3,
+      "activeWordBubbleRadius": 20,
+      "spokenWordOpacity": 0.6,
+      "restoredAfterTest": true
+    }
+  },
+  "automatedChecks": {
+    "transparentProRes4444Decode": true,
+    "frameRatesEncodedAndProbed": [
+      "30000/1001",
+      "31"
+    ],
+    "frameRatesPlannedWithoutOverlap": [
+      "24",
+      "30000/1001",
+      "31"
+    ],
+    "maximumPngBatchFrames": 32,
+    "fullFrameCaptionPositionPreserved": true,
+    "sharedMediaRelinkRejected": true,
+    "laterRelinkFailureRollsBackEarlierUpdates": true,
+    "perSequenceSaveDirectoryRaceCovered": true,
+    "shellMetacharactersRemainLiteral": true
+  },
+  "limitations": [
+    "The live host test used synthetic transparent caption movies to isolate Premiere integration; native transcription is verified separately.",
+    "Fault rollback and shared-media protection were tested with a host simulation, while normal insert/relink and collision handling were also verified in Premiere."
+  ],
+  "nativeTranscription": {
+    "engine": "Premiere Pro built-in Speech to Text",
+    "source": "Synthetic speech in source.mp4",
+    "nativeWordCount": 12,
+    "wordTimestampsReturned": true,
+    "transcriptReadWhileDiagnosticWindowClosed": true
+  }
+}

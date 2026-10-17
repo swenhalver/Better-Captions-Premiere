@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Better Captions</title>
+    <style>
+      html, body, #app { width: 100vw; height: 100vh; margin: 0; padding: 0; overflow: hidden; }
+      .caption-host__webview { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; border: 0; }
+      .caption-host__status { position: absolute; top: 12px; left: 12px; right: 12px; padding: 12px; color: #dddddd; background-color: #242424; font-size: 12px; z-index: 1; }
+      .caption-host__error { padding: 12px; color: #ffb4a9; }
+    </style>
+  </head>
+  <body>
+    <div id="app"><div id="caption-host-status" class="caption-host__status">Opening Better Captions…</div></div>
+    <script src="main.js"></script>
+  </body>
+</html>

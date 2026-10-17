@@ -9,8 +9,8 @@ const extraPrefs = {
   uniqueIds: true,
 };
 
-export const id = "com.bettercaptions.premiere"; 
-const name = "Better Captions"; 
+export const id = "com.bettercaptions.premiere";
+const name = "Better Captions";
 
 const manifest: UXP_Manifest = {
   id,
@@ -102,37 +102,10 @@ const manifest: UXP_Manifest = {
   },
   requiredPermissions: {
     localFileSystem: "fullAccess",
-    launchProcess: {
-      schemes: ["https", "slack", "file", "ws"],
-      extensions: [".xd", ".psd", ".bat", ".cmd", ""],
-    },
-    network: {
-      domains: [
-        "https://hyperbrew.co",
-        "https://github.com",
-        "https://vitejs.dev",
-        "https://svelte.dev",
-        "https://reactjs.org",
-        "https://vuejs.org/",
-        `ws://localhost:${extraPrefs.hotReloadPort}`, // Required for hot reload
-      ],
-    },
-    clipboard: "readAndWrite",
-    webview: {
-      allow: "yes",
-      allowLocalRendering: "yes",
-      domains: "all",
-      enableMessageBridge: "localAndRemote",
-    },
-    ipc: {
-      enablePluginCommunication: true,
-    },
-    allowCodeGenerationFromStrings: true,
-
-    enableAddon: true, 
-  },
-  addon: {
-    name: "bolt-uxp-hybrid.uxpaddon",
+    network: { domains: [] },
+    webview: { allow: "yes", allowLocalRendering: "yes", domains: [], enableMessageBridge: "localAndRemote" },
+    allowCodeGenerationFromStrings: false,
+    enableAddon: false,
   },
   icons: [
     {

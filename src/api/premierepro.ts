@@ -8,31 +8,8 @@ import type {
   AudioTrack,
 } from "../types/ppro";
 
-let addon: any = null;
-function loadAddon() {
-  const attempts = [
-    "bolt-uxp-hybrid.uxpaddon",
-    "bolt-uxp-hybrid",
-    "./bolt-uxp-hybrid.uxpaddon",
-  ];
-  for (const name of attempts) {
-    try {
-      const loaded = require(name);
-      console.log(`Addon loaded via "${name}":`, JSON.stringify(Object.keys(loaded || {})));
-      console.log("execSync?", typeof loaded?.execSync);
-      if (loaded?.execSync) {
-        return loaded;
-      }
-      if (loaded?.default?.execSync) {
-        return loaded.default;
-      }
-    } catch (e: any) {
-      console.log(`Addon require("${name}") failed:`, e?.message);
-    }
-  }
-  return null;
-}
-addon = loadAddon();
+// Native shell addon disabled in this fork. The CEP adapter uses execFile argument arrays.
+const addon: any = null;
 
 export const notify = async (message: string) => {
   alert(message);
@@ -230,70 +207,7 @@ export const saveFrameBatch = async (
   }
 };
 
-function findFfmpeg(): string | null {
-  if (!addon) return null;
-  const paths = [
-    "/opt/homebrew/bin/ffmpeg",
-    "/usr/local/bin/ffmpeg",
-    "/usr/bin/ffmpeg",
-  ];
-  for (const p of paths) {
-    try {
-      const result = addon.execSync(`test -f "${p}" && echo "found"`);
-      if (result.trim() === "found") return p;
-    } catch {}
-  }
-  try {
-    const result = addon.execSync("which ffmpeg");
-    if (result.trim()) return result.trim();
-  } catch {}
-  return null;
-}
-
-export const encodeProRes = async (
-  folderName: string,
-  frameRate: number,
-  outputPath: string,
-): Promise<{ success: boolean; error?: string }> => {
-  try {
-    if (!addon || !addon.execSync) {
-      return { success: false, error: "Native addon not available. execSync is required for ProRes encoding." };
-    }
-
-    const ffmpeg = findFfmpeg();
-    if (!ffmpeg) {
-      return { success: false, error: "ffmpeg not found. Install via: brew install ffmpeg" };
-    }
-
-    const fs = uxp.storage.localFileSystem;
-    const tempFolder = await fs.getTemporaryFolder();
-    const outputFolder = await tempFolder.getEntry(folderName);
-    const entries = await outputFolder.getEntries();
-    const firstPng = entries.find((e: any) => e.name.endsWith("_000000.png"));
-    if (!firstPng) {
-      return { success: false, error: "No PNG frames found in folder" };
-    }
-    const framesDir = firstPng.nativePath.replace(/\/[^/]+$/, "");
-    const prefix = firstPng.name.replace(/_000000\.png$/, "");
-
-    const inputPattern = `${framesDir}/${prefix}_%06d.png`;
-    const cmd = `"${ffmpeg}" -y -framerate ${frameRate} -i "${inputPattern}" -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le "${outputPath}"`;
-
-    console.log("encodeProRes cmd:", cmd);
-    const result = addon.execSync(cmd + " 2>&1");
-    console.log("ffmpeg output:", result.substring(0, 500));
-
-    const checkExists = addon.execSync(`test -f "${outputPath}" && echo "exists"`);
-    if (checkExists.trim() !== "exists") {
-      return { success: false, error: "ffmpeg did not produce output file" };
-    }
-
-    return { success: true };
-  } catch (e: any) {
-    console.error("encodeProRes failed:", e);
-    return { success: false, error: e?.message || String(e) };
-  }
-};
+export const encodeProRes = async (..._args: unknown[]) => ({success:false,error:"Use the reviewed Premiere CEP panel to encode caption clips."});
 
 export const getOutputFolder = async (
   subfolderName?: string,

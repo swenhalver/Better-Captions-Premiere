@@ -36,3 +36,10 @@ scripts/mac-sign.sh
 public/webview-ui/*
 
 .demos
+
+# Generated local panel build and private verification/watch state
+cep/client/
+cep/service-client/
+uxp/client/
+artifacts/
+.upstream-watch-state.json

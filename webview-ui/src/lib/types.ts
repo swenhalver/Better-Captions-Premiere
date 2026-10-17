@@ -34,6 +34,11 @@ export interface CaptionItem {
   startTime: number;
   endTime: number;
   speaker?: string;
+  clipNodeId?: string;
+  projectItemId?: string;
+  mediaPath?: string;
+  position?: { x: number; y: number };
+  timingEstimated?: boolean;
 }
 
 export interface CaptionWord {
@@ -44,6 +49,19 @@ export interface CaptionWord {
 }
 
 export type AnimationPreset = "fade" | "pop" | "typewriter" | "karaoke" | "bounce";
+
+export interface WordAppearance {
+  fontFamily: string;
+  fontWeight: number;
+  sizeScale: number;
+  color: string;
+  opacity: number;
+  bubble: boolean;
+  bubbleColor: string;
+  bubbleOpacity: number;
+  padding: number;
+  radius: number;
+}
 
 export interface StyleConfig {
   fontFamily: string;
@@ -72,6 +90,8 @@ export interface StyleConfig {
   lineHeight: number;
   textTransform: "none" | "uppercase" | "lowercase";
   maxWords: number;
+  activeWord: WordAppearance;
+  spokenWord: WordAppearance;
 }
 
 export interface AnimationConfig {
@@ -104,11 +124,13 @@ export interface SequenceInfo {
   frameRate: number;
   frameWidth: number;
   frameHeight: number;
+  projectPath?: string;
+  tracks?: { index: number; name: string; clips: number; locked: boolean }[];
 }
 
 export const DEFAULT_STYLE: StyleConfig = {
   fontFamily: "Arial",
-  fontSize: 128,
+  fontSize: 64,
   fontWeight: 700,
   textColor: "#FFFFFF",
   strokeEnabled: true,
@@ -121,7 +143,7 @@ export const DEFAULT_STYLE: StyleConfig = {
   shadowBlur: 4,
   shadowOffsetX: 2,
   shadowOffsetY: 2,
-  backgroundEnabled: true,
+  backgroundEnabled: false,
   backgroundColor: "#000000",
   backgroundOpacity: 0.6,
   backgroundPadding: 12,
@@ -133,6 +155,8 @@ export const DEFAULT_STYLE: StyleConfig = {
   lineHeight: 1.3,
   textTransform: "none",
   maxWords: 6,
+  activeWord: {fontFamily:"",fontWeight:700,sizeScale:1.15,color:"#171717",opacity:1,bubble:true,bubbleColor:"#FFD84D",bubbleOpacity:1,padding:10,radius:14},
+  spokenWord: {fontFamily:"",fontWeight:700,sizeScale:1,color:"#AAAAAA",opacity:1,bubble:false,bubbleColor:"#333333",bubbleOpacity:1,padding:8,radius:10},
 };
 
 export const DEFAULT_ANIMATION: AnimationConfig = {
