@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
-const root=path.join(os.homedir(),'Library','Application Support','Better Captions','agent');
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const root=path.join(require('../cep/platform.cjs').dataRoot(),'agent');
 const args=process.argv.slice(2),action=args.shift()||'status';
 function option(name){const i=args.indexOf(name);if(i<0)return undefined;const v=args[i+1];args.splice(i,2);return v;}
 const instanceId=option('--instance'),sequenceId=option('--sequence'),file=option('--file'),timeout=Number(option('--timeout')||90000);

@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import test from 'node:test';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 import {validateStylePatch,validateCaptionPatch} from '../webview-ui/src/lib/agent-bridge.ts';
 import {DEFAULT_STYLE,DEFAULT_ANIMATION} from '../webview-ui/src/lib/types.ts';
 
@@ -43,7 +45,7 @@ async function fixture(){
   const data=addFolder('/Users/test/Library/Application Support/Adobe/UXP/PluginsStorage/caption/data');
   const filesystem={async getDataFolder(){return data;},async getEntryWithUrl(url){const entry=entries.get(url.replace(/^file:/,''));if(!entry)throw new Error('Entry not found');return entry;}};
   const storageModule={exports:{}};
-  vm.runInNewContext(fs.readFileSync(new URL('../uxp/storage.js',import.meta.url),'utf8'),{module:storageModule,exports:storageModule.exports,require(name){assert.equal(name,'uxp');return {storage:{localFileSystem:filesystem}};},crypto:{randomUUID}}, {filename:'uxp/storage.js'});
+  vm.runInNewContext(fs.readFileSync(new URL('../uxp/storage.js',import.meta.url),'utf8'),{module:storageModule,exports:storageModule.exports,require(name){if(name==='./paths.js')return require('../uxp/paths.js');assert.equal(name,'uxp');return {storage:{localFileSystem:filesystem}};},crypto:{randomUUID}}, {filename:'uxp/storage.js'});
   const storage=storageModule.exports,state={sequenceId:'sequence-a',sequenceName:'Dialogue',style:clone(DEFAULT_STYLE),animation:clone(DEFAULT_ANIMATION),captions:[{id:'cue-1',text:'Hello',startTime:0,endTime:1,words:[{text:'Hello',startTime:0,endTime:.9,isActive:false}],clipNodeId:'timeline-clip',projectItemId:'project-item',mediaPath:'/managed/caption.mov'}]};
   const handler={
     async getState(){await Promise.resolve();return clone(state);},

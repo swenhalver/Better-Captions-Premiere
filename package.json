@@ -1,7 +1,7 @@
 {
   "name": "better-captions-swen",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "build": "npm --prefix webview-ui run build && npm --prefix webview-ui run build:service",
@@ -9,7 +9,7 @@
     "check": "npm --prefix webview-ui run check",
     "test": "node --test tests/*.test.mjs",
     "package": "npm run build && node scripts/package.cjs",
-    "install:premiere": "zsh scripts/install-cep.sh"
+    "install:premiere": "node scripts/install.cjs"
   },
   "description": "Local fork of Better Captions for Premiere Pro, with editable word timing and three word styles."
 }

@@ -9,8 +9,9 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
   const contexts = new Map<string, CapturedContext>();
   let currentId = '', runtime: any = null;
   if (cep) {
-    const root = decodeURI(cep.getSystemPath('extension')).replace(/^file:\/\//, '');
-    runtime = window.require!(root + '/runtime.cjs');
+    const extension = cep.getSystemPath('extension');
+    const root = extension.startsWith('file:') ? window.require!('node:url').fileURLToPath(extension) : extension;
+    runtime = window.require!(window.require!('node:path').join(root, 'runtime.cjs'));
   }
   function captured(sequenceId = currentId): CapturedContext {
     const value = contexts.get(sequenceId);

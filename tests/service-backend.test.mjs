@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url), ts = require('../webview-ui/node_modules/typescript');
+const platform = require('../cep/platform.cjs');
 const source = fs.readFileSync(new URL('../cep/service.ts', import.meta.url), 'utf8');
 function loadService() {
   const exports = {}, code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
@@ -15,7 +16,7 @@ function loadService() {
 }
 const service = loadService();
 const request = (action = 'getFonts', args = []) => ({ version: 1, id: crypto.randomBytes(16).toString('hex'), createdAt: Date.now(), sequenceId: 'seq-a', projectPath: '/project/test.prproj', action, args });
-function options(t, api) { const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'better-captions-service-'))); t.after(() => fs.rmSync(temporary, { recursive: true, force: true })); return { api, fs, path, os, crypto, process, root: path.join(temporary, 'service'), intervalMs: 60000 }; }
+function options(t, api) { const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'better-captions-service-'))); t.after(() => fs.rmSync(temporary, { recursive: true, force: true })); return { api, fs, path, os, crypto, process, platform, root: path.join(temporary, 'service'), intervalMs: 60000 }; }
 function writeRequest(root, data) { const file = path.join(root, 'requests', data.id + '.json'); fs.writeFileSync(file, JSON.stringify(data)); return file; }
 const info = async id => ({ id, projectPath: '/project/test.prproj' });
 
@@ -26,6 +27,11 @@ test('service rejects arbitrary execution actions, stale timestamps and malforme
   const expired = request(); expired.createdAt = Date.now() - 120001; assert.throws(() => service.validateServiceRequest(expired, expired.id + '.json'), /expired/);
   const invalidTime = request(); delete invalidTime.createdAt; assert.throws(() => service.validateServiceRequest(invalidTime, invalidTime.id + '.json'), /expired/);
   const invalidArgs = request('beginCaption', ['caption', 'injected-sequence']); assert.throws(() => service.validateServiceRequest(invalidArgs, invalidArgs.id + '.json'), /arguments/);
+});
+
+test('service accepts Windows drive paths while rejecting relative, network and traversal paths', () => {
+  for(const projectPath of ['C:\\Project Data\\edit.prproj','D:/Café/edit.prproj','/Users/editor/edit.prproj']) { const data={...request(),projectPath};assert.equal(service.validateServiceRequest(data,data.id+'.json').projectPath,projectPath); }
+  for(const projectPath of ['C:edit.prproj','relative','\\\\server\\share\\edit.prproj','//server/edit.prproj','C:/folder/../edit.prproj','/a/./edit.prproj']) { const data={...request(),projectPath};assert.throws(()=>service.validateServiceRequest(data,data.id+'.json'),/Invalid captured/); }
 });
 test('service inserts captured sequence identity and preserves previous-caption arguments', async () => {
   const calls = [], api = { getActiveSequenceInfo: info, applyCaptionClips: (...args) => calls.push(args) };
@@ -69,11 +75,11 @@ test('queue claims requests atomically and writes matching private responses', a
   release(); await running; assert.equal(calls, 1);
   const output = path.join(worker.root, 'responses', data.id + '.json'), result = JSON.parse(fs.readFileSync(output, 'utf8'));
   assert.equal(result.id, data.id); assert.equal(result.sequenceId, 'seq-a'); assert.equal(result.projectPath, '/project/test.prproj'); assert.deepEqual(result.result, ['Arial']);
-  assert.equal(fs.statSync(output).mode & 0o777, 0o600); assert.equal(fs.statSync(worker.root).mode & 0o777, 0o700);
+  if (process.platform !== 'win32') { assert.equal(fs.statSync(output).mode & 0o777, 0o600); assert.equal(fs.statSync(worker.root).mode & 0o777, 0o700); }
   writeRequest(worker.root, data); await worker.poll(); assert.equal(calls, 1, 'replay uses completed response without executing again');
 });
 test('symbolic-link queue roots are rejected', t => {
-  const configuration = options(t, {}), target = path.join(path.dirname(configuration.root), 'elsewhere'); fs.mkdirSync(target); fs.symlinkSync(target, configuration.root);
+  const configuration = options(t, {}), target = path.join(path.dirname(configuration.root), 'elsewhere'); fs.mkdirSync(target); fs.symlinkSync(target, configuration.root, process.platform === 'win32' ? 'junction' : 'dir');
   assert.throws(() => service.startBackendService(configuration), /real private directory/);
 });
 test('an expired queued read is discarded before any native context or geometry call',async t=>{

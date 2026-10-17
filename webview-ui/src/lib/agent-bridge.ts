@@ -48,14 +48,16 @@ export function validateCaptionPatch(value:unknown,current:CaptionItem[]):Captio
 }
 export function startAgentBridge(handler:AgentHandler):()=>void {
   const win=window as any;if(!win.__adobe_cep__||typeof win.require!=='function')return ()=>{};
-  const fs=win.require('fs'),path=win.require('path'),os=win.require('os'),crypto=win.require('crypto');
-  const root=path.join(os.homedir(),'Library','Application Support','Better Captions','agent');
+  const fs=win.require('fs'),path=win.require('path'),crypto=win.require('crypto');
+  const extension=win.__adobe_cep__.getSystemPath('extension');
+  const extensionRoot=extension.startsWith('file:')?win.require('node:url').fileURLToPath(extension):extension;
+  const platform=win.require(path.join(extensionRoot,'platform.cjs'));
+  const root=path.join(platform.dataRoot(),'agent');
   fs.mkdirSync(root,{recursive:true,mode:0o700});
   for(const folder of [root,...['instances','requests','responses'].map(sub=>path.join(root,sub))]){
-    fs.mkdirSync(folder,{recursive:true,mode:0o700});
+    platform.secureDirectory(folder);
     const stat=fs.lstatSync(folder);
     if(!stat.isDirectory()||stat.isSymbolicLink()||fs.realpathSync(folder)!==folder)throw new Error('The caption agent folder must be a private local directory.');
-    fs.chmodSync(folder,0o700);
   }
   const instanceId=crypto.randomBytes(10).toString('hex'),instance=path.join(root,'instances',instanceId+'.json');
   let busy=false,alive=true;

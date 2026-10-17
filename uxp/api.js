@@ -3,6 +3,7 @@ const ppro = require('premierepro');
 const fs = require('uxp').storage.localFileSystem;
 const { ensureFolder, privateRoot, readJSON, writeJSON, randomId } = require('./storage.js');
 const native = require('./transcript.js');
+const { localPath, parentPath } = require('./paths.js');
 const key = id => String(id).replace(/[{}]/g, '').toLowerCase();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -60,8 +61,10 @@ function createHostAPI(options = {}) {
   }
   async function sessionFolder(id) {
     const context = captured(id);
-    if (!context.projectPath || !context.projectPath.startsWith('/')) throw new Error('Save the Premiere project first so caption assets have a permanent home.');
-    return ensureFolder(context.projectPath.replace(/\/[^/]+$/, '') + '/Better Captions/' + context.id);
+    let parent;
+    try { parent = parentPath(localPath(context.projectPath)); } catch {}
+    if (!parent) throw new Error('Save the Premiere project first so caption assets have a permanent home.');
+    return ensureFolder(parent.replace(/\/$/, '') + '/Better Captions/' + context.id);
   }
   async function requireService(root, action) {
     let status;

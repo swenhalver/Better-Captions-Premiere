@@ -1,24 +1,22 @@
 'use strict';
 const fs = require('uxp').storage.localFileSystem;
+const { localPath, parentPath, fileUrl, privateBase } = require('./paths.js');
 function randomId() { return crypto.randomUUID().replace(/-/g, ''); }
 async function ensureFolder(absolutePath) {
-  if (typeof absolutePath !== 'string' || !absolutePath.startsWith('/') || absolutePath.split('/').some(part => part === '..' || part === '.')) throw new Error('Expected a local absolute caption folder.');
-  try { const entry = await fs.getEntryWithUrl('file:' + absolutePath); if (!entry.isFolder) throw new Error('Caption folder path is occupied by a file.'); return entry; }
+  absolutePath = localPath(absolutePath);
+  try { const entry = await fs.getEntryWithUrl(fileUrl(absolutePath)); if (!entry.isFolder) throw new Error('Caption folder path is occupied by a file.'); return entry; }
   catch (error) {
-    const slash = absolutePath.lastIndexOf('/');
-    if (slash <= 0) throw error;
-    const parent = await ensureFolder(absolutePath.slice(0, slash));
-    try { return await parent.createFolder(absolutePath.slice(slash + 1)); }
-    catch { const entry = await fs.getEntryWithUrl('file:' + absolutePath); if (!entry.isFolder) throw error; return entry; }
+    const parentName = parentPath(absolutePath);
+    if (!parentName) throw error;
+    const parent = await ensureFolder(parentName);
+    try { return await parent.createFolder(absolutePath.slice(absolutePath.lastIndexOf('/') + 1)); }
+    catch { const entry = await fs.getEntryWithUrl(fileUrl(absolutePath)); if (!entry.isFolder) throw error; return entry; }
   }
 }
 async function privateRoot(scope) {
   if (!['agent', 'service'].includes(scope)) throw new Error('Unknown caption service scope.');
   const data = await fs.getDataFolder();
-  const marker = '/Library/Application Support/';
-  const index = data.nativePath.indexOf(marker);
-  if (index < 1) throw new Error('This installer requires a standard macOS user Library folder.');
-  return ensureFolder(data.nativePath.slice(0, index) + '/Library/Application Support/Better Captions/' + scope);
+  return ensureFolder(privateBase(data.nativePath) + '/' + scope);
 }
 async function readJSON(file, maxBytes = 20 * 1024 * 1024) {
   if (!file.isFile) throw new Error('Expected a caption JSON file.');

@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -48,6 +50,7 @@ function harness(t, options = {}) {
     if(name==='uxp')return {storage:{localFileSystem:{}}};
     if(name==='./storage.js')return storage;
     if(name==='./transcript.js')return native;
+    if(name==='./paths.js')return require('../uxp/paths.js');
     throw new Error('Unexpected import '+name);
   }};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/api.js',import.meta.url),'utf8'),context);
@@ -61,6 +64,12 @@ test('direct native requests and slow saves retain the captured sequence after s
   await h.api.saveSession({sequenceId:'one',captions:[{text:'original'}]});
   assert.equal(h.writes.at(-1).path,'/projects/Better Captions/one');
   assert.equal(h.writes.at(-1).value.sequenceId,'one');
+});
+
+test('Windows sessions save beside the captured project and preserve raw project identity in service requests',async t=>{
+  const h=harness(t);h.relocate('D:\\Project Data\\Café\\edit.prproj');await h.api.getActiveSequenceInfo();
+  await h.api.saveSession({sequenceId:'one',captions:[]});assert.equal(h.writes.at(-1).path,'D:/Project Data/Café/Better Captions/one');
+  await h.api.getFonts();assert.equal(h.requests.at(-1).projectPath,'D:\\Project Data\\Café\\edit.prproj');
 });
 
 test('font loading initializes native context and accepts a renderer that claims immediately',async t=>{

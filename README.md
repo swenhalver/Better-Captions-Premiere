@@ -18,14 +18,14 @@ Each phrase is rendered as a transparent **ProRes 4444 text-area clip** at the s
 
 ## Requirements
 
-The provided installer targets **Apple Silicon macOS and Premiere Pro 26.3 or newer**. Live checks used Premiere 26.5.2. Windows and Intel installers have not been implemented or tested.
+The installer supports **Windows and macOS (Apple Silicon or Intel), with Premiere Pro 26.3 or newer**. The same JavaScript plugin and platform-neutral package are used on both systems. See the [verification notes](docs/interface-review.md) for the current native installation status.
 
 - Node.js 24 LTS for building/development and the optional agent CLI.
-- Local FFmpeg/FFprobe at `/opt/homebrew/bin/ffmpeg` and `/opt/homebrew/bin/ffprobe`.
-- Fontconfig's `/opt/homebrew/bin/fc-list` for the installed-font picker.
+- Local FFmpeg and FFprobe. The plugin finds WinGet's user links on Windows, Apple Silicon/Intel Homebrew locations on macOS, and absolute directories in `PATH`.
+- macOS: Fontconfig (`fc-list`) for the font picker. Windows uses its installed font families through the system Windows PowerShell/.NET APIs, with no Fontconfig dependency.
 - Premiere's Speech to Text language pack and transcription preferences set as desired.
 
-With Homebrew, the media/font dependencies are `brew install ffmpeg fontconfig`.
+With Homebrew, run `brew install ffmpeg fontconfig`. On Windows, install a local FFmpeg distribution containing both `ffmpeg.exe` and `ffprobe.exe`, for example `winget install --id Gyan.FFmpeg --exact`. Restart Premiere after installing dependencies. Custom locations can be set through `BETTER_CAPTIONS_FFMPEG`, `BETTER_CAPTIONS_FFPROBE` and (macOS) `BETTER_CAPTIONS_FC_LIST`, each containing an absolute executable path. These are local configuration; caption requests cannot choose executables.
 
 ## Install and use
 
@@ -39,9 +39,13 @@ npm run package
 npm run install:premiere
 ```
 
-Alternatively, unpack the installer ZIP from this fork's releases and run `zsh scripts/install-cep.sh` in its folder. Keep the unpacked folder in a permanent location: the CEP installation points to it.
+Alternatively, unpack the `Windows-macOS.zip` installer and run `node scripts/install.cjs` in its folder. The macOS `zsh scripts/install-cep.sh` command remains available. The installer copies the invisible service into the user's Adobe CEP extensions folder and preserves an earlier owned service outside Adobe's extension discovery directory. An existing legacy macOS source link is reused when it points to this checkout.
 
 The installer installs the main UXP caption editor and an invisible CEP render service. The Transcribe button calls Premiere directly from the main plugin; no separate transcript window is used. Adobe's local CEP developer flag is needed for this reviewed, unsigned panel. Restart Premiere once after first installation to start its background rendering service; save your work first. The service has no window or menu entry.
+
+If Adobe UPIA reports an installation error, open the `.ccx` in Creative Cloud Desktop and complete Adobe's normal installation prompt, then run `node scripts/install.cjs --service-only`. That mode verifies the matching UXP plugin ID/version before installing the invisible service; it does not bypass UXP registration.
+
+Private queue and agent files live under `%APPDATA%\Better Captions` on Windows and `~/Library/Application Support/Better Captions` on macOS. Windows folders have a protected ACL for the current user, SYSTEM and Administrators; macOS folders/files retain 0700/0600 permissions. Caption assets still live beside the project. Local drive paths, spaces and Unicode are supported; UNC/device paths and traversal segments are rejected.
 
 1. Open **Window > UXP Plugins > Better Captions**. This is the only visible plugin panel.
 2. Open a saved sequence, then **Refresh sequence** in the caption editor.
