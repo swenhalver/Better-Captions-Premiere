@@ -42,7 +42,8 @@
     busy = true; error = ''; status = '';
     let writing = false;
     try {
-      const id = action === 'save' ? `preset-${crypto.randomUUID()}` : selectedId;
+      // Record IDs are not credentials; avoid secure-context-only APIs in plugin: webviews.
+      const id = action === 'save' ? `preset-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}` : selectedId;
       const oldName = selected?.name;
       const next = action === 'save' ? addStylePreset(library, name, capturePresetLook(style, animation), id) :
         changeStylePreset(library, id, action === 'delete' ? 'delete' : action === 'rename' ? { name } : { look: capturePresetLook(style, animation) });
