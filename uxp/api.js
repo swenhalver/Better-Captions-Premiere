@@ -158,12 +158,16 @@ function createHostAPI(options = {}) {
     async readCaptionGeometry(captions, id = currentId) { return backend('readCaptionGeometry', [captions], id); },
     async readCaptionSelection(captions, id = currentId) { return backend('readCaptionSelection', [captions], id); },
     async readCaptionArea(caption,id=currentId,frame=0) {
-      const descriptor=await backend('readCaptionAreaDescriptor',[caption],id), {sequence}=await sequenceContext(id);
-      return require('./text-area.js').readArea(ppro,sequence,descriptor,frame);
+      const link={id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,renderBounds:caption.renderBounds?JSON.parse(JSON.stringify(caption.renderBounds)):undefined};
+      const revalidate=()=>backend('readCaptionAreaDescriptor',[link],id);
+      const descriptor=await revalidate(), {sequence}=await sequenceContext(id);
+      return require('./text-area.js').readArea(ppro,sequence,descriptor,frame,revalidate);
     },
     async editCaptionArea(caption,id=currentId,request) {
-      const descriptor=await backend('readCaptionAreaDescriptor',[caption],id), {project,sequence}=await sequenceContext(id);
-      return require('./text-area.js').editArea(ppro,project,sequence,descriptor,request);
+      const link={id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,renderBounds:caption.renderBounds?JSON.parse(JSON.stringify(caption.renderBounds)):undefined};
+      const revalidate=()=>backend('readCaptionAreaDescriptor',[link],id);
+      const descriptor=await revalidate(), {project,sequence}=await sequenceContext(id);
+      return require('./text-area.js').editArea(ppro,project,sequence,descriptor,request,revalidate);
     },
     async getColorScheme() { return { theme: 'darkest', colors: {} }; },
     async startAgentBridge(proxy) { return require('./agent.js').startAgentBridge(proxy); },

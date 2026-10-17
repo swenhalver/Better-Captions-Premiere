@@ -1,62 +1,147 @@
-<script lang="ts">
-  import {untrack} from 'svelte';
+<script module lang="ts">
   import type {CaptionItem} from '../lib/types';
-  import {sampleArea,sampleAt,editSample,type TextAreaState,type TextAreaEdit,type AreaTrack} from '../lib/text-area';
+  import type {TextAreaState,TextAreaEdit,AreaTrack} from '../lib/text-area';
+  export interface AreaContext {
+    key:string;caption:CaptionItem;sequenceId:string;frameRate:number;currentTime:number;visible:boolean;disabled:boolean;
+  }
+  interface AreaControllerOptions {
+    current:()=>AreaContext;
+    read:(context:AreaContext,frame:number)=>Promise<TextAreaState>;
+    edit:(context:AreaContext,request:TextAreaEdit)=>Promise<TextAreaState>;
+    seek:(context:AreaContext,time:number)=>Promise<void>;
+    getTime:(context:AreaContext)=>Promise<number>;
+    state:(next:TextAreaState|null)=>void;busy:(value:boolean)=>void;error:(message:string)=>void;
+    changed:(context:AreaContext)=>Promise<void>;
+  }
+  const snapshot=<T,>(value:T):T=>JSON.parse(JSON.stringify(value));
+  export function captionFrame(context:AreaContext,time=context.currentTime,reference?:Pick<TextAreaState,'startTime'|'frameRate'|'count'>|null):number {
+    const rate=reference?.frameRate??context.frameRate,start=reference?.startTime??context.caption.startTime;
+    const count=reference?.count??Math.max(1,Math.round((context.caption.endTime-context.caption.startTime)*rate));
+    return Math.max(0,Math.min(count-1,Math.round((time-start)*rate)));
+  }
+  /** One native operation at a time; only the latest settled playhead read is retained. */
+  export function createTextAreaController(options:AreaControllerOptions) {
+    let alive=true,active:Promise<void>|null=null,generation=0,desired:string|null=null,identity='',queued=false,blocked=false;
+    let state:TextAreaState|null=null;
+    const enabled=(context:AreaContext)=>context.visible&&!context.disabled;
+    const stamp=(context:AreaContext)=>JSON.stringify([context.key,captionFrame(context,context.currentTime,state)]);
+    function publish(next:TextAreaState|null){state=next;if(alive)options.state(next);}
+    function current(context:AreaContext,token:number){const live=options.current();return alive&&generation===token&&enabled(live)&&live.key===context.key&&live.currentTime===context.currentTime;}
+    async function readAt(context:AreaContext,time:number,token:number){
+      if(!current(context,token))return null;
+      let next=await options.read(context,captionFrame(context,time,state));
+      if(!current(context,token))return null;
+      // Pending transcript timing may differ from the still-applied native clip.
+      const nativeFrame=captionFrame(context,time,next);
+      if(next.frame!==nativeFrame)next=await options.read(context,nativeFrame);
+      return current(context,token)?next:null;
+    }
+    function run(context:AreaContext,token:number,work:()=>Promise<void>){
+      const operation=Promise.resolve().then(work).catch(error=>{
+        if(!current(context,token))return;
+        blocked=true;queued=false;
+        if(alive)options.error(error instanceof Error?error.message:String(error));
+      }).finally(()=>{active=null;options.busy(false);if(alive&&queued&&!blocked)drain();});
+      active=operation;options.busy(true);return operation;
+    }
+    function drain(){
+      if(!alive||active||blocked||!queued)return;
+      const context=snapshot(options.current());
+      if(!enabled(context)){queued=false;return;}
+      queued=false;const token=generation,expected=stamp(context);
+      return run(context,token,async()=>{
+        const next=await readAt(context,context.currentTime,token);
+        if(next&&current(context,token)&&stamp(options.current())===expected){publish(next);desired=stamp(options.current());}
+      });
+    }
+    function sync(){
+      const context=options.current(),next=enabled(context)?stamp(context):null;
+      if(next===desired)return;
+      generation++;desired=next;
+      if(identity!==context.key){identity=context.key;blocked=false;publish(null);}
+      if(next===null){queued=false;publish(null);return;}
+      queued=!blocked;return drain();
+    }
+    function refresh(){
+      const context=options.current();if(!alive||!enabled(context))return;
+      generation++;desired=stamp(context);blocked=false;queued=true;return drain();
+    }
+    function change(request:Omit<TextAreaEdit,'signature'|'frame'>,field?:{index:number;value:number}){
+      const context=snapshot(options.current());if(!alive||active||!state||!enabled(context))return;
+      const token=++generation;queued=false;blocked=false;desired=stamp(context);
+      return run(context,token,async()=>{
+        if(!current(context,token))return;
+        const time=await options.getTime(context);
+        if(!Number.isFinite(time))throw new Error('Premiere did not confirm the current playhead. Refresh Position & size.');
+        if(!current(context,token))return;
+        const fresh=await readAt(context,time,token);
+        if(!fresh||!current(context,token))return;
+        publish(fresh);
+        const action:TextAreaEdit={...request,signature:fresh.signature,frame:fresh.frame};
+        if(field&&request.track){action.value=[...fresh.tracks[request.track].value];action.value[field.index]=field.value;}
+        const next=await options.edit(context,action);
+        if(!current(context,token))return;
+        publish(next);await options.changed(context);
+      });
+    }
+    function seek(frame:number){
+      const context=snapshot(options.current());if(!alive||active||!enabled(context)||!Number.isFinite(frame))return;
+      const token=++generation;queued=false;blocked=false;
+      const rate=state?.frameRate??context.frameRate,start=state?.startTime??context.caption.startTime;
+      const bounded=captionFrame(context,start+Math.round(frame)/rate,state);
+      return run(context,token,async()=>{
+        if(!alive||!enabled(options.current())||options.current().key!==context.key)return;
+        await options.seek(context,start+bounded/rate);
+        if(!alive||!enabled(options.current())||options.current().key!==context.key)return;
+        desired=stamp(options.current());queued=true;
+      });
+    }
+    return {sync,refresh,change,seek,stop(){alive=false;generation++;queued=false;}};
+  }
+</script>
+<script lang="ts">
+  import {onDestroy,untrack} from 'svelte';
+  import {sampleArea,sampleAt,editSample} from '../lib/text-area';
   import MotionIcon from './MotionIcon.svelte';
-  interface Props {caption:CaptionItem;sequenceId:string;frameRate:number;frameWidth:number;frameHeight:number;currentTime:number;visible:boolean;isDemo:boolean;read:(caption:CaptionItem,id:string,frame:number)=>Promise<TextAreaState>;edit:(caption:CaptionItem,id:string,request:TextAreaEdit)=>Promise<TextAreaState>;onSeek:(time:number)=>void;onBusy:(busy:boolean)=>void;onChanged:()=>void;}
-  let {caption,sequenceId,frameRate,frameWidth,frameHeight,currentTime,visible,isDemo,read,edit,onSeek,onBusy,onChanged}:Props=$props();
-  let area=$state<TextAreaState|null>(null),busy=$state(false),problem=$state(''),notice=$state('');
-  let sampleUndo:TextAreaState|null=null,generation=0;
+  interface Props {caption:CaptionItem;sequenceId:string;frameRate:number;frameWidth:number;frameHeight:number;currentTime:number;visible:boolean;disabled?:boolean;isDemo:boolean;read:(caption:CaptionItem,id:string,frame:number)=>Promise<TextAreaState>;edit:(caption:CaptionItem,id:string,request:TextAreaEdit)=>Promise<TextAreaState>;getCurrentTime:()=>Promise<number>;onSeek:(time:number)=>void|Promise<void>;onBusy:(busy:boolean)=>void;onChanged:()=>void|Promise<void>;}
+  let {caption,sequenceId,frameRate,frameWidth,frameHeight,currentTime,visible,disabled=false,isDemo,read,edit,getCurrentTime,onSeek,onBusy,onChanged}:Props=$props();
+  let area=$state<TextAreaState|null>(null),busy=$state(false),problem=$state(''),notice=$state(''),expanded=$state(false);
+  const sampleUndos=new Map<string,TextAreaState>();
   const samples=new Map<string,TextAreaState>();
   const names=[{key:'position',label:'Position'},{key:'width',label:'Width'},{key:'height',label:'Height'}] as const;
-  const identity=$derived(JSON.stringify([sequenceId,caption.id,caption.clipNodeId,caption.mediaPath,caption.renderBounds]));
-  const frame=$derived(Math.max(0,Math.round((currentTime-caption.startTime)*frameRate)));
-  $effect(()=>{const key=identity;const show=visible;if(!show)return;untrack(()=>{generation++;area=null;sampleUndo=null;void refresh(frame,key);});});
-  async function refresh(at=frame,key=identity){
-    if(busy)return;
-    if(!isDemo&&!caption.clipNodeId){area=null;return;}
-    const token=generation,selected=JSON.parse(JSON.stringify(caption)),id=sequenceId;
-    busy=true;problem='';if(!isDemo)onBusy(true);
-    try {
-      const next=isDemo?sampleAt(samples.get(key)??sampleArea(frameWidth,frameHeight,frameRate,caption.startTime,caption.endTime),at):await read(selected,id,at);
-      if(token===generation&&key===identity)area=next;
-    }catch(e){if(token===generation)problem=e instanceof Error?e.message:String(e);}
-    finally{busy=false;if(!isDemo)onBusy(false);if(token!==generation&&visible)void refresh(frame,identity);}
-  }
-  async function seek(at:number){
-    if(!Number.isFinite(at)||busy)return;
-    const bounded=Math.max(0,Math.min((area?.count??1)-1,Math.round(at)));
-    onSeek((area?.startTime??caption.startTime)+bounded/frameRate);
-    await refresh(bounded);
-  }
-  async function change(request:Omit<TextAreaEdit,'signature'|'frame'>){
-    if(!area||busy)return;
-    const previous=JSON.parse(JSON.stringify(area)),token=generation,key=identity,selected=JSON.parse(JSON.stringify(caption)),id=sequenceId;
-    busy=true;problem='';if(!isDemo)onBusy(true);
-    try{
-      let next:TextAreaState;
-      const action={...request,signature:previous.signature,frame:previous.frame};
-      if(isDemo){next=request.operation==='undo'&&sampleUndo?sampleUndo:editSample(previous,action);sampleUndo=previous;samples.set(key,next);}
-      else next=await edit(selected,id,action);
-      if(token===generation&&key===identity){area=next;notice=isDemo?'Sample keyframes updated.':'Motion updated in Premiere. Width and height reflow after the edit.';await onChanged();}
-    }catch(e){if(token===generation)problem=e instanceof Error?e.message:String(e);}
-    finally{busy=false;if(!isDemo)onBusy(false);}
-  }
+  const identity=$derived(JSON.stringify([sequenceId,caption.id,caption.clipNodeId,caption.mediaPath,caption.renderBounds,caption.startTime,caption.endTime,frameRate]));
+  const controller=createTextAreaController({
+    current:()=>({key:identity,caption,sequenceId,frameRate,currentTime,visible:visible&&expanded&&(isDemo||!!caption.clipNodeId),disabled}),
+    read:async(context,at)=>isDemo?sampleAt(samples.get(context.key)??sampleArea(frameWidth,frameHeight,context.frameRate,context.caption.startTime,context.caption.endTime),at):read(context.caption,context.sequenceId,at),
+    edit:async(context,request)=>{
+      if(!isDemo)return edit(context.caption,context.sequenceId,request);
+      const previous=sampleAt(samples.get(context.key)??sampleArea(frameWidth,frameHeight,context.frameRate,context.caption.startTime,context.caption.endTime),request.frame);
+      const next=request.operation==='undo'&&sampleUndos.has(context.key)?sampleUndos.get(context.key)!:editSample(previous,request);sampleUndos.set(context.key,previous);samples.set(context.key,next);return next;
+    },
+    seek:async(_context,time)=>{await onSeek(time);},getTime:async()=>isDemo?currentTime:getCurrentTime(),
+    state:next=>{area=next;},busy:value=>{busy=value;if(value){problem='';notice='';}if(!isDemo)onBusy(value);},error:message=>{problem=message;},
+    changed:async()=>{notice=isDemo?'Sample keyframes updated.':'Motion updated in Premiere. Width and height reflow after the edit.';await onChanged();},
+  });
+  $effect(()=>{identity;currentTime;visible;expanded;disabled;untrack(()=>{void controller.sync();});});
+  onDestroy(()=>controller.stop());
+  const refresh=()=>controller.refresh();
+  const seek=(at:number)=>controller.seek(at);
+  const change=(request:Omit<TextAreaEdit,'signature'|'frame'>)=>controller.change(request);
   function setValue(name:AreaTrack,index:number,value:number){
     if(!area||!Number.isFinite(value)||(name!=='position'&&value<=0)){problem='Enter a valid pixel value. Width and height must be greater than zero.';return;}
-    const values=[...area.tracks[name].value];values[index]=value;void change({track:name,operation:'set',value:values});
+    void controller.change({track:name,operation:'set'},{index,value});
   }
 </script>
 
-<details class="caption-section text-area">
+<details class="caption-section text-area" bind:open={expanded}>
   <summary class="caption-section__heading">Position & size <span>Selected caption</span></summary>
   <div class="caption-section__body">
     <p class="caption-help">All word states · {frameWidth} × {frameHeight} px</p>
     {#if !isDemo&&!caption.clipNodeId}<p class="caption-help">Apply this caption to the Program Monitor first to edit its native Motion keyframes.</p>{/if}
-    <div class="text-area__toolbar"><button class="caption-button" disabled={busy||(!isDemo&&!caption.clipNodeId)} onclick={()=>refresh()}>Refresh from {isDemo?'sample':'playhead'}</button><button class="caption-button" disabled={busy||!area?.canUndo} onclick={()=>change({operation:'undo'})}>Undo area edit</button></div>
+    <div class="text-area__toolbar"><button class="caption-button" disabled={busy||disabled||(!isDemo&&!caption.clipNodeId)} onclick={()=>refresh()}>Refresh from {isDemo?'sample':'playhead'}</button><button class="caption-button" disabled={busy||disabled||!area?.canUndo} onclick={()=>change({operation:'undo'})}>Undo area edit</button></div>
     {#if busy&&!area}<p class="caption-help" role="status">Reading caption Motion…</p>{/if}
     {#if area}
-      <fieldset disabled={busy}>
+      <fieldset disabled={busy||disabled}>
         <label class="caption-field"><span>Playhead, caption frame</span><input type="number" aria-label="Text area playhead frame" min="0" max={area.count-1} step="1" value={area.frame} onchange={(e)=>seek(e.currentTarget.valueAsNumber)}/></label>
         <input class="text-area__scrub" type="range" aria-label="Text area playhead" min="0" max={area.count-1} step="1" value={area.frame} onchange={(e)=>seek(e.currentTarget.valueAsNumber)}/>
         <p class="caption-help">Sequence time · {(area.startTime+area.frame/area.frameRate).toFixed(3)}s</p>

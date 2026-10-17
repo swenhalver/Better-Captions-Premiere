@@ -32,6 +32,8 @@
   let isRefreshing = $state(false);
   let isSyncing = $state(false);
   let timelineBusy = $state(false);
+  let exportBusy = $state(false);
+  let areaBusy = $state(false);
   let timelineStatus = $state("");
   let reflowStatus = $state<ReflowStatus>({ phase: "idle", message: "" });
   let motionWatcher: ReturnType<typeof startProgramMonitorWatcher> | null = null;
@@ -39,7 +41,8 @@
   let selectingCaption = false;
   let selectionRevision = 0;
   let watcherRevision = 0;
-  let hostPanelVisible = true;
+  let hostPanelVisible = $state(true);
+  let documentVisible = $state(!document.hidden);
   let automaticReflow = false;
   let locationScope = $state<"global" | "caption">("global");
   let appliedSignatures = $state<Record<string, string>>({});
@@ -64,9 +67,11 @@
   async function flushSave() { await saveQueue; if (saveError) throw new Error(saveError); }
   function watchRevisionChanged() { motionWatcher?.notifyRevision(++watcherRevision); }
   function setTimelineBusy(busy: boolean) {
-    timelineBusy = busy;
+    exportBusy = busy;
+    timelineBusy = exportBusy || areaBusy;
     if (busy && !automaticReflow) motionWatcher?.reset();
   }
+  function setAreaBusy(busy: boolean) { areaBusy = busy; timelineBusy = exportBusy || areaBusy; }
   function selectFirst() {
     const session = sessionManager.current;
     if (!session) { selectedId = null; return; }
@@ -383,7 +388,8 @@
       onStatus(status) { if (status.phase !== reflowStatus.phase || status.message !== reflowStatus.message) reflowStatus = status; },
     });
     const updateVisibility = () => {
-      const visible = hostPanelVisible && !document.hidden;
+      documentVisible = !document.hidden;
+      const visible = hostPanelVisible && documentVisible;
       if (!visible) { nativeSelection = null; selectionSync.invalidate(); }
       motionWatcher?.setVisible(visible);
     };
@@ -430,7 +436,7 @@
           <div class="caption-app__states" role="group" aria-label="Word appearance state">{#each [{value:'spoken',label:'Past words'},{value:'current',label:'Current word'},{value:'upcoming',label:'Next words'}] as state}<button class="caption-button" aria-pressed={wordState===state.value} onclick={()=>changeWordState(state.value)}>{state.label}</button>{/each}</div>
           {#if selected}
             <WordSample caption={selected} style={session.style} {selectedWord} onSelect={(index)=>{selectedWord=index;void seekCaption(selected.words[index].startTime);}}/>
-            <TextAreaControls caption={selected} sequenceId={session.sequenceId} frameRate={session.frameRate} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'} isDemo={api.isDemo} read={api.readCaptionArea} edit={api.editCaptionArea} onSeek={(time)=>{sessionManager.setCurrentTime(time);if(!api.isDemo)void showInPremiere(time);}} onBusy={setTimelineBusy} onChanged={areaChanged}/>
+            <TextAreaControls caption={selected} sequenceId={session.sequenceId} frameRate={session.frameRate} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={exportBusy||isRefreshing||isSyncing||session.isLoading} isDemo={api.isDemo} read={api.readCaptionArea} edit={api.editCaptionArea} getCurrentTime={async()=>{if(api.isDemo)return session.currentTime;const info=await api.getActiveSequenceInfo();if(!info||info.id!==session.sequenceId)throw new Error("The active sequence changed. Refresh Position & size before editing.");return info.playhead??session.currentTime;}} onSeek={async(time)=>{const result=!api.isDemo?await api.showInPremiere(time,session.sequenceId):null;if(sessionManager.current?.sequenceId!==session.sequenceId)throw new Error("The active sequence changed while seeking.");sessionManager.setCurrentTime(typeof result?.time==='number'?result.time:time);}} onBusy={setAreaBusy} onChanged={areaChanged}/>
           {/if}
           <p class="caption-help caption-app__state-scope">Editing {wordState==='spoken'?'past words':wordState==='current'?'the current word':'next words'} · all captions</p>
           <WordStates style={session.style} {fonts} onUpdate={handleStyle} stateKey={wordState==='spoken'?'spokenWord':wordState==='current'?'activeWord':'upcomingWord'} />
@@ -447,8 +453,6 @@
               </div>
               <button class="caption-button" onclick={moveSelectedCaption} disabled={api.isDemo || timelineBusy || !selected?.clipNodeId}>Move / resize in Program Monitor</button>
               <p class="caption-help">Initial placement affects new caption media. For applied clips, use Position & size or drag handles in the Program Monitor.</p>
-              {#if selected?.layoutOverflow}<p class="caption-message caption-message--error" role="status">Text exceeds this box. Enlarge it or split the caption.</p>{/if}
-              {#if reflowStatus.message && (reflowStatus.phase === "working" || reflowStatus.phase === "error")}<p class="caption-message" class:caption-message--error={reflowStatus.phase === "error"} role={reflowStatus.phase === "error" ? "alert" : "status"}>{reflowStatus.message}</p>{/if}
             </div>
           </details>
           <div class="caption-app__timeline-sync"><h3>Timeline timing</h3><button class="caption-button" onclick={() => { void syncTimeline(); }} disabled={api.isDemo || isSyncing || !session.captions.some((caption) => caption.clipNodeId)}>{isSyncing ? "Syncing…" : "Sync timing from Premiere"}</button><details class="caption-disclosure"><summary>When to sync</summary><p>After moving or trimming caption clips in Premiere, pull their timing back into this editor.</p></details>{#if timelineStatus}<p class="caption-message" role="status">{timelineStatus}</p>{/if}</div>
@@ -456,7 +460,9 @@
       </fieldset>
     </div>
     <footer class="caption-app__output" aria-label="Program Monitor captions">
-      <ExportButton bind:this={exportButton} captions={session.captions} style={session.style} animation={session.animation} frameWidth={session.frameWidth} frameHeight={session.frameHeight} frameRate={session.frameRate} duration={session.duration} sequenceName={session.sequenceName} sequenceId={session.sequenceId} currentTime={session.currentTime} {selectedId} tracks={sequenceInfo?.tracks ?? []} hostApi={api} onUpdated={recordApplied} onApplied={recordMonitorApplied} onBusy={setTimelineBusy} disabled={isRefreshing || isSyncing || session.isLoading} />
+      {#if selected?.layoutOverflow}<p class="caption-message caption-message--error" role="alert">Text exceeds this box. Enlarge it or split the caption.</p>{/if}
+      {#if reflowStatus.phase === "error" && reflowStatus.message}<p class="caption-message caption-message--error" role="alert">{reflowStatus.message}</p>{/if}
+      <ExportButton bind:this={exportButton} captions={session.captions} style={session.style} animation={session.animation} frameWidth={session.frameWidth} frameHeight={session.frameHeight} frameRate={session.frameRate} duration={session.duration} sequenceName={session.sequenceName} sequenceId={session.sequenceId} currentTime={session.currentTime} {selectedId} tracks={sequenceInfo?.tracks ?? []} hostApi={api} onUpdated={recordApplied} onApplied={recordMonitorApplied} onBusy={setTimelineBusy} disabled={areaBusy || isRefreshing || isSyncing || session.isLoading} />
     </footer>
   {:else}<div class="caption-app__empty"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="3" y="6" width="26" height="20" rx="2"/><path d="M8 13h10M8 19h16"/></svg><h2>Start with a sequence</h2><p>Open a sequence in Premiere, then refresh to transcribe and edit its captions.</p><button class="caption-button" onclick={() => { void refreshSequence(); }} disabled={isRefreshing}>{isRefreshing ? "Looking for sequence…" : "Refresh sequence"}</button></div>{/if}
 </main>
