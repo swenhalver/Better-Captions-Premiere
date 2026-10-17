@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Three interactive Premiere-native interface concepts for Better Captions, with a review of the fork's features.">
+  <title>Better Captions — Three interface concepts</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#concepts">Skip to the designs</a>
+  <header class="review-header">
+    <a class="brand" href="../../">Better Captions <span>Design review</span></a>
+    <nav aria-label="Review navigation"><a href="#features">Feature review</a><a href="../../">Current interface <span aria-hidden="true">↗</span></a></nav>
+  </header>
+  <main>
+    <section class="intro">
+      <div><h1>Three ways to work with captions.</h1><p>The same Premiere-native tool, organized around three different editing habits. Click words, adjust timing, and try the appearance controls.</p></div>
+      <div class="demo-note"><span class="status-dot" aria-hidden="true"></span><div><strong>Interactive concepts</strong><span>Sample transcript. No Premiere connection.</span></div></div>
+    </section>
+    <div class="review-toolbar">
+      <div class="view-switch" role="group" aria-label="Choose a design view">
+        <button data-view="compare" aria-pressed="true" class="compare-button">Compare all three</button>
+        <button data-view="transcript" aria-pressed="false">Transcript</button>
+        <button data-view="timing" aria-pressed="false">Timing</button>
+        <button data-view="style" aria-pressed="false">Style</button>
+      </div>
+      <div class="toolbar-actions"><label class="width-control">Panel width <select id="panel-width"><option value="360">360 px</option><option value="280">280 px</option><option value="480">480 px</option></select></label><button class="text-button" id="reset">Reset demo</button></div>
+    </div>
+    <section id="concepts" class="concept-grid" aria-label="Three interface concepts">
+      <article class="concept" data-concept="transcript">
+        <div class="concept-heading"><h2>Transcript desk</h2><p>Read, correct, and time words in one continuous workspace.</p></div>
+        <div class="plugin" id="transcript-panel" aria-label="Transcript desk interactive mockup"></div>
+        <div class="concept-caption"><strong>Best for everyday editing.</strong><p>The transcript stays visible while a word inspector follows your selection. Appearance is one click away.</p><p class="tradeoff">Tradeoff: precise timing is less visual.</p></div>
+      </article>
+      <article class="concept" data-concept="timing">
+        <div class="concept-heading"><h2>Timing desk</h2><p>See the rhythm of a phrase. Give each word its exact moment.</p></div>
+        <div class="plugin" id="timing-panel" aria-label="Timing desk interactive mockup"></div>
+        <div class="concept-caption"><strong>Best for detailed timing.</strong><p>Words become selectable time ranges. Start, end, duration, and a sample playhead stay together.</p><p class="tradeoff">Tradeoff: fewer captions are visible at once.</p></div>
+      </article>
+      <article class="concept" data-concept="style">
+        <div class="concept-heading"><h2>Style inspector</h2><p>Build the look around upcoming, current, and spoken words.</p></div>
+        <div class="plugin" id="style-panel" aria-label="Style inspector interactive mockup"></div>
+        <div class="concept-caption"><strong>Best for visual finishing.</strong><p>Appearance controls lead. A compact caption selector keeps text and timing within reach.</p><p class="tradeoff">Tradeoff: transcript correction takes another step.</p></div>
+      </article>
+    </section>
+    <section class="recommendation" aria-labelledby="recommend-title"><h2 id="recommend-title">My starting point: Transcript desk.</h2><p>Keep the transcript as the main workspace, bring the Timing desk’s word ranges into its inspector, and use the Style inspector for appearance. That gives frequent tasks the fewest clicks while keeping the narrow panel calm.</p><p class="muted">The frame nudges and “Set to playhead” buttons are proposed shortcuts. Direct word selection inside Premiere’s Program Monitor is outside these concepts; words are selected in the panel.</p></section>
+    <section id="features" class="feature-review" aria-labelledby="feature-title">
+      <h2 id="feature-title">What changed from the base plugin</h2>
+      <p>Compared the original upstream source <code>16c3212</code> with this fork at <code>2ffed32</code>. This review reflects the available branch; it does not assume unmerged work is present.</p>
+      <div class="table-scroll"><table><thead><tr><th scope="col">Area</th><th scope="col">Base plugin</th><th scope="col">Your fork</th><th scope="col">Design implication</th></tr></thead><tbody>
+        <tr><th scope="row">Transcription</th><td>Read an existing Premiere transcript.</td><td>Trigger native Speech to Text, reuse source transcripts, and map words through sequence edits.</td><td>One clear Transcribe action; sequence identity always visible.</td></tr>
+        <tr><th scope="row">Text & timing</th><td>Browse captions and set a word limit.</td><td>Edit caption text and word times; validate overlaps; split, merge, regroup, and undo.</td><td>Clickable words and contextual editing deserve the most space.</td></tr>
+        <tr><th scope="row">Word appearance</th><td>Base typography and a highlight color.</td><td>Separate upcoming/current/spoken looks, relative sizes, opacity, and rounded word bubbles.</td><td>State-based controls with a clear selection and visible type samples.</td></tr>
+        <tr><th scope="row">Program Monitor</th><td>Separate plugin canvas and image-sequence export/import.</td><td>Transparent caption clips placed on a chosen track; linked updates and timing readback.</td><td>A persistent Update action with visible destination and status.</td></tr>
+        <tr><th scope="row">Placement & reflow</th><td>Numeric placement and wrapping settings.</td><td>Native selection, position, independent width/height, constant-font reflow, and Motion keyframes.</td><td>Keep native manipulation in the Program Monitor; show concise controls and help in the panel.</td></tr>
+        <tr><th scope="row">Existing creative tools</th><td>Font, weight, outline, shadow, background, Fade, Pop, Bounce, Typewriter, and Karaoke.</td><td>Retained and integrated with the new word states and linked rendering.</td><td>Keep these familiar controls; do not present them as new inventions.</td></tr>
+        <tr><th scope="row">Workflow foundation</th><td>Original UXP scaffold and bundled native shell add-on.</td><td>One visible panel, private local agent hooks, protected native work queue, and revised Windows/macOS tooling.</td><td>Keep technical operations behind the editor. Show actionable errors when needed.</td></tr>
+      </tbody></table></div>
+      <p class="muted">Roll-up is not in the reviewed branch. Windows/macOS tooling is implemented; live Windows installation and fresh Mac verification remain separate from this design review.</p>
+    </section>
+    <section class="review-notes" aria-labelledby="notes-title"><div><h2 id="notes-title">Keep what works. Change the rest.</h2><p>Record a preference or describe a combination. Notes save in this browser; download them to share or move between devices.</p></div><form id="notes-form"><label>Preferred direction<select id="preference"><option value="undecided">Still comparing</option value="transcript">Transcript desk</option><option value="timing">Timing desk</option><option value="style">Style inspector</option><option value="combination">A combination</option></select></label><label>Design notes<textarea id="notes" rows="4" placeholder="For example: Transcript desk, with the timing bars underneath the selected phrase."></textarea></label><div class="notes-actions"><span id="notes-status" role="status">Saved in this browser.</span><button type="submit">Download notes</button></div></form></section>
+  </main>
+  <footer class="review-footer">Better Captions · Windows / macOS · Interface proposals <a href="../../">Open the current interface</a></footer>
+</body>
+</html>
