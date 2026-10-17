@@ -8,21 +8,42 @@ class Time { constructor(seconds = 0) { this.seconds = seconds; } get seconds() 
 function hostFixture() {
   const files = new Map(), imports = [], overwrites = [], knownItems = new Map(); let nextItem = 1, nextClip = 1;
   const item = (media, id = 'item-' + nextItem++) => ({ nodeId: id, type: 1, media, inSeconds: 0, outSeconds: 1,
-    getMediaPath() { return this.media; }, changeMediaPath(value) { if (this.failNext) { this.failNext = false; throw new Error('Simulated relink failure'); } this.media = value; return 0; },
+    getMediaPath() { return this.media; }, changeMediaPath(value) { if (this.failNext) { this.failNext = false; throw new Error('Simulated relink failure'); } this.media = value; return 0; }, refreshMedia() { this.refreshes=(this.refreshes??0)+1;return 0; },
     setInPoint(value) { this.inSeconds = value; }, setOutPoint(value) { this.outSeconds = value; } });
   const bin = name => ({ name, type: 2, children: collection(), createBin(name) { const child = bin(name); this.children.push(child); return child; } });
   const root = bin('Root'), clips = collection();
-  function addClip(projectItem, start, end) { const clip = { nodeId: 'clip-' + nextClip++, projectItem, name: 'Original caption', start: new Time(start), end: new Time(end), inPoint: new Time(), outPoint: new Time(end - start), motion: { position: [101, 222], scale: 127, keys: ['preserve this'] }, remove() { const index = clips.indexOf(this); if (index >= 0) clips.splice(index, 1); } }; clips.push(clip); return clip; }
+  function addClip(projectItem, start, end, target = clips) { const clip = { nodeId: 'clip-' + nextClip++, projectItem, name: 'Original caption', start: new Time(start), end: new Time(end), inPoint: new Time(), outPoint: new Time(end - start), selected: false, isSelected() { return this.selected; }, setSelected(value) { if (!this.failSelection || !value) this.selected = !!value; return this.selected === !!value ? 0 : 1; }, motion: { position: [101, 222], scale: 127, keys: ['preserve this'] }, remove() { const index = target.indexOf(this); if (index >= 0) target.splice(index, 1); } }; target.push(clip); return clip; }
   const track = { name: 'Video 1', clips, isLocked: () => false, overwriteClip(projectItem, seconds) { overwrites.push(seconds); return addClip(projectItem, seconds, seconds + projectItem.outSeconds); } };
-  const sequence = { sequenceID: 'seq-a', name: 'Test sequence', timebase: String(TPF), frameSizeHorizontal: 1920, frameSizeVertical: 1080, end: String(10 * TICKS), videoTracks: collection([track], 'numTracks'), audioTracks: collection([], 'numTracks'), getPlayerPosition: () => new Time() };
+  const sequence = { sequenceID: 'seq-a', name: 'Test sequence', timebase: String(TPF), frameSizeHorizontal: 1920, frameSizeVertical: 1080, end: String(10 * TICKS), videoTracks: collection([track], 'numTracks'), audioTracks: collection([], 'numTracks'), playhead: new Time(), getPlayerPosition() { const time = new Time(); time.ticks = this.playhead.ticks; return time; }, setPlayerPosition(ticks) { if (this.refuseSeek) return false; this.playhead.ticks = this.ignoreSeek ? this.playhead.ticks : ticks; return true; } };
   const project = { path: '/project/test.prproj', activeSequence: sequence, sequences: collection([sequence], 'numSequences'), rootItem: root, importFiles(paths, suppress, target) { imports.push(...paths); for (const path of paths) { const value = item(path); target.children.push(value); knownItems.set(path, value); } return true; } };
   class File { constructor(path) { this.path = path; this.exists = files.has(path); this.length = (files.get(path) ?? '').length; } open() { return files.has(this.path); } read() { return files.get(this.path); } close() {} }
-  const sandbox = { app: { project }, File, Time, JSON: undefined, isFinite, Math, Number, String, Error };
+  const nativeCalls={timeObjects:0};
+  class NativeTime extends Time { constructor(...args){super(...args);nativeCalls.timeObjects++;} }
+  const sandbox = { app: { project }, File, Time: NativeTime, JSON: undefined, isFinite, Math, Number, String, Error };
   vm.runInNewContext(fs.readFileSync(new URL('../cep/host/bridge.jsx', import.meta.url), 'utf8'), sandbox);
   function payload(cues) { const value = { sequenceId: sequence.sequenceID, projectPath: project.path, width: 1920, height: 1080, fps: FPS, track: 0, cues }; files.set('/job.json', JSON.stringify(value)); return '/job.json'; }
   function cue(id, startFrame = 0, endFrame = 30, extra = {}) { const path = '/render/' + id + '.mov'; files.set(path, 'media'); return { id, text: id, startFrame, endFrame, path, ...extra }; }
-  return { host: sandbox.BetterCaptionsHost, files, imports, overwrites, item, addClip, clips, track, sequence, project, payload, cue };
+  function selectPayload(clip, extra = {}, context = {}) { const value = { sequenceId: sequence.sequenceID, projectPath: project.path, cues: [{ id: 'caption', clipNodeId: clip.nodeId, projectItemId: clip.projectItem.nodeId, mediaPath: clip.projectItem.media, words: [{ text: 'Caption', startTime: clip.start.seconds + .1, endTime: clip.start.seconds + .5 }], ...extra }], ...context }; files.set('/select.json', JSON.stringify(value)); return '/select.json'; }
+  return { host: sandbox.BetterCaptionsHost, files, imports, overwrites, item, addClip, clips, track, sequence, project, payload, cue, selectPayload, nativeCalls };
 }
+function attachNativeMotion(clip, overrides={}) {
+  function parameter(displayName,value){return {displayName,value,keys:[],sampled:[],writes:[],mode:'linear',isTimeVarying(){return this.keys.length>0;},getValue(){if(this.keys.length)throw new Error('Animated getValue must not be read at the playhead');return structuredClone(this.value);},getKeys(){return this.keys.map(key=>new Time(key.time));},getValueAtKey(time){return structuredClone(this.keys.find(key=>Math.abs(key.time-time.seconds)<1e-7).value);},getValueAtTime(time){this.sampled.push(time.seconds);if(!this.keys.length)return structuredClone(this.value);const first=this.keys[0],last=this.keys.at(-1);if(this.mode==='hold')return structuredClone(time.seconds<last.time?first.value:last.value);const progress=Math.max(0,Math.min(1,(time.seconds-first.time)/(last.time-first.time)));return Array.isArray(first.value)?first.value.map((v,i)=>v+(last.value[i]-v)*progress):first.value+(last.value-first.value)*progress;},setValue(value){this.writes.push(structuredClone(value));if(this.ignoreNext){this.ignoreNext=false;return 0;}this.value=structuredClone(value);return 0;},setValueAtKey(time,value){this.writes.push({time:time.seconds,value:structuredClone(value)});this.keys.find(key=>Math.abs(key.time-time.seconds)<1e-7).value=structuredClone(value);return 0;}};}
+  const params={position:parameter('Position',[.5,.5]),height:parameter('Scale',100),width:parameter('Scale Width',100),uniform:parameter('Uniform Scale',true),rotation:parameter('Rotation',0),anchor:parameter('Anchor Point',[.5,.5])};
+  for(const [name,value]of Object.entries(overrides))Object.assign(params[name],value);
+  clip.components=collection([{matchName:'AE.ADBE Motion',displayName:'Motion',properties:collection(Object.values(params))}]);return params;
+}
+function motionPayload(f,clip,patch={},options={}){
+  f.files.set('/motion.json',JSON.stringify({sequenceId:f.sequence.sequenceID,projectPath:f.project.path,cues:[{id:'caption',clipNodeId:clip.nodeId,projectItemId:clip.projectItem.nodeId,mediaPath:clip.projectItem.media,startTime:clip.start.seconds,endTime:clip.end.seconds,...patch}],...options}));return '/motion.json';
+}
+const bounds=(x=480,y=648,width=960,height=432)=>({x,y,width,height,frameWidth:1920,frameHeight:1080});
+function geometryCue(f,clip,renderBounds=bounds(),extra={}) { return f.cue('caption',0,30,{clipNodeId:clip.nodeId,projectItemId:clip.projectItem.nodeId,previousPath:clip.projectItem.media,renderBounds,...extra}); }
+function currentMotion(params,time=0){const values={};for(const [name,param]of Object.entries(params))values[name]=param.getValueAtTime(new Time(time));return values;}
+function worldPoint(logical,sourceBounds,motion){
+  const origin=sourceBounds??{x:0,y:0,width:1920,height:1080},sy=motion.height/100,sx=motion.uniform?sy:motion.width/100,rad=motion.rotation*Math.PI/180;
+  const x=(logical[0]-origin.x-motion.anchor[0]*origin.width)*sx,y=(logical[1]-origin.y-motion.anchor[1]*origin.height)*sy;
+  return [motion.position[0]*1920+x*Math.cos(rad)-y*Math.sin(rad),motion.position[1]*1080+x*Math.sin(rad)+y*Math.cos(rad)];
+}
+function closePoint(actual,expected){assert.equal(actual.length,expected.length);for(let i=0;i<actual.length;i++)assert.ok(Math.abs(actual[i]-expected[i])<1e-6,`${actual} differs from ${expected}`);}
 
 test('host refuses an unrelated collision before import or overwrite', () => {
   const f = hostFixture(), existing = f.addClip(f.item('/original.mov'), 0, 1);
@@ -73,4 +94,355 @@ test('host rejects executable file text and prototype keys without evaluating ei
   assert.match(JSON.parse(f.host.apply('/job.json')).error, /Invalid caption job JSON/);
   f.files.set('/job.json', '{"__proto__":{"polluted":true}}');
   assert.match(JSON.parse(f.host.apply('/job.json')).error, /Invalid caption job JSON/); assert.equal(f.imports.length, 0);
+});
+
+test('native caption selection seeks a spoken frame and exclusively selects the exact linked video clip', () => {
+  const f=hostFixture(),source=f.addClip(f.item('/source.mp4'),0,5),caption=f.addClip(f.item('/managed/caption.mov'),1,2),audio=collection();
+  const dialogue=f.addClip(f.item('/source.wav'),0,5,audio);f.sequence.audioTracks.push({clips:audio});source.selected=true;dialogue.selected=true;
+  const motion=structuredClone(caption.motion),result=JSON.parse(f.host.selectCaptionClip(f.selectPayload(caption)));
+  assert.equal(result.ok,true);assert.equal(result.clipNodeId,caption.nodeId);assert.equal(result.projectItemId,caption.projectItem.nodeId);assert.equal(result.path,'/managed/caption.mov');assert.equal(result.track,0);
+  assert.equal(caption.selected,true);assert.equal(source.selected,false);assert.equal(dialogue.selected,false);
+  const expectedFrame=Math.floor(1.3*FPS+1e-7);assert.equal(f.sequence.playhead.ticks,String(expectedFrame*TPF));assert.equal(result.time,expectedFrame/FPS);
+  assert.deepEqual(caption.motion,motion);assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);
+});
+
+test('native selection rejects stale sequence, project, clip, media or item identities before UI changes', () => {
+  const f=hostFixture(),caption=f.addClip(f.item('/managed/caption.mov'),1,2),source=f.addClip(f.item('/source.mp4'),0,5);source.selected=true;f.sequence.playhead.seconds=4;
+  for(const [patch,context] of [[{}, {sequenceId:'other'}],[{}, {projectPath:'/other.prproj'}],[{clipNodeId:'missing'},{}],[{projectItemId:'other'},{}],[{mediaPath:'/other.mov'},{}],[{clipNodeId:undefined},{}]]){
+    const result=JSON.parse(f.host.selectCaptionClip(f.selectPayload(caption,patch,context)));assert.ok(result.error);assert.equal(source.selected,true);assert.equal(caption.selected,false);assert.equal(f.sequence.playhead.seconds,4);
+  }
+});
+
+test('pending caption timing cannot seek selection outside the real linked clip', () => {
+  const f=hostFixture(),caption=f.addClip(f.item('/managed/caption.mov'),1,2);
+  const result=JSON.parse(f.host.selectCaptionClip(f.selectPayload(caption,{words:[{text:'edited',startTime:10,endTime:11}]})));
+  assert.equal(result.ok,true);assert.ok(result.time>=1&&result.time<2);assert.ok(Math.abs(result.time-1.5)<1/FPS);
+});
+
+test('selection failures restore prior clip selections and playhead without changing any media', () => {
+  const f=hostFixture(),source=f.addClip(f.item('/source.mp4'),0,5),caption=f.addClip(f.item('/managed/caption.mov'),1,2);source.selected=true;f.sequence.playhead.seconds=4;caption.failSelection=true;
+  const result=JSON.parse(f.host.selectCaptionClip(f.selectPayload(caption)));
+  assert.match(result.error,/selection/);assert.equal(result.selectionRestored,true);assert.equal(source.selected,true);assert.equal(caption.selected,false);assert.equal(f.sequence.playhead.seconds,4);assert.equal(caption.projectItem.media,'/managed/caption.mov');
+});
+
+test('locked or hidden caption tracks stop direct manipulation without toggling track state', () => {
+  for(const condition of ['locked','muted']){
+    const f=hostFixture(),caption=f.addClip(f.item('/managed/caption.mov'),1,2);f.track.isLocked=()=>condition==='locked';f.track.isMuted=()=>condition==='muted';
+    const result=JSON.parse(f.host.selectCaptionClip(f.selectPayload(caption)));assert.match(result.error,/Unlock|Enable video track/);assert.equal(caption.selected,false);assert.equal(f.sequence.playhead.seconds,0);
+  }
+});
+
+test('native seek failures and ignored seeks cannot report a successful Program Monitor refresh', () => {
+  for(const condition of ['refuseSeek','ignoreSeek']){
+    const f=hostFixture();f.sequence[condition]=true;
+    assert.match(JSON.parse(f.host.seek(f.sequence.sequenceID,1,f.project.path)).error,/could not seek/);
+  }
+  const f=hostFixture(),result=JSON.parse(f.host.seek(f.sequence.sequenceID,1.5,f.project.path));assert.equal(result.ok,true);assert.equal(result.time,1.5);
+});
+
+test('caption box profiles distinguish uniform and independent native width/height scales',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),300/FPS,302/FPS),params=attachNativeMotion(clip,{height:{value:125},width:{value:200}});
+  const uniform=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip)));assert.equal(uniform.ok,true);const first=uniform.cues[0].motionProfile;
+  assert.equal(first.samples.length,2);assert.ok(first.samples.every(sample=>sample.scaleX===1.25&&sample.scaleY===1.25));assert.equal(first.samples[0].time,300.5/FPS);
+  params.uniform.value=false;const independent=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip))).cues[0].motionProfile;
+  assert.ok(independent.samples.every(sample=>sample.scaleX===2&&sample.scaleY===1.25));assert.notEqual(independent.signature,first.signature);
+});
+
+test('animated box samples use source-in plus frame elapsed and retain interpolation in their rendered signature',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),300/FPS,302/FPS);clip.inPoint.seconds=1.25;
+  const params=attachNativeMotion(clip,{height:{keys:[{time:1.25,value:100},{time:1.25+2/FPS,value:200}]},width:{value:300},uniform:{value:false}});
+  const before=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip))).cues[0].motionProfile;
+  assert.ok(Math.abs(params.height.sampled[0]-(1.25+.5/FPS))<1e-9);assert.ok(Math.abs(before.samples[0].scaleY-1.25)<1e-8);assert.ok(Math.abs(before.samples[1].scaleY-1.75)<1e-8);assert.equal(before.samples[0].scaleX,3);
+  params.height.mode='hold';const held=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip))).cues[0].motionProfile;
+  assert.equal(held.samples[0].scaleY,1);assert.notEqual(held.signature,before.signature,'interpolation change affects sampled output even with identical key times/values');
+});
+
+test('width signatures ignore playhead, Position, Rotation, Anchor and absolute sequence placement',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),300/FPS,302/FPS),params=attachNativeMotion(clip,{width:{value:150},uniform:{value:false}});
+  const original=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip))).cues[0].motionProfile;
+  f.sequence.playhead.seconds=9;params.position.value=[.1,.9];params.rotation.value=40;params.anchor.value=[.3,.2];
+  const moved=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip,{startTime:600/FPS,endTime:602/FPS}))).cues[0].motionProfile;
+  assert.equal(moved.signature,original.signature);assert.equal(moved.samples[0].time,600.5/FPS);assert.equal(f.sequence.playhead.seconds,9);
+});
+
+test('width signatures include the entire keyed width curve even while uniform scale currently masks it',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,2/FPS),params=attachNativeMotion(clip,{width:{keys:[{time:0,value:100},{time:1,value:200}]}});
+  const first=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip))).cues[0].motionProfile;
+  params.width.keys[1].value=300;const next=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip))).cues[0].motionProfile;
+  assert.deepEqual(next.samples,first.samples);assert.notEqual(next.signature,first.signature);
+});
+
+test('motion reads refuse stale links, invalid scales, changed speed and unbounded frame batches without mutation',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,1),params=attachNativeMotion(clip);clip.selected=true;f.sequence.playhead.seconds=5;
+  assert.match(JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip,{projectItemId:'other'}))).error,/link changed/);
+  params.height.value=0;assert.match(JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip))).error,/between 1%/);params.height.value=100;
+  clip.getSpeed=()=>2;assert.match(JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip))).error,/original playback speed/);clip.getSpeed=()=>1;
+  assert.match(JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip,{endTime:100001/FPS}))).error,/smaller batches/);
+  assert.equal(clip.selected,true);assert.equal(f.sequence.playhead.seconds,5);assert.equal(clip.projectItem.media,'/managed/caption.mov');
+});
+
+test('Program Monitor selection keeps a visible current frame when editing a box keyframe',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),1,2);f.sequence.playhead.ticks=String(40*TPF);f.sequence.refuseSeek=true;
+  const result=JSON.parse(f.host.selectCaptionClip(f.selectPayload(clip)));
+  assert.equal(result.ok,true);assert.equal(result.time,40/FPS);assert.equal(f.sequence.playhead.ticks,String(40*TPF));assert.equal(clip.selected,true);
+});
+
+test('native selection following recognizes one exact caption without selecting, seeking, or following ambiguous clips',()=>{
+  const f=hostFixture(),a=f.addClip(f.item('/managed/a.mov'),0,1),b=f.addClip(f.item('/managed/b.mov'),1,2),footage=f.addClip(f.item('/footage.mp4'),0,4),audio=collection();
+  const dialogue=f.addClip(f.item('/dialogue.wav'),0,4,audio);f.sequence.audioTracks.push({clips:audio});dialogue.selected=true;f.sequence.playhead.seconds=1.4;
+  function read(patch={}){f.files.set('/selection.json',JSON.stringify({sequenceId:'seq-a',projectPath:f.project.path,cues:[a,b].map((c,i)=>({id:['a','b'][i],clipNodeId:c.nodeId,projectItemId:c.projectItem.nodeId,mediaPath:c.projectItem.media,...patch}))}));return JSON.parse(f.host.readCaptionSelection('/selection.json'));}
+  b.selected=true;const selected=read();assert.equal(selected.ok,true);assert.equal(selected.captionId,'b');assert.equal(selected.clipNodeId,b.nodeId);assert.equal(selected.time,1.4);
+  a.selected=true;assert.equal(read().captionId,null);a.selected=false;footage.selected=true;assert.equal(read().captionId,null);footage.selected=false;
+  assert.equal(read({mediaPath:'/stale.mov'}).captionId,null);b.selected=false;assert.equal(read().captionId,null);
+  assert.equal(dialogue.selected,true);assert.equal(f.sequence.playhead.seconds,1.4);assert.equal(f.imports.length,0);
+});
+
+test('new cropped caption clips use the actual text area for independent native width and height handles',()=>{
+  const f=hostFixture(),insert=f.track.overwriteClip;let params;
+  f.track.overwriteClip=(item,seconds)=>{const clip=insert(item,seconds);params=attachNativeMotion(clip);return clip;};
+  const box=bounds(-120,700,960,380),result=JSON.parse(f.host.apply(f.payload([f.cue('caption',0,30,{renderBounds:box})])));
+  assert.equal(result.ok,true);assert.deepEqual(result.cues[0].renderBounds,box);assert.deepEqual(params.position.value,[(box.x+box.width/2)/1920,(box.y+box.height/2)/1080]);
+  assert.deepEqual(params.anchor.value,[.5,.5]);assert.equal(params.uniform.value,false);assert.equal(params.height.value,100);assert.equal(params.width.value,100);
+  assert.ok(result.cues[0].motionProfile.samples.every(sample=>sample.scaleX===1&&sample.scaleY===1));
+  closePoint(worldPoint([650,810],box,currentMotion(params)),[650,810]);
+});
+
+test('legacy static caption migration preserves on-screen geometry with custom anchor, rotation and independent scale',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip,{position:{value:[.6,.7]},anchor:{value:[.4,.6]},height:{value:120},width:{value:175},uniform:{value:false},rotation:{value:31}});
+  const logical=[1030,820],before=worldPoint(logical,null,currentMotion(params)),box=bounds(420,560,1120,432);
+  const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,clip,box)])));
+  assert.equal(result.ok,true);assert.deepEqual(params.anchor.value,[.5,.5]);assert.equal(params.height.value,120);assert.equal(params.width.value,175);assert.equal(params.rotation.value,31);
+  closePoint(worldPoint(logical,box,currentMotion(params)),before);assert.equal(f.clips[0],clip);assert.equal(f.overwrites.length,0);
+});
+
+test('static uniform-scale migration unlocks aspect ratio while retaining effective width and height',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip,{height:{value:143},width:{value:62},uniform:{value:true}});
+  const logical=[1100,760],before=worldPoint(logical,null,currentMotion(params)),box=bounds();
+  const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,clip,box)])));
+  assert.equal(result.ok,true);assert.equal(params.uniform.value,false);assert.equal(params.width.value,143);assert.equal(params.height.value,143);
+  closePoint(worldPoint(logical,box,currentMotion(params)),before);
+});
+
+test('animated caption crop migration preserves native Position, Rotation and width/height key curves exactly',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip,{position:{keys:[{time:0,value:[.4,.6],interpolation:'bezier'},{time:1,value:[.7,.8],interpolation:'hold'}]},rotation:{keys:[{time:0,value:-14},{time:1,value:26}]},height:{keys:[{time:0,value:100},{time:1,value:140}]},width:{keys:[{time:0,value:120},{time:1,value:170}]},uniform:{value:false}});
+  const keys=Object.fromEntries(['position','rotation','height','width'].map(name=>[name,structuredClone(params[name].keys)])),logical=[1020,810],times=[0,.25,.65,.99],before=times.map(t=>worldPoint(logical,null,currentMotion(params,t))),box=bounds(500,600,900,432);
+  const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,clip,box)])));
+  assert.equal(result.ok,true);for(const name of Object.keys(keys)){assert.deepEqual(params[name].keys,keys[name]);assert.equal(params[name].writes.length,0,`${name} key interpolation must be left native`);}
+  closePoint(params.anchor.value,[(960-box.x)/box.width,(540-box.y)/box.height]);times.forEach((t,i)=>closePoint(worldPoint(logical,box,currentMotion(params,t)),before[i]));
+});
+
+test('animated Anchor Point migration is rejected rather than risking its native spatial Bezier path',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip,{anchor:{keys:[{time:0,value:[.3,.4],interpolation:'bezier'},{time:1,value:[.6,.7],interpolation:'hold'}]},uniform:{value:false}}),before=structuredClone(params.anchor.keys);
+  const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,clip)])));
+  assert.match(result.error,/animated Anchor Point geometry/);assert.deepEqual(params.anchor.keys,before);assert.equal(clip.projectItem.media,'/old.mov');assert.equal(f.imports.length,0);assert.equal(params.anchor.writes.length,0);
+});
+
+test('an unchanged paragraph box preserves animated Anchor Point keys and interpolation exactly',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip,{anchor:{keys:[{time:0,value:[.3,.4],interpolation:'bezier'},{time:1,value:[.6,.7],interpolation:'hold'}]},uniform:{value:false}}),box=bounds(),before=structuredClone(params.anchor.keys);
+  const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,clip,box,{previousRenderBounds:box})])));
+  assert.equal(result.ok,true);assert.deepEqual(params.anchor.keys,before);assert.equal(params.anchor.writes.length,0);assert.equal(params.position.writes.length,0);
+});
+
+test('only Position-keyed captions can unlock a static uniform scale without rewriting Position keys',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip,{position:{keys:[{time:0,value:[.4,.6]},{time:1,value:[.7,.8]}]},height:{value:160},width:{value:80}}),before=structuredClone(params.position.keys);
+  const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,clip)])));
+  assert.equal(result.ok,true);assert.equal(params.uniform.value,false);assert.equal(params.width.value,160);assert.deepEqual(params.position.keys,before);assert.equal(params.position.writes.length,0);
+});
+
+test('caption box reapply keeps an existing custom anchor and placement when the stored source bounds are unchanged',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip,{position:{value:[.1,.9]},anchor:{value:[.1,.2]},uniform:{value:false}}),box=bounds();
+  const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,clip,box,{previousRenderBounds:box})])));
+  assert.equal(result.ok,true);assert.deepEqual(params.position.value,[.1,.9]);assert.deepEqual(params.anchor.value,[.1,.2]);assert.equal(params.position.writes.length,0);assert.equal(params.anchor.writes.length,0);
+});
+
+test('unsafe trimmed animations and uniform-locked animated scales are rejected before imports or relinks',()=>{
+  for(const mode of ['trimmed','height','width','uniform']){
+    const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip);
+    if(mode==='trimmed'){clip.inPoint.seconds=.5;params.position.keys=[{time:.5,value:[.5,.5]},{time:1.5,value:[.7,.6]}];}
+    else if(mode==='uniform')params.uniform.keys=[{time:0,value:true},{time:1,value:false}];
+    else params[mode].keys=[{time:0,value:100},{time:1,value:150}];
+    const result=JSON.parse(f.host.apply(f.payload([f.cue('new',60,90,{renderBounds:bounds()}),geometryCue(f,clip)])));
+    assert.match(result.error,/trimmed source|independent width and height keyframes/);assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);assert.equal(clip.projectItem.media,'/old.mov');
+  }
+});
+
+test('invalid source geometry and stale box-animation signatures fail before any mutation',()=>{
+  for(const mode of ['bounds','coordinate','signature']){
+    const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip,{uniform:{value:false}});const extra={};let box=bounds();
+    if(mode==='bounds')box={...box,width:1921};
+    if(mode==='coordinate')params.anchor.value=[.5,NaN];
+    if(mode==='signature'){extra.motionProfile=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip,{startTime:0,endTime:30/FPS}))).cues[0].motionProfile;params.width.value=130;}
+    const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,clip,box,extra)])));
+    assert.match(result.error,/text box|coordinate|changed during rendering/);assert.equal(clip.projectItem.media,'/old.mov');assert.equal(f.imports.length,0);assert.equal(params.position.writes.length,0);
+  }
+});
+
+test('a later relink failure restores earlier crop geometry, effective scale, source timing and media',()=>{
+  const f=hostFixture(),a=f.addClip(f.item('/a-old.mov'),0,1),b=f.addClip(f.item('/b-old.mov'),2,3),params=attachNativeMotion(a,{position:{value:[.6,.7]},height:{value:132},width:{value:77}}),before=currentMotion(params);
+  attachNativeMotion(b);b.projectItem.failNext=true;
+  const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,a),geometryCue(f,b,bounds(),{id:'second',startFrame:60,endFrame:90})])));
+  assert.match(result.error,/Simulated relink failure/);assert.equal(result.rolledBack,true);assert.deepEqual(currentMotion(params),before);assert.equal(a.projectItem.media,'/a-old.mov');assert.equal(a.start.seconds,0);assert.equal(a.end.seconds,1);
+});
+
+test('an ignored Motion write cannot report success and restores all earlier changes',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip,{anchor:{value:[.3,.4]},height:{value:150},width:{value:75}}),before=currentMotion(params);params.anchor.ignoreNext=true;
+  const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,clip)])));
+  assert.match(result.error,/did not keep.*anchor/);assert.equal(result.rolledBack,true);assert.deepEqual(currentMotion(params),before);assert.equal(clip.projectItem.media,'/old.mov');
+});
+
+test('Motion diagnostics expose bounded native metadata without refreshing, evaluating, selecting or seeking',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,1);attachNativeMotion(clip);f.sequence.playhead.seconds=4;clip.selected=true;
+  const project='<xmp:VideoInfo>576 x 512</xmp:VideoInfo>'+"quoted \\\" <script>throw Error('must remain text')</script> "+'字'.repeat(9000),xmp='<xmpDM:videoFrameSize stDim:w="576" stDim:h="512"/>';
+  clip.projectItem.getProjectMetadata=()=>project;clip.projectItem.getXMPMetadata=()=>xmp;
+  const result=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip,{}, {includeDiagnostics:true})));
+  assert.equal(result.ok,true);const info=result.cues[0].motionInfo;
+  assert.equal(info.projectMetadata,project.slice(0,8000));assert.equal(info.projectMetadata.length,8000);assert.equal(info.projectMetadataTruncated,true);assert.equal(info.xmpMetadata,xmp);assert.equal(info.xmpMetadataTruncated,false);
+  assert.equal(f.sequence.playhead.seconds,4);assert.equal(clip.selected,true);assert.equal(clip.projectItem.refreshes,undefined);assert.equal(f.imports.length,0);
+});
+
+test('unavailable or malformed metadata is a bounded diagnostic error without breaking a valid Motion profile',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,1);attachNativeMotion(clip);
+  clip.projectItem.getProjectMetadata=()=>{throw new Error('native metadata failure '+ 'x'.repeat(5000));};clip.projectItem.getXMPMetadata=()=>({unexpected:'not XML text'});
+  const result=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip,{}, {includeDiagnostics:true})));
+  assert.equal(result.ok,true);const info=result.cues[0].motionInfo;
+  assert.match(info.projectMetadataError,/native metadata failure/);assert.ok(info.projectMetadataError.length<=300);assert.match(info.xmpMetadataError,/did not return metadata text/);assert.equal(info.projectMetadata,undefined);assert.ok(result.cues[0].motionProfile.samples.length>0);
+});
+
+test('geometry-changing relinks refresh the exact source before writing any Motion value',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip),events=[],media=clip.projectItem,oldChange=media.changeMediaPath;
+  media.changeMediaPath=function(path){events.push(['relink',path]);return oldChange.call(this,path);};
+  media.refreshMedia=function(){events.push(['refresh',this.media]);this.representation=this.media;return 0;};
+  for(const [name,param]of Object.entries(params)){const set=param.setValue;param.setValue=function(value){assert.equal(media.representation,media.media,'native source geometry must be current before Motion writes');events.push(['motion',name]);return set.call(this,value);};}
+  const cue=geometryCue(f,clip),result=JSON.parse(f.host.apply(f.payload([cue])));
+  assert.equal(result.ok,true);assert.deepEqual(events.slice(0,2),[['relink',cue.path],['refresh',cue.path]]);assert.ok(events.slice(2).some(([event])=>event==='motion'));assert.equal(events.filter(([event])=>event==='refresh').length,1);
+});
+
+test('CEP refresh accepts numeric zero and legacy nonboolean results without a truthiness failure',()=>{
+  for(const status of [0,true,undefined,'legacy-native-result',[]]){
+    const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1);attachNativeMotion(clip);let called=0;
+    clip.projectItem.refreshMedia=()=>{called++;return status;};
+    const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,clip)])));
+    assert.equal(result.ok,true,`refresh return ${String(status)} must not be treated as false`);assert.equal(called,1);
+  }
+});
+
+test('refresh failures stop before Motion edits and refresh the original source during rollback',()=>{
+  for(const failure of ['false','throw','offline','path']){
+    const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1),params=attachNativeMotion(clip),media=clip.projectItem,refreshed=[];let offline=false;
+    media.isOffline=()=>offline;
+    media.refreshMedia=function(){refreshed.push(this.media);if(refreshed.length===1){if(failure==='false')return false;if(failure==='throw')throw new Error('Simulated refresh failure');if(failure==='offline')offline=true;if(failure==='path')this.media='/unexpected.mov';}else offline=false;return 0;};
+    const cue=geometryCue(f,clip),result=JSON.parse(f.host.apply(f.payload([cue])));
+    assert.match(result.error,/refresh/);assert.equal(result.rolledBack,true);assert.deepEqual(refreshed,[cue.path,'/old.mov']);assert.equal(media.media,'/old.mov');assert.ok(Object.values(params).every(param=>param.writes.length===0));assert.equal(clip.start.seconds,0);assert.equal(clip.end.seconds,1);
+  }
+});
+
+test('rollback refreshes restored source geometry before restoring earlier Motion changes',()=>{
+  const f=hostFixture(),a=f.addClip(f.item('/a-old.mov'),0,1),b=f.addClip(f.item('/b-old.mov'),2,3),params=attachNativeMotion(a),media=a.projectItem,events=[],change=media.changeMediaPath;
+  attachNativeMotion(b);b.projectItem.failNext=true;
+  media.changeMediaPath=function(path){events.push(['relink',path]);return change.call(this,path);};media.refreshMedia=function(){events.push(['refresh',this.media]);this.representation=this.media;return undefined;};
+  for(const param of Object.values(params)){const set=param.setValue;param.setValue=function(value){assert.equal(media.representation,media.media);events.push(['motion',media.media]);return set.call(this,value);};}
+  const result=JSON.parse(f.host.apply(f.payload([geometryCue(f,a),geometryCue(f,b,bounds(),{id:'second',startFrame:60,endFrame:90})])));
+  assert.match(result.error,/Simulated relink/);assert.equal(result.rolledBack,true);const restore=events.findIndex(([event,path])=>event==='relink'&&path==='/a-old.mov');assert.ok(restore>1);assert.deepEqual(events[restore+1],['refresh','/a-old.mov']);assert.ok(events.slice(restore+2).every(([event])=>event==='motion'));
+});
+
+test('missing native refresh support refuses source geometry migration before importing or relinking',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/old.mov'),0,1);attachNativeMotion(clip);delete clip.projectItem.refreshMedia;
+  const result=JSON.parse(f.host.apply(f.payload([f.cue('new',60,90,{renderBounds:bounds()}),geometryCue(f,clip)])));
+  assert.match(result.error,/cannot refresh/);assert.equal(f.imports.length,0);assert.equal(clip.projectItem.media,'/old.mov');
+});
+
+function countMotionReads(params){
+  const calls={isTimeVarying:0,getValue:0,getKeys:0,getValueAtKey:0,getValueAtTime:0};
+  for(const param of Object.values(params))for(const method of Object.keys(calls)){const original=param[method];param[method]=function(...args){calls[method]++;return original.apply(this,args);};}
+  return calls;
+}
+
+test('static long-caption geometry polling performs constant native work with no Time allocations or diagnostics',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,1000000/FPS),params=attachNativeMotion(clip),calls=countMotionReads(params);
+  for(const name of ['position','anchor','rotation'])for(const method of ['getValue','getKeys','getValueAtTime','isTimeVarying'])params[name][method]=()=>{throw new Error('Unrelated Motion control must not be polled');};
+  clip.projectItem.getProjectMetadata=clip.projectItem.getXMPMetadata=()=>{throw new Error('Metadata must not be polled');};
+  const result=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip)));
+  assert.equal(result.ok,true);assert.match(result.cues[0].watchSignature,/^geometry-v1-/);assert.equal(result.cues[0].clipNodeId,clip.nodeId);assert.equal(result.cues[0].path,clip.projectItem.media);
+  assert.deepEqual(calls,{isTimeVarying:3,getValue:3,getKeys:0,getValueAtKey:0,getValueAtTime:0});assert.equal(f.nativeCalls.timeObjects,0);assert.equal(result.cues[0].samples,undefined);assert.equal(result.cues[0].motionInfo,undefined);
+});
+
+test('animated geometry fingerprint bounds native key and interpolation reads independently of cue length',()=>{
+  const f=hostFixture(),duration=1000000/FPS,clip=f.addClip(f.item('/managed/caption.mov'),0,duration);
+  const keys=Array.from({length:128},(_,i)=>({time:i*duration/127,value:100+i/2})),params=attachNativeMotion(clip,{height:{keys:structuredClone(keys)},width:{keys:structuredClone(keys)},uniform:{value:false}}),calls=countMotionReads(params);
+  const first=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip)));
+  assert.equal(first.ok,true);assert.equal(calls.getKeys,2);assert.equal(calls.getValueAtKey,256);assert.ok(calls.getValueAtTime>0&&calls.getValueAtTime<=48);assert.equal(f.nativeCalls.timeObjects,calls.getValueAtTime);
+  params.width.keys[37].value+=10;const changed=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip)));
+  assert.equal(changed.ok,true);assert.notEqual(changed.cues[0].watchSignature,first.cues[0].watchSignature,'every bounded key value participates even between interpolation probes');
+});
+
+test('cheap geometry and full render profiles share a watch signature that detects interpolation changes',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,30/FPS),params=attachNativeMotion(clip,{height:{keys:[{time:0,value:100},{time:30/FPS,value:150}]},uniform:{value:false}});
+  const cheap=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip))).cues[0],full=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip))).cues[0].motionProfile;
+  assert.equal(cheap.watchSignature,full.watchSignature);assert.ok(full.samples.length===30&&full.signature.startsWith('motion-v1-'));
+  params.height.mode='hold';const held=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip))).cues[0];
+  assert.notEqual(held.watchSignature,cheap.watchSignature);assert.equal(held.watchSignature,JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip))).cues[0].motionProfile.watchSignature);
+});
+
+test('excessive watch keys fail before native value reads while full manual render profiles remain available',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,30/FPS),params=attachNativeMotion(clip,{height:{keys:Array.from({length:257},(_,i)=>({time:i/100,value:100+i/10}))},uniform:{value:false}}),calls=countMotionReads(params);
+  const cheap=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip)));
+  assert.match(cheap.error,/automatic reflow.*manually/);assert.equal(calls.getValueAtKey,0);assert.equal(calls.getValueAtTime,0);
+  const full=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip)));
+  assert.equal(full.ok,true);assert.equal(full.cues[0].motionProfile.samples.length,30);assert.equal(full.cues[0].motionProfile.watchSignature,undefined);assert.match(full.cues[0].motionProfile.watchError,/automatic reflow/);
+});
+
+test('default full Motion reads omit diagnostics and do not allocate frame Time objects for static values',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,30/FPS),params=attachNativeMotion(clip);
+  for(const name of ['position','anchor'])params[name].isTimeVarying=()=>{throw new Error('Diagnostic control was queried');};
+  clip.projectItem.getProjectMetadata=clip.projectItem.getXMPMetadata=()=>{throw new Error('Diagnostic metadata was queried');};
+  for(const option of [{},{includeDiagnostics:'true'}]){
+    const result=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip,{},option)));
+    assert.equal(result.ok,true);assert.equal(result.cues[0].motionInfo,undefined);assert.ok(result.cues[0].motionProfile.watchSignature);assert.equal(f.nativeCalls.timeObjects,0);
+  }
+});
+
+test('geometry fingerprints ignore playback and Position changes while retaining source clock and width state',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,30/FPS),params=attachNativeMotion(clip,{uniform:{value:false}});
+  const before=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip))).cues[0].watchSignature;
+  f.sequence.playhead.seconds=10;params.position.value=[.1,.9];params.anchor.value=[.2,.3];params.rotation.value=30;
+  const moved=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip,{startTime:300/FPS,endTime:330/FPS}))).cues[0].watchSignature;assert.equal(moved,before);
+  params.width.value=160;assert.notEqual(JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip))).cues[0].watchSignature,before);
+});
+
+test('native selection snapshots avoid every timeline clip scan and ignore linked audio',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,1),audio=f.addClip(f.item('/source.wav'),0,1),other=f.addClip(f.item('/other.mp4'),0,1);clip.mediaType='Video';audio.mediaType='Audio';other.mediaType='Video';let snapshots=0;
+  f.sequence.getSelection=()=>{snapshots++;return [clip,audio];};
+  for(const candidate of f.clips)candidate.isSelected=()=>{throw new Error('Timeline scan must not run when native selection is available');};
+  const result=JSON.parse(f.host.readCaptionSelection(f.selectPayload(clip)));
+  assert.equal(result.ok,true);assert.equal(result.captionId,'caption');assert.equal(snapshots,1);f.sequence.getSelection=()=>[clip,other,audio];assert.equal(JSON.parse(f.host.readCaptionSelection(f.selectPayload(clip))).captionId,null);
+});
+
+test('selection fallback exits after two selected clips without scanning unrelated footage',()=>{
+  const f=hostFixture(),a=f.addClip(f.item('/a.mov'),0,1),b=f.addClip(f.item('/b.mov'),1,2),c=f.addClip(f.item('/c.mov'),2,3);let scans=0;
+  a.isSelected=b.isSelected=()=>{scans++;return true;};c.isSelected=()=>{throw new Error('An ambiguous selection must not scan further');};
+  f.sequence.getSelection=()=>{throw new Error('Native selection snapshot unavailable');};
+  const result=JSON.parse(f.host.readCaptionSelection(f.selectPayload(a)));
+  assert.equal(result.ok,true);assert.equal(result.captionId,null);assert.equal(scans,2);
+});
+
+test('older-host selection fallback has a hard scan budget and reports a clear manual-selection boundary',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,1);let scans=0;f.clips.length=0;
+  for(let i=0;i<2001;i++)f.clips.push({nodeId:'unrelated-'+i,isSelected(){scans++;return false;}});
+  const result=JSON.parse(f.host.readCaptionSelection(f.selectPayload(clip)));
+  assert.match(result.error,/too large for automatic caption selection/);assert.equal(scans,2000);assert.equal(f.sequence.playhead.seconds,0);
+});
+
+test('geometry lookup uses the native selected clip without walking large timeline collections',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,30/FPS);attachNativeMotion(clip);clip.mediaType='Video';let snapshots=0;
+  f.sequence.getSelection=()=>{snapshots++;return [clip];};
+  Object.defineProperty(f.sequence,'videoTracks',{get(){throw new Error('Geometry polling must not scan a timeline when its exact selected clip is available');}});
+  const result=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip)));
+  assert.equal(result.ok,true);assert.equal(result.cues[0].clipNodeId,clip.nodeId);assert.equal(snapshots,1);
+});
+
+test('older-host geometry lookup refuses an unbounded timeline scan',()=>{
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,30/FPS);attachNativeMotion(clip);f.clips.length=0;let inspected=0;
+  for(let i=0;i<2001;i++)f.clips.push({get nodeId(){inspected++;return 'unrelated-'+i;}});
+  const result=JSON.parse(f.host.readCaptionGeometry(motionPayload(f,clip)));
+  assert.match(result.error,/too large for automatic caption geometry lookup/);assert.equal(inspected,2000);assert.equal(f.nativeCalls.timeObjects,0);
 });

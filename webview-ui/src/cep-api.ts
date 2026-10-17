@@ -1,4 +1,4 @@
-import type { CaptionItem, SequenceInfo } from './lib/types';
+import type { CaptionItem, SequenceInfo, RenderBounds } from './lib/types';
 declare const window: Window & { __adobe_cep__?: any; require?: any };
 const demoWords = 'Every word has its own style. Move captions anywhere in the frame.'.split(' ').map((text, i) => ({ text, start: i * .42, duration: .36, confidence: 1, eos: /[.!?]$/.test(text), type: 'word' as const, tags: [] }));
 export interface CapturedContext { id: string; name: string; projectPath: string; width: number; height: number; fps: number; duration: number; dir: string; }
@@ -48,6 +48,11 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     runtime.writeJSON(file, data);
     return file;
   }
+  async function readJob(method:string,data:unknown){
+    const file=runtime.readJob(data);
+    try{return await host(method,[file]);}
+    finally{runtime.disposeReadJob(file);}
+  }
   function generatedMedia(context: CapturedContext, file: unknown) {
     if (typeof file !== 'string' || runtime.path.basename(file) !== 'caption.mov' || runtime.path.dirname(runtime.path.dirname(file)) !== context.dir || !runtime.path.basename(runtime.path.dirname(file)).startsWith('caption-')) throw new Error('Caption media must come from this sequence’s generated asset folder.');
     const stat = runtime.fs.lstatSync(file);
@@ -55,7 +60,7 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
   }
   function timelinePayload(context: CapturedContext, captions: CaptionItem[], track: number, previous: CaptionItem[]) {
     return { sequenceId: context.id, projectPath: context.projectPath, track, width: context.width, height: context.height, fps: context.fps,
-      cues: captions.map(c => ({ id: c.id, text: c.text, startFrame: Math.round(c.startTime * context.fps), endFrame: Math.round(c.endTime * context.fps), path: c.mediaPath, previousPath: previous.find(old => old.id === c.id)?.mediaPath ?? c.mediaPath, clipNodeId: c.clipNodeId, projectItemId: c.projectItemId })) };
+      cues: captions.map(c => ({ id: c.id, text: c.text, startFrame: Math.round(c.startTime * context.fps), endFrame: Math.round(c.endTime * context.fps), path: c.mediaPath, previousPath: previous.find(old => old.id === c.id)?.mediaPath ?? c.mediaPath, clipNodeId: c.clipNodeId, projectItemId: c.projectItemId,renderBounds:c.renderBounds,previousRenderBounds:previous.find(old=>old.id===c.id)?.renderBounds,motionProfile:c.motionProfile })) };
   }
   const api = {
     isDemo: !cep,
@@ -102,11 +107,11 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     async saveCaptionFrames(folder: string, frames: string[], start: number, sequenceId: string) {
       ownedFolder(folder, sequenceId); runtime.saveFrames(folder, frames, start);
     },
-    async finishCaption(folder: string, fps: number, count: number, sequenceId: string) {
+    async finishCaption(folder: string, fps: number, count: number, sequenceId: string,renderBounds?:RenderBounds) {
       const context = ownedFolder(folder, sequenceId);
       if (Math.abs(context.fps - fps) > .000001) throw new Error('Caption frame rate does not match the sequence.');
       await checkSequence(sequenceId);
-      const media = await runtime.encode(folder, fps, count);
+      const media = await runtime.encode(folder, fps, count,undefined,renderBounds);
       await checkSequence(sequenceId);
       return media;
     },
@@ -122,8 +127,23 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     },
     async readTimeline(captions: CaptionItem[], sequenceId = currentId) {
       const context = await checkSequence(sequenceId);
-      const file = jobFile(context, 'read-timeline', { sequenceId: context.id, projectPath: context.projectPath, cues: captions.map(c => ({ id: c.id, clipNodeId: c.clipNodeId })) });
-      return host('readTimeline', [file]);
+      return readJob('readTimeline', { sequenceId: context.id, projectPath: context.projectPath, cues: captions.map(c => ({ id: c.id, clipNodeId: c.clipNodeId })) });
+    },
+    async readCaptionMotion(captions:CaptionItem[],sequenceId=currentId,options?:{includeDiagnostics?:boolean}){
+      const context=await checkSequence(sequenceId);
+      return readJob('readCaptionMotion',{sequenceId:context.id,projectPath:context.projectPath,...(options?.includeDiagnostics===true?{includeDiagnostics:true}:{}),cues:captions.map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,startTime:c.startTime,endTime:c.endTime,renderBounds:c.renderBounds}))});
+    },
+    async readCaptionGeometry(captions:CaptionItem[],sequenceId=currentId){
+      const context=await checkSequence(sequenceId);
+      return readJob('readCaptionGeometry',{sequenceId:context.id,projectPath:context.projectPath,cues:captions.map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,startTime:c.startTime,endTime:c.endTime}))});
+    },
+    async selectCaptionClip(caption:CaptionItem,sequenceId=currentId){
+      const context=await checkSequence(sequenceId);
+      return readJob('selectCaptionClip',{sequenceId:context.id,projectPath:context.projectPath,cues:[caption]});
+    },
+    async readCaptionSelection(captions:CaptionItem[],sequenceId=currentId){
+      const context=await checkSequence(sequenceId);
+      return readJob('readCaptionSelection',{sequenceId:context.id,projectPath:context.projectPath,cues:captions.filter(c=>c.clipNodeId).map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath}))});
     },
     async getColorScheme() { return { theme: 'darkest', colors: {} }; },
   };

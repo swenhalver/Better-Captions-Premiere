@@ -1,14 +1,56 @@
 {
   "date": "2026-10-16",
-  "scope": "Disposable Premiere sequence; no production sequence edits and no project save",
+  "scope": "Disposable caption verification sequence; original production sequences preserved. Project saved during native menu-loop recovery.",
   "sequence": {
     "name": "Better Captions Verification 2026-10-16",
     "width": 720,
     "height": 1280,
     "frameRate": 24,
-    "captionTrack": "V2"
+    "captionTrack": "V3"
   },
   "liveChecks": {
+    "directNativeTranscriptInMainPanel": {
+      "captions": 2,
+      "words": 12
+    },
+    "nativeTranscriptToRenderedTimelineClips": true,
+    "clipRangesSeconds": [
+      [
+        0,
+        2.1666666666667
+      ],
+      [
+        2.375,
+        4.5833333333333
+      ]
+    ],
+    "transparentMovieDimensions": [
+      576,
+      512
+    ],
+    "sourceFrameDimensions": [
+      720,
+      1280
+    ],
+    "mediaRelinkPreservedClipNodeIds": true,
+    "programMonitorCompositeVisuallyInspected": true,
+    "separatePluginCanvasRemoved": true,
+    "nativeMotionUniformScaleOff": true,
+    "nativeIndependentWidthHeightControlsVisible": true,
+    "nativeAnchorPixels": [
+      288,
+      256
+    ],
+    "localAgentGetState": true,
+    "localAgentStylePatchSavedReadback": {
+      "activeWordSizeScale": 1.3,
+      "activeWordBubbleRadius": 20,
+      "spokenWordOpacity": 0.6,
+      "restoredAfterTest": true
+    },
+    "originalSequencePlayheadPreservedSeconds": 34.7916666666667
+  },
+  "earlierIntegrationChecks": {
     "insertTwoCaptionClips": true,
     "clipRangesSeconds": [
       [
@@ -61,17 +103,29 @@
     "sharedMediaRelinkRejected": true,
     "laterRelinkFailureRollsBackEarlierUpdates": true,
     "perSequenceSaveDirectoryRaceCovered": true,
-    "shellMetacharactersRemainLiteral": true
+    "shellMetacharactersRemainLiteral": true,
+    "textAreaReflowKeepsFontSize": true,
+    "independentBoxDimensions": true,
+    "animatedNativeScaleSamples": true,
+    "selectionAndGeometryPollingPauseOnErrors": true,
+    "hiddenPanelSuspendsPolling": true,
+    "unresolvedNativeCallsRetainSerialLane": true,
+    "exclusiveBackgroundWorkerOwnership": true,
+    "expiredReadsRejectedBeforeNativeDispatch": true,
+    "staticGeometryPollingConstantNativeCallBudget": true,
+    "geometryMetadataExcludedByDefault": true,
+    "coreSourceTestsPassed": 186
   },
-  "limitations": [
-    "The live host test used synthetic transparent caption movies to isolate Premiere integration; native transcription is verified separately.",
-    "Fault rollback and shared-media protection were tested with a host simulation, while normal insert/relink and collision handling were also verified in Premiere."
-  ],
   "nativeTranscription": {
     "engine": "Premiere Pro built-in Speech to Text",
     "source": "Synthetic speech in source.mp4",
     "nativeWordCount": 12,
     "wordTimestampsReturned": true,
     "transcriptReadWhileDiagnosticWindowClosed": true
-  }
+  },
+  "limitations": [
+    "Fault rollback and shared-media protection use host simulation; normal insertion/relink and collision rejection were also verified live.",
+    "Position and size keyframe preservation/reflow are covered by native-host and renderer tests; final interactive animated-handle verification is still pending.",
+    "The OS menu-loop recovery sample was captured after reopening Premiere with the caption plugin disabled; it is not proof that the final plugin build cannot encounter an Adobe modal or native API stall."
+  ]
 }

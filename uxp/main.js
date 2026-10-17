@@ -9,7 +9,7 @@ const HOST_METHODS = new Set([
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession',
   'transcribeSequence', 'getFonts', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'getColorScheme',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'getColorScheme',
 ]);
 const AGENT_METHODS = new Set(['getState', 'patchStyle', 'patchAnimation', 'setCaptions', 'refresh', 'apply']);
 const ID = /^(?:ui|host)-[a-zA-Z0-9_-]{1,100}$/;
@@ -17,7 +17,7 @@ const pending = new Map();
 const running = new Set();
 const completed = new Set();
 const api = createHostAPI();
-let webview = null, uiReady = false, destroyed = false, nextId = 0;
+let webview = null, uiReady = false, destroyed = false, panelVisible = false, nextId = 0;
 let agentStart = null, agentStop = null, loadFailure = null;
 const cleanupListeners = [];
 
@@ -42,6 +42,10 @@ function send(data) {
 }
 function safeError(error) {
   return { message: String(error && error.message || error || 'Premiere caption operation failed.').slice(0, 4000) };
+}
+function visibility(visible = panelVisible) {
+  panelVisible = visible;
+  if (webview && !destroyed) { try { send({ type: 'better-captions-panel-visibility', visible }); } catch {} }
 }
 function rejectPending(message) {
   for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error(message)); }
@@ -97,7 +101,7 @@ async function onMessage(event) {
   running.add(data.id);
   try {
     let result;
-    if (data.method === 'agent.ready') { uiReady = true; loadFailure = null; showStatus(''); await startAgent(); result = { ready: true }; }
+    if (data.method === 'agent.ready') { uiReady = true; loadFailure = null; showStatus(''); await startAgent(); visibility(); result = { ready: true }; }
     else if (data.method === 'agent.stopped') { uiReady = false; result = { ready: false }; }
     else if (data.method === 'diagnostic') {
       const diagnostic = data.args[0];
@@ -146,6 +150,7 @@ function mount() {
     webview.addEventListener('loadstop', () => {
       if (!uiReady && !loadFailure) showStatus('Caption editor loaded. Waiting for its controls…');
       Promise.resolve(api.getColorScheme()).then(scheme => notify('ui.colorScheme', [scheme])).catch(() => {});
+      visibility();
     });
     webview.addEventListener('loaderror', event => {
       loadFailure = String(event.message || 'The local editor page did not load.') + (event.code === undefined ? '' : ' (code ' + event.code + ')');
@@ -162,6 +167,7 @@ function mount() {
   }
 }
 async function destroy() {
+  visibility(false);
   destroyed = true; uiReady = false;
   rejectPending('The Better Captions plugin was closed.');
   for (const remove of cleanupListeners.splice(0)) { try { remove(); } catch {} }
@@ -170,6 +176,6 @@ async function destroy() {
 }
 entrypoints.setup({
   plugin: { create: mount, destroy },
-  panels: { [PANEL_ID]: { create: mount, show: mount, hide() {} } },
+  panels: { [PANEL_ID]: { create: mount, show() { mount(); visibility(true); }, hide() { visibility(false); } } },
 });
 mount();

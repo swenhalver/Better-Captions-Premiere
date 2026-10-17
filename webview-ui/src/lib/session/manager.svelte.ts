@@ -110,6 +110,10 @@ class SessionManager {
     if (!session) return;
     session.transcriptJson = json;
     session.captions = parseTranscript(json, session.style.maxWords);
+    for (const caption of session.captions) {
+      const lastWord = caption.words[caption.words.length - 1];
+      if (session.duration > 0 && lastWord?.endTime <= session.duration && caption.endTime > session.duration) caption.endTime = session.duration;
+    }
     session.hasTranscript = true;
     session.isLoading = false;
     this.sessions.set(this.activeSequenceId, session);

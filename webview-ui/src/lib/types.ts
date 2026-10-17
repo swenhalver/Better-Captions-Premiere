@@ -1,3 +1,8 @@
+import type { RenderBounds } from './export/bounds';
+export type { RenderBounds } from './export/bounds';
+export interface MotionSample { time: number; scaleX: number; scaleY: number; }
+export interface MotionProfile { signature: string; watchSignature?: string; watchError?: string; samples: MotionSample[]; }
+
 export interface TranscriptWord {
   text: string;
   start: number;
@@ -39,6 +44,9 @@ export interface CaptionItem {
   mediaPath?: string;
   position?: { x: number; y: number };
   timingEstimated?: boolean;
+  renderBounds?: RenderBounds;
+  motionProfile?: MotionProfile;
+  layoutOverflow?: boolean;
 }
 
 export interface CaptionWord {
@@ -121,6 +129,7 @@ export interface SequenceInfo {
   id: string;
   name: string;
   duration: number;
+  playhead?: number;
   frameRate: number;
   frameWidth: number;
   frameHeight: number;

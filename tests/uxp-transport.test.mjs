@@ -20,10 +20,10 @@ function events() {
     count(type) { return handlers.get(type)?.size || 0; },
   };
 }
-function harness(t) {
+function harness(t, nativeOverrides = {}) {
   const hostWindow = events(), uiWindow = events(), frame = events(), sequenceEvents = new Map();
-  const timers = new Set(), calls = [], replies = [], logs = [];
-  const schedule = (callback, ms) => { const timer = setTimeout(callback, ms); timers.add(timer); return timer; };
+  const timers = new Map(), calls = [], replies = [], logs = [];
+  const schedule = (callback, ms) => { const timer = setTimeout(callback, ms); timers.set(timer,{callback,ms}); return timer; };
   const cancel = timer => { timers.delete(timer); clearTimeout(timer); };
   const logger = { log: (...args) => logs.push(args), warn: (...args) => logs.push(args), error: (...args) => logs.push(args) };
   let setup, proxy, stops = 0, activated = 0, closed = 0, theme = 0;
@@ -38,6 +38,7 @@ function harness(t) {
     async saveSession() { throw new Error('Save the Premiere project first.'); },
     async startAgentBridge(value) { proxy = value; return async () => { stops++; }; },
     async exec() { throw new Error('The RPC allowlist must block this method.'); },
+    ...nativeOverrides,
   };
   frame.postMessage = message => { replies.push(message); uiWindow.emit('message', { data: message }); };
   const hostContext = {
@@ -81,9 +82,10 @@ function harness(t) {
     async apply() { return { applied: true }; },
   };
   const stop = api.startAgentBridge(handler);
-  t.after(async () => { stop(); await setup.plugin.destroy(); for (const timer of timers) clearTimeout(timer); });
+  t.after(async () => { stop(); await setup.plugin.destroy(); for (const timer of timers.keys()) clearTimeout(timer); });
   return { api, frame, status, setup, state, calls, replies, logs, hostWindow, uiWindow, sequenceEvents,
     proxy: () => proxy, stops: () => stops, counters: () => ({ activated, closed, theme }), stop,
+    fireTimeout(ms) { const found=[...timers].find(([,value])=>value.ms===ms);assert.ok(found,'expected timeout '+ms);cancel(found[0]);found[1].callback(); },
     runBootstrap() { vm.runInNewContext(source('webview-ui/public/bootstrap.js'), { window: uiWindow, Date }); },
   };
 }
@@ -167,4 +169,19 @@ test('hiding the panel preserves hooks; plugin destruction and UI unmount clean 
   assert.equal(app.hostWindow.count('message'), 0);
   // Avoid calling the plugin destroy hook a second time in the fixture cleanup.
   app.setup.plugin.destroy = async () => {};
+});
+test('native panel visibility reaches the editor on readiness and every show or hide',async t=>{
+  const app=harness(t);const visible=[];
+  app.uiWindow.addEventListener('message',event=>{if(event.data?.type==='better-captions-panel-visibility')visible.push(event.data.visible);});
+  await tick();assert.equal(visible.at(-1),false,'readiness repeats the current hidden state after the UI listener exists');
+  app.setup.panels.betterCaptions.show();app.setup.panels.betterCaptions.hide();
+  assert.deepEqual(visible.slice(-2),[true,false]);assert.equal(app.stops(),0,'visibility pauses polling without removing authorized agent hooks');
+});
+test('a lost frontend read response trips a circuit instead of issuing overlapping native calls',async t=>{
+  let finish;const gate=new Promise(resolve=>{finish=resolve;});
+  const app=harness(t,{readCaptionGeometry:()=>gate});await tick();
+  const read=app.api.readCaptionGeometry([],'native-sequence');await tick();app.fireTimeout(15000);
+  await assert.rejects(read,/timeout did not cancel/);const calls=app.calls.length;
+  await assert.rejects(app.api.getActiveSequenceInfo(),/previous Premiere read has not returned/);assert.equal(app.calls.length,calls);
+  finish({ok:true,cues:[]});await tick();assert.equal((await app.api.getActiveSequenceInfo()).id,'native-sequence');
 });

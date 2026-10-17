@@ -59,7 +59,8 @@
   }
   function saveTiming() {
     if (!selected) return;
-    updateCaption(retime(selected, Number(draftStart), Number(draftEnd)), "Caption timing saved. Word times moved proportionally.");
+    try { updateCaption(retime(selected, Number(draftStart), Number(draftEnd)), "Caption timing saved. Word times moved proportionally."); }
+    catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
   }
   function saveWords() {
     if (!selected) return;

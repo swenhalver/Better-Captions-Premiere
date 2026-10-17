@@ -7,25 +7,30 @@ const HOST_METHODS = [
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession',
   'transcribeSequence', 'getFonts', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'getColorScheme',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'getColorScheme',
 ] as const;
+const READ_METHODS = new Set(['getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection']);
 interface UXPMessageHost {
   postMessage: (message: unknown) => void;
 }
 interface Message {
   channel?: string; id?: string; method?: string; args?: unknown[];
   result?: unknown; error?: { message?: string } | string;
+  type?: string; visible?: boolean;
 }
 function nativeTransport(host: UXPMessageHost, webviewAPI: unknown) {
   let nextId = 0, handler: AgentHandler | null = null;
   const callbacks = webviewAPI as Record<string, (...args: never[]) => unknown>;
   const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   const prefix = 'ui-' + Date.now().toString(36) + '-';
+  let unresolvedRead: string | null = null;
   function call(method: string, args: unknown[] = []): Promise<unknown> {
+    if(unresolvedRead)return Promise.reject(new Error('A previous Premiere read has not returned. Native requests are paused; its timeout did not cancel the operation.'));
+    if(pending.size>=16)return Promise.reject(new Error('The caption panel is busy. Wait for its current operations to finish.'));
     const id = prefix + ++nextId;
-    const timeout = method === 'transcribeSequence' ? 60 * 60 * 1000 : method === 'finishCaption' || method === 'applyCaptionClips' ? 30 * 60 * 1000 : 60 * 1000;
+    const timeout = READ_METHODS.has(method)?15000:method === 'transcribeSequence' ? 60 * 60 * 1000 : method === 'finishCaption' || method === 'applyCaptionClips' ? 30 * 60 * 1000 : 60 * 1000;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error('Premiere did not finish the caption operation. Check the Better Captions panel and try again.')); }, timeout);
+      const timer = setTimeout(() => { pending.delete(id);if(READ_METHODS.has(method))unresolvedRead=id;reject(new Error('Premiere did not finish the caption operation. Native reads are paused until its response returns; the timeout did not cancel Premiere’s work.')); }, timeout);
       pending.set(id, { resolve, reject, timer });
       try { host.postMessage({ channel: CHANNEL, id, method, args }); }
       catch (error) { pending.delete(id); clearTimeout(timer); reject(error instanceof Error ? error : new Error(String(error))); }
@@ -37,8 +42,11 @@ function nativeTransport(host: UXPMessageHost, webviewAPI: unknown) {
     const raw = event.data ?? event.message;
     try { data = (typeof raw === 'string' ? JSON.parse(raw) : raw) as Message; } catch { return; }
     if (!data || data.channel !== CHANNEL) return;
+    // The same window message reaches main-webview's visibility listener.
+    if(data.type==='better-captions-panel-visibility'&&typeof data.visible==='boolean')return;
     if (!data.method) {
       if (!data.id) return;
+      if(data.id===unresolvedRead)unresolvedRead=null;
       const request = pending.get(data.id);
       if (!request) return;
       pending.delete(data.id); clearTimeout(request.timer);
