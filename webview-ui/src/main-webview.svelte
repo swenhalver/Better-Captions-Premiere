@@ -6,8 +6,8 @@
   import { sessionManager } from "./lib/session/manager.svelte";
   import { validateStylePatch, validateCaptionPatch, type AgentHandler } from "./lib/agent-bridge";
   import { retime, validateCaptions } from "./lib/transcript/edit";
-  import { captionLinks, createCaptionSelectionSync, panelVisibilityMessage, startProgramMonitorWatcher, type CaptionLink, type MotionWatchContext, type ReflowStatus } from "./lib/program-monitor";
-  import type { TranscriptJSON, SequenceInfo, SessionState, StyleConfig, CaptionItem, AnimationConfig } from "./lib/types";
+  import { captionLinks, createCaptionSelectionSync, legacyMotionBaseline, legacyMotionIdentity, panelVisibilityMessage, startProgramMonitorWatcher, type CaptionLink, type MotionWatchContext, type ReflowStatus } from "./lib/program-monitor";
+  import type { TranscriptJSON, SequenceInfo, SessionState, StyleConfig, CaptionItem, AnimationConfig, MotionProfile } from "./lib/types";
   import TextAreaControls from "./components/TextAreaControls.svelte";
   import WordSample from "./components/WordSample.svelte";
   import PanelTabs from "./components/PanelTabs.svelte";
@@ -23,12 +23,13 @@
   let wordState = $state("current");
   let selectedWord = $state(0);
   let contentEl: HTMLDivElement | undefined = $state();
-  async function changeWorkspace(value: string) { activeTab = value; await tick(); if (contentEl) contentEl.scrollTop = 0; }
+  async function changeWorkspace(value: string) { activeTab = value; selectionHint = null; await tick(); if (contentEl) contentEl.scrollTop = 0; }
   async function changeWordState(value: string) { wordState = value; await tick(); if (contentEl) contentEl.scrollTop = 0; }
   let sequenceInfo = $state<SequenceInfo | null>(null);
   let selectedId = $state<string | null>(null);
   let fonts = $state<string[]>([]);
   let error = $state("");
+  let selectionHint = $state<{ sequenceId: string; captionId: string } | null>(null);
   let isRefreshing = $state(false);
   let isSyncing = $state(false);
   let timelineBusy = $state(false);
@@ -44,6 +45,7 @@
   let hostPanelVisible = $state(true);
   let documentVisible = $state(!document.hidden);
   let automaticReflow = false;
+  const legacyBaselines = new Map<string, { signature?: string; changed?: boolean; error?: string }>();
   let locationScope = $state<"global" | "caption">("global");
   let appliedSignatures = $state<Record<string, string>>({});
   let editedSequences = $state<Record<string, boolean>>({});
@@ -53,8 +55,19 @@
   let exportButton: ExportButton | undefined = $state();
   let transcriptionBackup = $state<SessionState | null>(null);
   const loaded = new Set<string>();
+  let statusSequenceId: string | null = null;
   const plain = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
   const message = (problem: unknown) => problem instanceof Error ? problem.message : String(problem);
+  $effect(() => {
+    const id = sessionManager.current?.sequenceId ?? null;
+    if (id === statusSequenceId) return;
+    statusSequenceId = id;
+    timelineStatus = "";
+    selectionHint = null;
+    nativeSelection = null;
+    reflowStatus = { phase: "idle", message: "" };
+  });
+  $effect(() => { if (selectionHint && (selectionHint.sequenceId !== sessionManager.current?.sequenceId || selectionHint.captionId !== selectedId)) selectionHint = null; });
 
   function save(session: SessionState) {
     const snapshot = plain(session);
@@ -205,36 +218,43 @@
     const position = locationScope === "caption" && selected?.position ? selected.position : { x: session.style.positionX, y: session.style.positionY };
     positionCaption({ ...position, [axis]: Math.max(0, Math.min(1, value / 100)) }, locationScope);
   }
-  async function seekCaption(time: number) {
+  async function seekCaption(time: number): Promise<boolean> {
     const session = sessionManager.current;
-    if (!session || timelineBusy) return;
+    if (!session || timelineBusy) return false;
+    selectionHint = null;
     const caption = session.captions.find((item) => Math.abs(item.startTime - time) < .0001 || time >= item.startTime && time < item.endTime);
     const word = caption?.words[0];
     const target = word && Math.abs(time-caption!.startTime)<.0001 ? (word.startTime + word.endTime) / 2 : time;
     sessionManager.setCurrentTime(target);
     if (caption) selectedId = caption.id;
-    if (api.isDemo) return;
+    if (api.isDemo) return false;
     const request = ++selectionRevision;
     nativeSelection = null;
     selectingCaption = true;
     watchRevisionChanged();
     try {
-      if (!caption?.clipNodeId) { await showInPremiere(target); return; }
+      if (!caption?.clipNodeId) { await showInPremiere(target); return false; }
       const selection = api as typeof api & { selectCaptionClip?: (caption: CaptionItem, sequenceId: string) => Promise<unknown> };
       if (!selection.selectCaptionClip) throw new Error("Update Better Captions to select the caption in the Program Monitor.");
       await api.showInPremiere(target,session.sequenceId);
-      const result = await selection.selectCaptionClip(plain(caption), session.sequenceId) as { time?: number } | undefined;
+      const result = await selection.selectCaptionClip(plain(caption), session.sequenceId) as { ok?: boolean; time?: number } | undefined;
+      if (!result?.ok) throw new Error("Premiere did not confirm the caption selection. Try selecting it again.");
       if (sessionManager.current?.sequenceId === session.sequenceId && selectionRevision === request) {
         nativeSelection = { sequenceId: session.sequenceId, captionId: caption.id, clipNodeId: caption.clipNodeId };
         if (typeof result?.time === "number" && Number.isFinite(result.time)) sessionManager.setCurrentTime(result.time);
+        return true;
       }
+      return false;
     } catch (problem) { error = message(problem); }
     finally { if (selectionRevision === request) selectingCaption = false; }
+    return false;
   }
-  function moveSelectedCaption() {
+  async function selectSelectedCaption() {
     const session = sessionManager.current;
     const selected = session?.captions.find((caption) => caption.id === selectedId);
-    if (selected?.clipNodeId) void seekCaption(selected.startTime);
+    if (!session || !selected?.clipNodeId || api.isDemo || timelineBusy) return;
+    error = "";
+    if (await seekCaption(selected.startTime)) selectionHint = { sequenceId: session.sequenceId, captionId: selected.id };
   }
   async function areaChanged() {
     const session = sessionManager.current;
@@ -278,15 +298,70 @@
     const active = document.activeElement;
     return document.hasFocus() && active instanceof HTMLElement && !!active.closest(".transcript-editor__edit") && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName);
   }
-  function motionContext(): MotionWatchContext | null {
+  function selectionPauseReason(): string | null {
     const session = sessionManager.current;
-    if (api.isDemo || !hostPanelVisible || document.hidden || selectingCaption || isEditingTranscript() || timelineBusy || isRefreshing || isSyncing || !session?.hasTranscript || session.isLoading) return null;
-    const caption = session.captions.find((item) => item.id === selectedId);
-    if (!caption?.clipNodeId || nativeSelection?.sequenceId !== session.sequenceId || nativeSelection.captionId !== caption.id || nativeSelection.clipNodeId !== caption.clipNodeId) return null;
-    const profile = caption.motionProfile as { watchSignature?: string } | undefined;
+    if (api.isDemo) return "demo";
+    if (!hostPanelVisible) return "host-hidden";
+    if (document.hidden) return "document-hidden";
+    if (selectingCaption) return "selecting-caption";
+    if (isEditingTranscript()) return "editing-transcript";
+    if (timelineBusy) return "timeline-busy";
+    if (isRefreshing) return "refreshing";
+    if (isSyncing) return "syncing";
+    if (!session) return "no-session";
+    if (!session.hasTranscript) return "no-transcript";
+    if (session.isLoading) return "loading";
+    if (!session.captions.some(caption => caption.clipNodeId)) return "no-linked-captions";
+    return null;
+  }
+  function motionPauseReason(requireBaseline = true): string | null {
+    const paused = selectionPauseReason();
+    if (paused) return paused;
+    const session = sessionManager.current!;
+    const caption = session.captions.find(item => item.id === selectedId);
+    if (!caption?.clipNodeId) return "selected-caption-unlinked";
+    if (nativeSelection?.sequenceId !== session.sequenceId || nativeSelection.captionId !== caption.id || nativeSelection.clipNodeId !== caption.clipNodeId) return "native-selection-mismatch";
+    if (requireBaseline && !caption.motionProfile?.watchSignature && !legacyBaselines.get(legacyMotionIdentity(session.sequenceId, caption))?.signature) return "legacy-baseline-unarmed";
+    return null;
+  }
+  function rememberLegacyBaseline(key: string, value: { signature?: string; changed?: boolean; error?: string }) {
+    if (!legacyBaselines.has(key) && legacyBaselines.size >= 64) legacyBaselines.delete(legacyBaselines.keys().next().value!);
+    legacyBaselines.set(key, value);
+  }
+  async function ensureLegacyBaseline() {
+    if (motionPauseReason(false)) return;
+    const session = sessionManager.current!, caption = session.captions.find(item => item.id === selectedId)!;
+    if (caption.motionProfile?.watchSignature) return;
+    const id = session.sequenceId, key = legacyMotionIdentity(id, caption), known = legacyBaselines.get(key);
+    if (known?.error) throw new Error(known.error);
+    if (known?.signature) return;
+    const captured = plain(caption), current = () => {
+      const active = sessionManager.current, selected = active?.captions.find(item => item.id === selectedId);
+      return !motionPauseReason(false) && active?.sequenceId === id && selected && legacyMotionIdentity(id, selected) === key;
+    };
+    try {
+      // Reject an unknown rendered baseline before starting any native profile work.
+      if (typeof captured.motionProfile?.signature !== 'string' || !captured.motionProfile.signature || captured.motionProfile.signature.length > 4096 || !Array.isArray(captured.motionProfile.samples) || !captured.motionProfile.samples.length || captured.motionProfile.samples.length > 100000) throw new Error('Use Update Program Monitor once to establish this older caption’s rendered text-box baseline.');
+      const payload = { ...captionLinks([captured])[0], startTime: captured.startTime, endTime: captured.endTime, renderBounds: captured.renderBounds } as CaptionItem;
+      const result = await api.readCaptionMotion([payload], id);
+      if (!current()) return;
+      const cue = result?.cues?.find((item: { id: string }) => item.id === captured.id);
+      if (!result?.ok || !cue?.motionProfile || cue.clipNodeId !== captured.clipNodeId || cue.projectItemId !== captured.projectItemId || cue.path !== captured.mediaPath) throw new Error('The older caption timeline link changed. Refresh, then use Update Program Monitor.');
+      const baseline = legacyMotionBaseline(captured.motionProfile, cue.motionProfile as MotionProfile);
+      rememberLegacyBaseline(key, baseline);
+    } catch (problem) {
+      if (!current()) return;
+      const detail = message(problem).slice(0, 1000);
+      rememberLegacyBaseline(key, { error: detail });
+      throw new Error(detail);
+    }
+  }
+  function motionContext(): MotionWatchContext | null {
+    if (motionPauseReason()) return null;
+    const session = sessionManager.current!, caption = session.captions.find(item => item.id === selectedId)!;
     return {
-      sequenceId: session.sequenceId, captionId: caption.id, clipNodeId: caption.clipNodeId,
-      savedSignature: profile?.watchSignature,
+      sequenceId: session.sequenceId, captionId: caption.id, clipNodeId: caption.clipNodeId!,
+      savedSignature: caption.motionProfile?.watchSignature ?? legacyBaselines.get(legacyMotionIdentity(session.sequenceId, caption))?.signature,
       revision: JSON.stringify({ words: caption.words, position: caption.position, style: session.style, animation: session.animation }),
     };
   }
@@ -314,7 +389,20 @@
     try { await exportButton.apply({ captionIds: [context.captionId] }); await flushSave(); }
     finally { automaticReflow = false; }
   }
-  function getState(): SessionState | null { return sessionManager.current ? plain(sessionManager.current) : null; }
+  function runtimeState() {
+    const session = sessionManager.current, caption = session?.captions.find(item => item.id === selectedId);
+    return {
+      reflow: { phase: reflowStatus.phase, message: reflowStatus.message.slice(0, 1000), pauseReason: motionPauseReason(), watcher: motionWatcher?.diagnostics() ?? null },
+      visibility: { hostPanelVisible, documentHidden: document.hidden, documentVisibilityState: document.visibilityState },
+      selectedId, nativeSelection: nativeSelection ? { ...nativeSelection } : null,
+      busy: { timeline: timelineBusy, export: exportBusy, area: areaBusy, refreshing: isRefreshing, syncing: isSyncing, loading: !!session?.isLoading },
+      hasSavedWatchSignature: !!caption?.motionProfile?.watchSignature,
+    };
+  }
+  function getState(): (SessionState & { runtime: ReturnType<typeof runtimeState> }) | null {
+    const session = sessionManager.current;
+    return session ? { ...plain(session), runtime: runtimeState() } : null;
+  }
   function validateAnimation(patch: Partial<AnimationConfig>): Partial<AnimationConfig> {
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Expected an animation object.");
     for (const [key, value] of Object.entries(patch)) {
@@ -364,7 +452,7 @@
     const selectionSync = createCaptionSelectionSync({
       current() {
         const session = sessionManager.current;
-        if (api.isDemo || !hostPanelVisible || document.hidden || selectingCaption || isEditingTranscript() || timelineBusy || isRefreshing || isSyncing || !session?.hasTranscript || session.isLoading || !session.captions.some(caption => caption.clipNodeId)) return null;
+        if (selectionPauseReason() || !session) return null;
         return { sequenceId: session.sequenceId, captions: captionLinks(session.captions), revision: selectionRevision };
       },
       async read(context) {
@@ -382,7 +470,7 @@
       },
     });
     motionWatcher = startProgramMonitorWatcher({
-      beforeRead: () => selectionSync.sync(),
+      beforeRead: async () => { await selectionSync.sync(); await ensureLegacyBaseline(); },
       current: motionContext, readSignature: readMotionSignature, apply: reflowCaption,
       interval: 750, stableFor: 750,
       onStatus(status) { if (status.phase !== reflowStatus.phase || status.message !== reflowStatus.message) reflowStatus = status; },
@@ -436,7 +524,7 @@
           <div class="caption-app__states" role="group" aria-label="Word appearance state">{#each [{value:'spoken',label:'Past words'},{value:'current',label:'Current word'},{value:'upcoming',label:'Next words'}] as state}<button class="caption-button" aria-pressed={wordState===state.value} onclick={()=>changeWordState(state.value)}>{state.label}</button>{/each}</div>
           {#if selected}
             <WordSample caption={selected} style={session.style} {selectedWord} onSelect={(index)=>{selectedWord=index;void seekCaption(selected.words[index].startTime);}}/>
-            <TextAreaControls caption={selected} sequenceId={session.sequenceId} frameRate={session.frameRate} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={exportBusy||isRefreshing||isSyncing||session.isLoading} isDemo={api.isDemo} read={api.readCaptionArea} edit={api.editCaptionArea} getCurrentTime={async()=>{if(api.isDemo)return session.currentTime;const info=await api.getActiveSequenceInfo();if(!info||info.id!==session.sequenceId)throw new Error("The active sequence changed. Refresh Position & size before editing.");return info.playhead??session.currentTime;}} onSeek={async(time)=>{const result=!api.isDemo?await api.showInPremiere(time,session.sequenceId):null;if(sessionManager.current?.sequenceId!==session.sequenceId)throw new Error("The active sequence changed while seeking.");sessionManager.setCurrentTime(typeof result?.time==='number'?result.time:time);}} onBusy={setAreaBusy} onChanged={areaChanged}/>
+            <TextAreaControls caption={selected} sequenceId={session.sequenceId} frameRate={session.frameRate} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={exportBusy||isRefreshing||isSyncing||session.isLoading} isDemo={api.isDemo} read={api.readCaptionArea} edit={api.editCaptionArea} getCurrentTime={async()=>{if(api.isDemo)return session.currentTime;const info=await api.getActiveSequenceInfo();if(!info||info.id!==session.sequenceId)throw new Error("The active sequence changed. Refresh Position & size before editing.");return info.playhead??session.currentTime;}} onSeek={async(time)=>{const result=!api.isDemo?await api.showInPremiere(time,session.sequenceId):null;if(sessionManager.current?.sequenceId!==session.sequenceId)throw new Error("The active sequence changed while seeking.");sessionManager.setCurrentTime(typeof result?.time==='number'?result.time:time);}} onSelect={selectSelectedCaption} onBusy={setAreaBusy} onChanged={areaChanged}/>
           {/if}
           <p class="caption-help caption-app__state-scope">Editing {wordState==='spoken'?'past words':wordState==='current'?'the current word':'next words'} · all captions</p>
           <WordStates style={session.style} {fonts} onUpdate={handleStyle} stateKey={wordState==='spoken'?'spokenWord':wordState==='current'?'activeWord':'upcomingWord'} />
@@ -451,7 +539,7 @@
                 <label class="caption-field"><span>Y, % from top</span><input type="number" min="0" max="100" step=".5" value={Number((position.y * 100).toFixed(2))} onchange={(event) => updatePositionAxis("y", event)} /></label>
                 {#if locationScope === "caption" && selected?.position}<button class="caption-button caption-field--wide" onclick={() => positionCaption(null, "caption")}>Reset to default position</button>{/if}
               </div>
-              <button class="caption-button" onclick={moveSelectedCaption} disabled={api.isDemo || timelineBusy || !selected?.clipNodeId}>Move / resize in Program Monitor</button>
+              <button class="caption-button" onclick={selectSelectedCaption} disabled={api.isDemo || timelineBusy || !selected?.clipNodeId}>Select in Program Monitor</button>
               <p class="caption-help">Initial placement affects new caption media. For applied clips, use Position & size or drag handles in the Program Monitor.</p>
             </div>
           </details>
@@ -460,15 +548,19 @@
       </fieldset>
     </div>
     <footer class="caption-app__output" aria-label="Program Monitor captions">
+      {#if selectionHint}<p class="caption-help caption-app__selection-hint" role="status">Double-click the caption in the Program Monitor to show handles.</p>{/if}
       {#if selected?.layoutOverflow}<p class="caption-message caption-message--error" role="alert">Text exceeds this box. Enlarge it or split the caption.</p>{/if}
       {#if reflowStatus.phase === "error" && reflowStatus.message}<p class="caption-message caption-message--error" role="alert">{reflowStatus.message}</p>{/if}
-      <ExportButton bind:this={exportButton} captions={session.captions} style={session.style} animation={session.animation} frameWidth={session.frameWidth} frameHeight={session.frameHeight} frameRate={session.frameRate} duration={session.duration} sequenceName={session.sequenceName} sequenceId={session.sequenceId} currentTime={session.currentTime} {selectedId} tracks={sequenceInfo?.tracks ?? []} hostApi={api} onUpdated={recordApplied} onApplied={recordMonitorApplied} onBusy={setTimelineBusy} disabled={areaBusy || isRefreshing || isSyncing || session.isLoading} />
+      {#key session.sequenceId}
+        <ExportButton bind:this={exportButton} captions={session.captions} style={session.style} animation={session.animation} frameWidth={session.frameWidth} frameHeight={session.frameHeight} frameRate={session.frameRate} duration={session.duration} sequenceName={session.sequenceName} sequenceId={session.sequenceId} currentTime={session.currentTime} {selectedId} tracks={sequenceInfo?.tracks ?? []} hostApi={api} onUpdated={recordApplied} onApplied={recordMonitorApplied} onBusy={setTimelineBusy} disabled={areaBusy || isRefreshing || isSyncing || session.isLoading} />
+      {/key}
     </footer>
   {:else}<div class="caption-app__empty"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="3" y="6" width="26" height="20" rx="2"/><path d="M8 13h10M8 19h16"/></svg><h2>Start with a sequence</h2><p>Open a sequence in Premiere, then refresh to transcribe and edit its captions.</p><button class="caption-button" onclick={() => { void refreshSequence(); }} disabled={isRefreshing}>{isRefreshing ? "Looking for sequence…" : "Refresh sequence"}</button></div>{/if}
 </main>
 <style>
   .caption-app { display: flex; flex-direction: column; block-size: 100%; overflow: hidden; container-type: inline-size; }
   .caption-app__output { flex-shrink: 0; border-block-start: 1px solid var(--color-panel-border); background: var(--color-surface); max-block-size: 40%; overflow-y: auto; }
+  .caption-app__selection-hint { padding: var(--caption-space-s) var(--caption-space-l) 0; }
   .caption-app__editor { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
   .caption-app__states { display:flex; gap:.4rem; padding:var(--caption-space-m) var(--caption-space-l); }
   .caption-app__states button { flex:1; min-inline-size:0; padding-inline:.3rem; font-size:var(--caption-type-xs); }

@@ -20,3 +20,11 @@ Live mutation failures and recovery limits are explicitly reported. Tests simula
 The visible UXP panel adds only allowlisted `readCaptionArea` and `editCaptionArea` methods. The background service exposes a read-only `readCaptionAreaDescriptor` operation to resolve an existing caption link, with sequence, project, clip, media, track-lock and speed checks. Native writes use the existing bounded UXP serialization lane, captured clip timing/media identity, a complete Motion-state signature, a second identity/value check after asynchronous preparation, one Premiere transaction and readback verification. The request contains bounded pixel values and an enumerated edit operation; it does not accept code, file paths, executable names or arbitrary native methods.
 
 Word-style additions use the existing strict style validator. Optional state fields preserve old sessions. No network endpoints, remote fonts or new executable dependencies were added.
+
+## 0.5.2 native compatibility
+
+The unnamed Uniform Scale fallback requires a fresh proof from CEP's named control on the exact linked clip. UXP verifies the component, identical parameter count and Width/Uniform Scale/Rotation indices, neighbouring parameter identities, nonanimated Boolean value and agreement with that proof. The binding structure participates in identity checks; the Boolean state is refreshed after a transaction. Missing or ambiguous proof fails before mutation.
+
+Native action and PointKeyframe construction now follow Adobe's synchronous lock requirements. Position values and key times are read back after writing. The panel refuses reconstruction of Position keys whose native easing cannot be read. No menu command, operating-system input automation or tool-toggle loop is used by the plugin.
+
+Service startup polling reads only the private heartbeat, has a five-second maximum and reserves the serialization deadline. It writes no request before readiness. Legacy geometry migration performs at most one guarded full-profile read per selected identity, with a 64-entry cache and stale-result checks. Unknown rendered baselines require an explicit update. Agent runtime diagnostics are bounded read-only response data and are not persisted. No new permissions, service actions, network endpoints or dependencies were added.

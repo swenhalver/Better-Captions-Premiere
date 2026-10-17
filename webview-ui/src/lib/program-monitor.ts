@@ -1,4 +1,4 @@
-import type { CaptionItem } from './types';
+import type { CaptionItem, MotionProfile } from './types';
 
 export type CaptionLink = Pick<CaptionItem, 'id' | 'clipNodeId' | 'projectItemId' | 'mediaPath'>;
 export function captionLinks(captions: CaptionItem[]): CaptionLink[] {
@@ -64,6 +64,26 @@ export function createCaptionSelectionSync(options: SelectionOptions) {
   };
 }
 
+/** The legacy movie's saved samples describe its existing inverse-scale compensation. */
+export function legacyMotionIdentity(sequenceId: string, caption: CaptionItem): string {
+  return JSON.stringify([sequenceId, caption.id, caption.clipNodeId, caption.projectItemId, caption.mediaPath,
+    caption.startTime, caption.endTime, typeof caption.motionProfile?.signature === 'string' ? caption.motionProfile.signature.slice(0, 4096) : null]);
+}
+export function legacyMotionBaseline(saved: MotionProfile | undefined, live: MotionProfile): { signature: string; changed: boolean } {
+  const valid = (profile: MotionProfile | undefined) => {
+    if (!profile || typeof profile.signature !== 'string' || !profile.signature || profile.signature.length > 4096 || !Array.isArray(profile.samples) || !profile.samples.length || profile.samples.length > 100000) return false;
+    return profile.samples.every((sample, index) => sample && Number.isFinite(sample.time) && sample.time >= 0 &&
+      [sample.scaleX, sample.scaleY].every(value => Number.isFinite(value) && value >= .01 && value <= 100) &&
+      (index === 0 || sample.time > profile.samples[index - 1].time));
+  };
+  const update = () => { throw new Error('Use Update Program Monitor once to establish this older caption’s rendered text-box baseline.'); };
+  if (!valid(saved) || !valid(live) || typeof live.watchSignature !== 'string' || !live.watchSignature || live.watchSignature.length > 4096) return update();
+  // Do not infer a curve from incomplete or differently timed samples.
+  if (saved!.samples.length !== live.samples.length || live.samples.some((sample, index) => Math.abs(sample.time - saved!.samples[index].time) > 1e-6)) return update();
+  const changed = live.samples.some((sample, index) => Math.abs(sample.scaleX - saved!.samples[index].scaleX) > 1e-6 || Math.abs(sample.scaleY - saved!.samples[index].scaleY) > 1e-6);
+  return { signature: changed ? 'legacy-rendered:' + saved!.signature : live.watchSignature, changed };
+}
+
 /** Watch only the selected caption's native text-box geometry, never its Position. */
 export interface MotionWatchContext {
   sequenceId: string;
@@ -92,10 +112,10 @@ export function startProgramMonitorWatcher(options: WatchOptions) {
   const automatic = options.autoStart !== false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let key = '', baseline: string | null = null, lastSaved: string | null = null, revision = '';
-  let candidate: string | null = null, candidateSince = 0, failed: string | null = null, readPaused = false;
+  let candidate: string | null = null, candidateSince = 0, failed: string | null = null, readPaused = false, lastObserved: string | null = null;
   const idle = () => options.onStatus({ phase: 'idle', message: '' });
   function reset() {
-    generation++; key = ''; baseline = null; lastSaved = null; candidate = null; failed = null; readPaused = false; selectionPaused = false; revision = ''; idle();
+    generation++; key = ''; baseline = null; lastSaved = null; candidate = null; failed = null; readPaused = false; selectionPaused = false; lastObserved = null; revision = ''; idle();
     schedule();
   }
   function stillCurrent(expected: string, expectedGeneration: number) {
@@ -108,7 +128,7 @@ export function startProgramMonitorWatcher(options: WatchOptions) {
     const nextKey = identity(context);
     if (key !== nextKey) {
       key = nextKey; baseline = context.savedSignature ?? null; lastSaved = baseline;
-      revision = context.revision ?? ''; candidate = null; failed = null; readPaused = false; idle();
+      revision = context.revision ?? ''; candidate = null; failed = null; readPaused = false; lastObserved = null; idle();
     } else if (revision !== (context.revision ?? '')) {
       revision = context.revision ?? ''; failed = null; readPaused = false; candidate = null;
     }
@@ -120,6 +140,7 @@ export function startProgramMonitorWatcher(options: WatchOptions) {
       const current = stillCurrent(nextKey, requestGeneration);
       if (!current) return;
       if (typeof observed !== 'string' || !observed || observed.length > 500000) throw new Error('Premiere returned invalid text-box geometry.');
+      lastObserved = observed;
       const saved = current.savedSignature ?? null;
       if (saved !== lastSaved) { lastSaved = saved; baseline = saved; candidate = null; failed = null; }
       if (baseline === null) { baseline = observed; idle(); return; }
@@ -171,6 +192,11 @@ export function startProgramMonitorWatcher(options: WatchOptions) {
   return {
     tick,
     reset,
+    diagnostics() {
+      const short = (value: string | null) => value === null ? null : value.slice(0, 160);
+      return { alive, visible, inFlight, timerScheduled: timer !== undefined, readPaused, selectionPaused,
+        baseline: short(baseline), candidate: short(candidate), lastObserved: short(lastObserved) };
+    },
     notifyRevision(value: string | number) { if (retryRevision !== value) { retryRevision = value; reset(); } },
     setVisible(value: boolean) {
       if (visible === value) return;

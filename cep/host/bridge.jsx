@@ -260,21 +260,25 @@ var BetterCaptionsHost = (function () {
             return reply({ ok: true, captionId: captionId, clipNodeId: captionId === null ? null : String(selected.nodeId), time: s.getPlayerPosition().seconds });
         } catch (e) { return reply({ error: e.toString() }); }
     }
-    function motionParameters(clip) {
+    function motionParameters(clip, binding) {
         var motion = null;
         for (var i = 0; clip.components && i < clip.components.numItems; i++) {
             var component = clip.components[i];
             if (component.matchName === 'AE.ADBE Motion' || component.matchName === 'ADBE Motion') { motion = component; break; }
         }
         if (!motion) throw new Error('Premiere did not expose the caption Motion controls.');
+        if (binding) {
+            if (motion.properties.numItems < 1 || motion.properties.numItems > 64) throw new Error('Premiere returned an invalid Motion parameter count.');
+            binding.version = 1; binding.componentMatchName = String(motion.matchName); binding.parameterCount = motion.properties.numItems;
+        }
         var out = {};
         for (i = 0; i < motion.properties.numItems; i++) {
             var param = motion.properties[i], name = param.displayName;
             if (name === 'Position') out.position = param;
             else if (name === 'Scale' || name === 'Scale (Height)' || name === 'Scale Height') out.height = param;
-            else if (name === 'Scale Width' || name === 'Scale (Width)') out.width = param;
-            else if (name === 'Uniform Scale') out.uniform = param;
-            else if (name === 'Rotation') out.rotation = param;
+            else if (name === 'Scale Width' || name === 'Scale (Width)') { out.width = param; if (binding) binding.widthIndex = typeof binding.widthIndex === 'number' ? -1 : i; }
+            else if (name === 'Uniform Scale') { out.uniform = param; if (binding) binding.uniformIndex = typeof binding.uniformIndex === 'number' ? -1 : i; }
+            else if (name === 'Rotation') { out.rotation = param; if (binding) binding.rotationIndex = typeof binding.rotationIndex === 'number' ? -1 : i; }
             else if (name === 'Anchor Point') out.anchor = param;
         }
         if (!out.height || !out.width || !out.uniform) throw new Error('Premiere did not expose separate caption width and height controls.');
@@ -405,7 +409,9 @@ var BetterCaptionsHost = (function () {
             assertNormalSpeed(clip);
             var b = renderBounds(c.renderBounds,s);
             if (!b) throw new Error('Update Program Monitor once to create the caption text area.');
-            return reply({ok:true,sequenceId:p.sequenceId,projectPath:p.projectPath,clipNodeId:String(clip.nodeId),projectItemId:String(clip.projectItem.nodeId),path:c.mediaPath,track:found.track,startTicks:String(clip.start.ticks),endTicks:String(clip.end.ticks),inTicks:String(clip.inPoint.ticks),ticksPerFrame:Number(s.timebase),frameWidth:s.frameSizeHorizontal,frameHeight:s.frameSizeVertical,bounds:b});
+            var binding = {}, params = motionParameters(clip,binding), uniformAnimated = !!params.uniform.isTimeVarying();
+            binding.uniform = { animated: uniformAnimated, value: uniformAnimated ? null : !!motionValue(params.uniform.getValue(),'uniform') };
+            return reply({ok:true,sequenceId:p.sequenceId,projectPath:p.projectPath,clipNodeId:String(clip.nodeId),projectItemId:String(clip.projectItem.nodeId),path:c.mediaPath,track:found.track,startTicks:String(clip.start.ticks),endTicks:String(clip.end.ticks),inTicks:String(clip.inPoint.ticks),ticksPerFrame:Number(s.timebase),frameWidth:s.frameSizeHorizontal,frameHeight:s.frameSizeVertical,bounds:b,motionBinding:binding});
         } catch (e) { return reply({error:e.toString()}); }
     }
     function readCaptionMotion(file) {

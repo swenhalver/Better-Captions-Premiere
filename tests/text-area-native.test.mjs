@@ -7,20 +7,22 @@ const require=createRequire(import.meta.url),{readArea,editArea}=require('../uxp
 const TICKS=254016000000,TPF=TICKS/24;
 const time=ticks=>({ticks:String(Math.round(Number(ticks))),seconds:Number(ticks)/TICKS});
 const clone=structuredClone;
-function harness({sourceIn=0,uniform=true}={}){
+function harness({sourceIn=0,uniform=true,pointKeys=false}={}){
  const m={LINEAR:0,HOLD:4,BEZIER:5},ppro={Constants:{InterpolationMode:m,TrackItemType:{CLIP:1}},TickTime:{createWithTicks:time},PointF:class{constructor(x,y){this.x=x;this.y=y;}},ClipProjectItem:{cast:x=>x}};
- let prepared=0;
+ let prepared=0,lockDepth=0,transactionDepth=0;
+ const createdActions=[];
+ const action=(kind,run)=>{assert.ok(lockDepth>0&&transactionDepth>0,kind+' must be created inside the synchronous lock and transaction');createdActions.push(kind);return run;};
  function param(displayName,value){
    const p={displayName,value,animated:false,keys:[],evaluated:[],isTimeVarying(){return this.animated;},areKeyframesSupported:async()=>true,
      getStartValue:async()=>({value:{value:clone(p.value)}}),getKeyframeListAsTickTimes:()=>p.keys.map(k=>time(k.ticks)),
-     getKeyframePtr:t=>({value:{value:clone(p.keys.find(k=>k.ticks===t.ticks).value)},getTemporalInterpolationMode:async()=>p.keys.find(k=>k.ticks===t.ticks).mode}),
+     getKeyframePtr:t=>({value:{value:clone(p.keys.find(k=>k.ticks===t.ticks).value)},...(!pointKeys||displayName!=='Position'?{getTemporalInterpolationMode:async()=>p.keys.find(k=>k.ticks===t.ticks).mode}:{})}),
      getValueAtTime:async t=>{p.evaluated.push(t.ticks);let value=p.value;if(p.animated&&p.keys.length){const a=[...p.keys].reverse().find(k=>Number(k.ticks)<=Number(t.ticks))??p.keys[0],b=p.keys.find(k=>Number(k.ticks)>Number(t.ticks))??a;let f=a===b||a.mode===m.HOLD?0:Math.max(0,(Number(t.ticks)-Number(a.ticks))/(Number(b.ticks)-Number(a.ticks)));if(a.mode===m.BEZIER)f=f*f*(3-2*f);value=Array.isArray(a.value)?a.value.map((v,i)=>v+(b.value[i]-v)*f):a.value+(b.value-a.value)*f;}return {value:clone(value)};},
-     createKeyframe:v=>{prepared++;return {value:v instanceof ppro.PointF?[v.x,v.y]:clone(v),position:time(0),mode:m.LINEAR,async setTemporalInterpolationMode(mode){this.mode=mode;return true;}};},
-     createSetTimeVaryingAction:v=>()=>{p.animated=v;if(!v)p.keys=[];},
-     createSetValueAction:k=>()=>{p.value=clone(k.value);},
-     createRemoveKeyframeAction:t=>()=>{p.keys=p.keys.filter(k=>k.ticks!==t.ticks);},
-     createAddKeyframeAction:k=>()=>{p.keys=p.keys.filter(old=>old.ticks!==k.position.ticks);p.keys.push({ticks:k.position.ticks,value:clone(k.value),mode:k.mode});p.keys.sort((a,b)=>Number(a.ticks)-Number(b.ticks));},
-     createSetInterpolationAtKeyframeAction:(t,mode)=>()=>{p.keys.find(k=>k.ticks===t.ticks).mode=mode;}
+     createKeyframe:v=>{if(pointKeys&&displayName==='Position')assert.ok(lockDepth>0&&transactionDepth>0,'PointKeyframe must be constructed in the synchronous locked transaction');prepared++;return {value:v instanceof ppro.PointF?[v.x,v.y]:clone(v),position:time(0),mode:m.LINEAR,...(!pointKeys||displayName!=='Position'?{async setTemporalInterpolationMode(mode){this.mode=mode;return true;},async getTemporalInterpolationMode(){return this.mode;}}:{})};},
+     createSetTimeVaryingAction:v=>action('timeVarying',()=>{p.animated=v;if(!v)p.keys=[];}),
+     createSetValueAction:k=>action('setValue',()=>{p.value=clone(k.value);}),
+     createRemoveKeyframeAction:t=>action('removeKey',()=>{p.keys=p.keys.filter(k=>k.ticks!==t.ticks);}),
+     createAddKeyframeAction:k=>action('addKey',()=>{p.keys=p.keys.filter(old=>old.ticks!==k.position.ticks);p.keys.push({ticks:k.position.ticks,value:clone(k.value),mode:k.mode});p.keys.sort((a,b)=>Number(a.ticks)-Number(b.ticks));}),
+     createSetInterpolationAtKeyframeAction:(t,mode)=>action('interpolation',()=>{const key=p.keys.find(k=>k.ticks===t.ticks);key.mode=mode;if(pointKeys&&displayName==='Position')key.value=[0,0];})
    };return p;
  }
  const params={position:param('Position',[.5,.5]),height:param('Scale',100),width:param('Scale Width',75),uniform:param('Uniform Scale',uniform),rotation:param('Rotation',0),anchor:param('Anchor Point',[.5,.5])};
@@ -31,8 +33,8 @@ function harness({sourceIn=0,uniform=true}={}){
  const sequence={getVideoTrack:async()=>({getTrackItems:async()=>[clip]})};
  let transactions=0,reject=false,revalidations=0,revalidator=async()=>clone(freshDescriptor);
  const revalidate=async()=>{revalidations++;return revalidator();};
- const project={afterCommit:null,lockedAccess:cb=>cb(),executeTransaction:cb=>{const actions=[];cb({addAction:a=>{actions.push(a);return true;}});transactions++;if(reject)return false;for(const action of actions)action();project.afterCommit?.();return true;}};
- return {ppro,project,sequence,descriptor,freshDescriptor,params,clip,param,revalidate,
+ const project={afterCommit:null,lockedAccess:cb=>{lockDepth++;try{const value=cb();assert.ok(!value||typeof value.then!=='function','lockedAccess callback must remain synchronous');return value;}finally{lockDepth--;}} ,executeTransaction:cb=>{assert.ok(lockDepth>0);const actions=[];transactionDepth++;try{const value=cb({addAction:a=>{actions.push(a);return true;}});assert.ok(!value||typeof value.then!=='function','transaction callback must remain synchronous');}finally{transactionDepth--;}transactions++;if(reject)return false;for(const action of actions)action();project.afterCommit?.();return true;}};
+ return {ppro,project,sequence,descriptor,freshDescriptor,params,clip,param,revalidate,createdActions,
    get transactions(){return transactions;},get prepared(){return prepared;},get revalidations(){return revalidations;},
    reject:()=>{reject=true;},useParams:next=>{activeParams=next;},setRevalidator:fn=>{revalidator=fn;},
    read:frame=>readArea(ppro,sequence,descriptor,frame,revalidate),
@@ -74,8 +76,8 @@ test('silent native refusal is reported instead of confirming an edit',async()=>
  assert.equal((await h.read(0)).canUndo,false);
 });
 test('clip identity is checked again after asynchronous action preparation',async()=>{
- const h=harness(),s=await h.read(0),original=h.params.position.createKeyframe;
- h.params.position.createKeyframe=value=>{h.clip.getStartTime=async()=>time(15*TICKS);return original(value);};
+ const h=harness(),s=await h.read(0),original=h.params.position.getValueAtTime;
+ h.params.position.getValueAtTime=async at=>{h.clip.getStartTime=async()=>time(15*TICKS);return original(at);};
  await assert.rejects(h.edit(s,'set',{track:'position',value:[400,500]}),/clip changed/);assert.equal(h.transactions,0);
 });
 
@@ -225,8 +227,8 @@ test('explicit native Bezier interpolation remains available, but panel Undo can
 test('fresh private CEP identities are checked after asynchronous action preparation, including same-media replacements',async()=>{
  const changed={clipNodeId:'replacement-clip',projectItemId:'replacement-item',projectPath:'/other/project.prproj',sequenceId:'other-sequence',track:1,path:'/other/caption.mov',frameWidth:1280,ticksPerFrame:TPF*2};
  for(const [field,value]of Object.entries(changed)){
-   const h=harness(),state=await h.read(0),original=h.params.position.createKeyframe;
-   h.params.position.createKeyframe=valueToWrite=>{h.freshDescriptor[field]=value;return original(valueToWrite);};
+   const h=harness(),state=await h.read(0),original=h.params.position.getValueAtTime;
+   h.params.position.getValueAtTime=async at=>{h.freshDescriptor[field]=value;return original(at);};
    await assert.rejects(h.edit(state,'set',{track:'position',value:[800,400]}),/timeline link changed/,field);
    assert.equal(h.transactions,0,field+' must reject before the transaction');
    assert.deepEqual(h.params.position.value,[.5,.5]);
@@ -300,9 +302,191 @@ test('actual API lane revalidates private descriptors without recursion and reta
  h.params.position.createKeyframe=value=>{caption.projectItemId='mutated-in-UI';caption.renderBounds.width=300;return original(value);};
  const result=await a.api.editCaptionArea(caption,sequence.id,{signature:state.signature,frame:0,operation:'set',track:'position',value:[700,500]});
  assert.deepEqual(result.tracks.position.value,[700,500]);
- assert.equal(a.requests.length,5,'an edit rechecks the link before and after the native transaction');
+ assert.equal(a.requests.length,6,'an edit rechecks the link before commit, before resolving readback handles, and after readback');
  assert.ok(a.requests.every(request=>request.action==='readCaptionAreaDescriptor'));
  assert.ok(a.requests.every(request=>request.args[0].projectItemId==='item'&&request.args[0].renderBounds.width===1200));
  assert.ok(a.requests.every(request=>!Object.hasOwn(request.args[0],'words')),'transcript text is not copied into identity probes');
  assert.equal(h.transactions,1);
+});
+
+test('Motion resolver accepts promise-backed SDK wrappers and harmless English label formatting',async()=>{
+ const h=harness({uniform:false}),names=['  position  ','Scale (HEIGHT)','Scale_Width','UNIFORM\u00a0SCALE','Rotation','Anchor Point'];
+ Object.values(h.params).forEach((param,index)=>{param.displayName=Promise.resolve(names[index]);});
+ let counts=0;
+ const motion={getMatchName:async()=> 'AE.ADBE Motion',getParamCount:async()=>{counts++;return names.length;},getParam:async index=>Object.values(h.params)[index]};
+ h.clip.getComponentChain=async()=>({getComponentCount:async()=>1,getComponentAtIndex:async()=>motion});
+ let state=await h.read(0);
+ assert.deepEqual(state.tracks.position.value,[960,540]);
+ assert.deepEqual(state.tracks.width.value,[900]);
+ assert.equal(counts,1,'parameter count is read once for each resolution');
+ state=await h.edit(state,'set',{track:'width',value:[720]});
+ assert.deepEqual(state.tracks.width.value,[720]);
+ assert.deepEqual(state.tracks.height.value,[400]);
+});
+
+test('unresolved or ambiguous Motion controls report bounded indexed native names and never guess indices',async()=>{
+ const h=harness();
+ h.params.width.displayName='Unexpected width label';
+ await assert.rejects(h.read(0),error=>{
+   assert.match(error.message,/Missing: width/);
+   assert.match(error.message,/2: Unexpected width label/);
+   assert.match(error.message,/0: Position/);
+   return true;
+ });
+ h.params.width.displayName='Scale Width';h.params.rotation.displayName='Scale (Height)';
+ await assert.rejects(h.read(0),/Ambiguous: height/);
+ h.params.rotation.displayName='\n'+ 'x'.repeat(10000);
+ h.params.width.displayName='constructor';
+ await assert.rejects(h.read(0),error=>{assert.match(error.message,/Missing: width/);assert.ok(error.message.length<1600);assert.ok(!error.message.includes('\n'));return true;});
+ assert.deepEqual(h.createdActions,[]);
+ assert.equal(h.transactions,0);
+});
+
+test('invalid native parameter counts stop before unbounded enumeration',async()=>{
+ for(const count of [-1,65,Infinity,2.5,'6']){
+   const h=harness();let parameterReads=0;
+   h.clip.getComponentChain=async()=>({getComponentCount:()=>1,getComponentAtIndex:()=>({getMatchName:async()=> 'AE.ADBE Motion',getParamCount:()=>count,getParam:()=>{parameterReads++;throw new Error('must not enumerate');}})});
+   await assert.rejects(h.read(0),/invalid Motion parameter count/);
+   assert.equal(parameterReads,0);
+   assert.equal(h.transactions,0);
+ }
+});
+
+test('all native Action factories run inside one synchronous locked transaction after identity revalidation',async()=>{
+ const h=harness({uniform:false});
+ let state=await h.read(0);
+ h.setRevalidator(async()=>{if(!h.transactions)assert.deepEqual(h.createdActions,[],'no native Actions before the last asynchronous identity check');return clone(h.freshDescriptor);});
+ state=await h.edit(state,'toggle',{track:'width'});
+ assert.deepEqual(h.createdActions,['timeVarying','addKey']);
+ assert.equal(h.transactions,1);
+ h.setRevalidator(async()=>clone(h.freshDescriptor));
+ state=await h.read(24);state=await h.edit(state,'set',{track:'width',value:[1200]});
+ state=await h.edit(state,'interpolation',{track:'width',interpolation:'hold'});
+ state=await h.edit(state,'key',{track:'width'});
+ state=await h.edit(state,'toggle',{track:'width'});
+ assert.ok(h.createdActions.includes('interpolation'));
+ assert.ok(h.createdActions.includes('removeKey'));
+ assert.ok(h.createdActions.includes('setValue'));
+ assert.equal(h.transactions,5);
+});
+
+test('documented PointKeyframe shape supports Position animation without scalar interpolation methods',async()=>{
+ const h=harness({pointKeys:true,uniform:false});
+ let state=await h.edit(await h.read(0),'toggle',{track:'position'});
+ assert.equal(state.tracks.position.animated,true);
+ assert.equal(state.tracks.position.keys[0].interpolation,'native','unreadable native easing must remain unknown');
+ state=await h.read(24);state=await h.edit(state,'set',{track:'position',value:[1200,700]});
+ assert.equal(h.params.position.keys.length,2);
+ assert.deepEqual(state.tracks.position.value,[1200,700]);
+ assert.ok(state.tracks.position.keys.every(key=>key.interpolation==='native'));
+ assert.equal(h.createdActions.filter(kind=>kind==='interpolation').length,0,'PointKeyframe insertion must never emit scalar interpolation Actions');
+ const first=h.params.position.keys[0],last=h.params.position.keys[1],transactions=h.transactions;
+ await assert.rejects(h.edit(state,'set',{track:'position',value:[1300,700]}),/custom interpolation/);
+ await assert.rejects(h.edit(state,'interpolation',{track:'position',interpolation:'hold'}),/interpolation for readback/);
+ assert.equal(h.params.position.keys[0],first);assert.equal(h.params.position.keys[1],last);
+ assert.equal(h.transactions,transactions);
+ state=await h.read(12);assert.deepEqual(state.tracks.position.value,[1080,620]);
+ state=await h.edit(state,'toggle',{track:'position'});
+ assert.equal(state.tracks.position.animated,false);
+ assert.deepEqual(state.tracks.position.value,[1080,620]);
+});
+
+test('bounded value unwrapping accepts raw and nested native PointF/scalar wrappers without changing units',async()=>{
+ const h=harness({uniform:false});
+ h.params.position.getValueAtTime=async()=>({value:{value:new h.ppro.PointF(.25,.75)}});
+ h.params.height.getStartValue=async()=>({value:{value:{value:120}}});
+ h.params.height.getValueAtTime=async()=>({value:{value:120}});
+ h.params.width.getValueAtTime=async()=>75;
+ const state=await h.read(0);
+ assert.deepEqual(state.tracks.position.value,[480,810]);
+ assert.deepEqual(state.tracks.height.value,[480]);
+ assert.deepEqual(state.tracks.width.value,[900]);
+ assert.equal(h.transactions,0);
+});
+
+function proveUnnamedUniform(h){
+ h.params.uniform.displayName='';
+ const binding={version:1,componentMatchName:'AE.ADBE Motion',parameterCount:6,widthIndex:2,uniformIndex:3,rotationIndex:4,uniform:{animated:false,value:!!h.params.uniform.value}};
+ h.descriptor.motionBinding=clone(binding);h.freshDescriptor.motionBinding=clone(binding);
+ h.setRevalidator(async()=>{const fresh=clone(h.freshDescriptor);fresh.motionBinding.uniform.value=!!h.params.uniform.value;return fresh;});
+}
+
+test('unnamed Uniform Scale is bound by CEP proof, checkbox type and native named neighbors, never literal index3',async()=>{
+ const h=harness({uniform:false});proveUnnamedUniform(h);
+ h.useParams({extra:h.param('Unrelated control',5),...h.params});
+ for(const descriptor of [h.descriptor,h.freshDescriptor])Object.assign(descriptor.motionBinding,{parameterCount:7,widthIndex:3,uniformIndex:4,rotationIndex:5});
+ const state=await h.read(0);
+ assert.deepEqual(state.tracks.width.value,[900]);
+ assert.deepEqual(state.tracks.height.value,[400]);
+ const next=await h.edit(state,'set',{track:'height',value:[600]});
+ assert.deepEqual(next.tracks.height.value,[600]);
+ assert.deepEqual(next.tracks.width.value,[900]);
+ assert.equal(h.params.uniform.value,false);
+ assert.equal(h.transactions,1);
+});
+
+test('unnamed Uniform Scale refuses internally valid CEP layouts whose count or ordinals differ from UXP',async()=>{
+ for(const mismatch of ['count','ordinals']){
+   const h=harness({uniform:false});proveUnnamedUniform(h);
+   if(mismatch==='count')h.descriptor.motionBinding.parameterCount=7;
+   else Object.assign(h.descriptor.motionBinding,{widthIndex:0,uniformIndex:1,rotationIndex:2});
+   let checkboxReads=0;
+   h.params.uniform.getStartValue=async()=>{checkboxReads++;return {value:{value:false}};};
+   await assert.rejects(h.read(0),/different Motion parameter counts or control ordinals/,mismatch);
+   assert.equal(checkboxReads,0,'mismatched layouts cannot reach candidate value reads');
+   assert.equal(h.transactions,0);assert.deepEqual(h.createdActions,[]);
+ }
+});
+
+test('unnamed Uniform Scale refreshes its proof after independent-scale conversion and panel Undo',async()=>{
+ const h=harness();proveUnnamedUniform(h);
+ let state=await h.edit(await h.read(0),'set',{track:'width',value:[900]});
+ assert.equal(h.params.uniform.value,false);
+ assert.deepEqual(state.tracks.width.value,[900]);
+ assert.deepEqual(state.tracks.height.value,[400]);
+ // The actual API captures a new private CEP descriptor for each edit.
+ h.descriptor.motionBinding.uniform.value=false;
+ state=await h.edit(state,'undo');
+ assert.equal(h.params.uniform.value,true);
+ assert.deepEqual(state.tracks.width.value,[1200]);
+ assert.equal(h.transactions,2);
+});
+
+test('numeric checkbox fallback accepts only strict0/1 non-keyframable controls matching CEP',async()=>{
+ const h=harness({uniform:false});h.params.uniform.value=0;proveUnnamedUniform(h);
+ h.params.uniform.areKeyframesSupported=async()=>false;
+ assert.deepEqual((await h.read(0)).tracks.width.value,[900]);
+ h.params.uniform.areKeyframesSupported=async()=>true;
+ await assert.rejects(h.read(0),/failed checkbox verification/);
+ h.params.uniform.areKeyframesSupported=async()=>false;h.params.uniform.value=2;
+ await assert.rejects(h.read(0),/failed checkbox verification/);
+ assert.equal(h.transactions,0);
+});
+
+test('blank controls with absent, stale or ambiguous proof cannot be used as Uniform Scale',async()=>{
+ for(const failure of ['absent','wrongBoolean','wrongComponent','badCEPNeighbors','badNativeNeighbors','animated','numericSlider']){
+   const h=harness({uniform:false});proveUnnamedUniform(h);
+   if(failure==='absent')delete h.descriptor.motionBinding;
+   if(failure==='wrongBoolean')h.descriptor.motionBinding.uniform.value=true;
+   if(failure==='wrongComponent')h.descriptor.motionBinding.componentMatchName='AE.ADBE Opacity';
+   if(failure==='badCEPNeighbors')h.descriptor.motionBinding.uniformIndex=5;
+   if(failure==='badNativeNeighbors')h.useParams({position:h.params.position,height:h.params.height,width:h.params.width,other:h.param('',false),uniform:h.params.uniform,rotation:h.params.rotation,anchor:h.params.anchor});
+   if(failure==='animated')h.params.uniform.animated=true;
+   if(failure==='numericSlider')h.params.uniform.value=0;
+   await assert.rejects(h.read(0),/Missing: uniform/,failure);
+   assert.equal(h.transactions,0,failure);assert.deepEqual(h.createdActions,[],failure);
+ }
+});
+
+test('CEP binding structure or checkbox changes during preparation cannot reach the native transaction',async()=>{
+ for(const change of ['structure','checkbox']){
+   const h=harness({uniform:false});proveUnnamedUniform(h);
+   const state=await h.read(0),read=h.params.position.getValueAtTime;
+   h.params.position.getValueAtTime=async at=>{
+     h.setRevalidator(async()=>{const fresh=clone(h.freshDescriptor);if(change==='structure')fresh.motionBinding.parameterCount=7;else fresh.motionBinding.uniform.value=true;return fresh;});
+     return read(at);
+   };
+   await assert.rejects(h.edit(state,'set',{track:'position',value:[800,500]}),/timeline link changed|Uniform Scale changed/);
+   assert.equal(h.transactions,0);assert.deepEqual(h.createdActions,[]);
+ }
 });

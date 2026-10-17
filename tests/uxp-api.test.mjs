@@ -9,14 +9,14 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function harness(t, options = {}) {
   let active='one',projectPath='/projects/edit.prproj',counter=0;
-  let projectReads=0,clockOffset=0;
+  let projectReads=0,serviceReads=0,clockOffset=0;
   const writes=[],requests=[];
   const sequences=['one','two'].map(id=>({guid:{toString:()=>id},name:id,getSettings:async()=>({getVideoFrameRect:async()=>({width:720,height:1280})}),getTimebase:async()=>10584000000,getEndTime:async()=>({seconds:10}),getPlayerPosition:async()=>({seconds:id==='one'?2.5:7}),getVideoTrackCount:async()=>0}));
   const project={get path(){return projectPath;},getSequences:async()=>sequences,getActiveSequence:async()=>sequences.find(s=>s.name===active)};
   const folders=new Map();
   function folder(path) {
     if(folders.has(path))return folders.get(path);
-    const entries=new Map(),value={nativePath:path,getEntry:async name=>{if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
+    const entries=new Map(),value={nativePath:path,getEntry:async name=>{if(path==='/private/service'&&name==='service.json')serviceReads++;if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
     folders.set(path,value);return value;
   }
   const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection']});
@@ -54,8 +54,8 @@ function harness(t, options = {}) {
     throw new Error('Unexpected import '+name);
   }};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/api.js',import.meta.url),'utf8'),context);
-  const api=module.exports.createHostAPI({readTimeoutMs:options.readTimeoutMs??12000});t.after(()=>api.dispose());
-  return {api,writes,requests,respond,setService,healthyService,advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},get projectReads(){return projectReads;}};
+  const api=module.exports.createHostAPI({readTimeoutMs:options.readTimeoutMs??12000,serviceStartupGraceMs:options.serviceStartupGraceMs??0,serviceStartupPollMs:options.serviceStartupPollMs??5});t.after(()=>api.dispose());
+  return {api,writes,requests,respond,setService,healthyService,advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},get projectReads(){return projectReads;},get serviceReads(){return serviceReads;}};
 }
 
 test('direct native requests and slow saves retain the captured sequence after selection changes',async t=>{
@@ -139,4 +139,52 @@ for(const unavailable of ['missing','stale','unsupported'])test(`an unavailable 
 test('a fresh busy background renderer is available and retains the existing in-flight deadline protections',async t=>{
   const h=harness(t),status=h.healthyService();status.busy=true;h.setService(status);
   assert.deepEqual(Array.from(await h.api.getFonts()),['Arial','Georgia']);assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,'getFonts');
+});
+test('startup grace waits only for the private heartbeat and sends one request once the renderer is ready',async t=>{
+  const h=harness(t,{service:null,serviceStartupGraceMs:100});
+  const pending=h.api.getFonts();await tick();const nativeReads=h.projectReads;
+  await delay(15);assert.equal(h.projectReads,nativeReads,'heartbeat polling must not repeat native context calls');
+  assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);assert.ok(h.serviceReads>=2);
+  h.setService(h.healthyService());assert.deepEqual(Array.from(await pending),['Arial','Georgia']);
+  assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,'getFonts');
+});
+test('a stale startup heartbeat can be replaced by a ready renderer within the grace period',async t=>{
+  const h=harness(t,{serviceStartupGraceMs:100}),old=h.healthyService();old.updatedAt-=20000;old.version=0;h.setService(old);
+  const pending=h.api.getFonts();await delay(15);assert.equal(h.requests.length,0);
+  h.setService(h.healthyService());assert.deepEqual(Array.from(await pending),['Arial','Georgia']);assert.equal(h.requests.length,1);
+});
+for(const incompatible of ['version','action'])test(`a fresh incompatible renderer ${incompatible} fails immediately without heartbeat retries`,async t=>{
+  const h=harness(t,{serviceStartupGraceMs:1000}),status=h.healthyService();
+  if(incompatible==='version')status.version=2;else status.actions=['readTimeline'];h.setService(status);
+  await assert.rejects(h.api.getFonts(),/unavailable or out of date/);
+  assert.equal(h.serviceReads,1);assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);
+  assert.equal((await h.api.getActiveSequenceInfo()).id,'one');
+});
+test('an unavailable renderer after startup grace leaves the lane recoverable without a dangling request',async t=>{
+  const h=harness(t,{service:null,serviceStartupGraceMs:30,readTimeoutMs:200});
+  await assert.rejects(h.api.getFonts(),/Save your work, restart Premiere/);
+  assert.ok(h.serviceReads>=2);assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);
+  assert.equal((await h.api.getActiveSequenceInfo()).id,'one');
+  h.setService(h.healthyService());assert.deepEqual(Array.from(await h.api.getFonts()),['Arial','Georgia']);assert.equal(h.requests.length,1);
+});
+test('zero startup grace preserves an immediate unavailable response',async t=>{
+  const h=harness(t,{service:null,serviceStartupGraceMs:0});await assert.rejects(h.api.getFonts(),/unavailable/);
+  assert.equal(h.serviceReads,1);assert.equal(h.requests.length,0);
+});
+test('configured startup grace is capped at five seconds of elapsed heartbeat time',async t=>{
+  const h=harness(t,{service:null,serviceStartupGraceMs:60000});
+  const pending=assert.rejects(h.api.getFonts(),/unavailable/);await tick();h.advanceTime(6000);await pending;
+  assert.equal(h.requests.length,0);assert.equal((await h.api.getActiveSequenceInfo()).id,'one');
+});
+test('a queued startup check reserves its remaining serial deadline instead of poisoning the lane',async t=>{
+  let finish;const gate=new Promise(resolve=>{finish=resolve;});
+  const h=harness(t,{service:null,serviceStartupGraceMs:150,readTimeoutMs:200,transcribe:()=>gate});await h.api.getActiveSequenceInfo();
+  const transcription=h.api.transcribeSequence('one');await tick();const startup=assert.rejects(h.api.getFonts(),/unavailable/);
+  await delay(130);finish('done');await transcription;await startup;
+  assert.equal(h.requests.length,0);assert.equal((await h.api.getActiveSequenceInfo()).id,'one');
+});
+test('disposing during startup stops heartbeat polling without writing a service request',async t=>{
+  const h=harness(t,{service:null,serviceStartupGraceMs:100});
+  const pending=assert.rejects(h.api.getFonts(),/plugin closed/);await tick();const reads=h.serviceReads;h.api.dispose();
+  await pending;await delay(15);assert.equal(h.serviceReads,reads);assert.equal(h.requests.length,0);
 });

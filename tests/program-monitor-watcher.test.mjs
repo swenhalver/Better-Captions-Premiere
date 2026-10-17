@@ -228,3 +228,32 @@ test('automatic selection failures leave no retry timer until a user revision', 
   watcher.notifyRevision(3); assert.equal(f.timers.size, 1);
   f.fire(); await f.settle(); assert.equal(reads, 2); assert.equal(f.timers.size, 0); watcher.stop();
 });
+
+test('read-only watcher diagnostics report baseline, pending size and paused reads without starting work', async t => {
+  const f = fixture(t);
+  assert.equal(f.watcher.diagnostics().baseline, null);
+  assert.equal(f.reads, 0);
+  await f.watcher.tick();
+  assert.equal(f.watcher.diagnostics().baseline, 'size-100');
+  assert.equal(f.watcher.diagnostics().lastObserved, 'size-100');
+  f.signature = 'size-120'; await f.watcher.tick();
+  const pending = f.watcher.diagnostics();
+  assert.equal(pending.candidate, 'size-120'); assert.equal(pending.inFlight, false); assert.equal(pending.selectionPaused, false);
+  pending.baseline = 'external-mutation';
+  assert.equal(f.watcher.diagnostics().baseline, 'size-100');
+  f.readError = true; await f.watcher.tick();
+  assert.equal(f.watcher.diagnostics().readPaused, true); assert.equal(f.watcher.diagnostics().timerScheduled, false);
+  assert.equal(f.applies, 0);
+});
+test('watcher diagnostics bound native signatures and discard superseded observations', async () => {
+  let resolveRead, current = { sequenceId: 'one', captionId: 'one', clipNodeId: 'one', savedSignature: 'saved' };
+  const watcher = startProgramMonitorWatcher({ autoStart: false, current: () => current,
+    readSignature: () => new Promise(resolve => { resolveRead = resolve; }), apply: async () => assert.fail('No render'), onStatus() {},
+  });
+  const first = watcher.tick(); assert.equal(watcher.diagnostics().inFlight, true);
+  current = { ...current, captionId: 'two' }; resolveRead('stale'); await first;
+  assert.equal(watcher.diagnostics().lastObserved, null);
+  const second = watcher.tick(); resolveRead('x'.repeat(1000)); await second;
+  assert.equal(watcher.diagnostics().lastObserved.length, 160); assert.equal(watcher.diagnostics().candidate.length, 160);
+  watcher.stop(); assert.equal(watcher.diagnostics().alive, false);
+});

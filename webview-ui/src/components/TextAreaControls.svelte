@@ -50,7 +50,11 @@
       if(!enabled(context)){queued=false;return;}
       queued=false;const token=generation,expected=stamp(context);
       return run(context,token,async()=>{
-        const next=await readAt(context,context.currentTime,token);
+        if(!current(context,token))return;
+        const time=await options.getTime(context);
+        if(!Number.isFinite(time))throw new Error('Premiere did not confirm the current playhead. Refresh Position & size.');
+        if(!current(context,token))return;
+        const next=await readAt(context,time,token);
         if(next&&current(context,token)&&stamp(options.current())===expected){publish(next);desired=stamp(options.current());}
       });
     }
@@ -103,13 +107,17 @@
   import {onDestroy,untrack} from 'svelte';
   import {sampleArea,sampleAt,editSample} from '../lib/text-area';
   import MotionIcon from './MotionIcon.svelte';
-  interface Props {caption:CaptionItem;sequenceId:string;frameRate:number;frameWidth:number;frameHeight:number;currentTime:number;visible:boolean;disabled?:boolean;isDemo:boolean;read:(caption:CaptionItem,id:string,frame:number)=>Promise<TextAreaState>;edit:(caption:CaptionItem,id:string,request:TextAreaEdit)=>Promise<TextAreaState>;getCurrentTime:()=>Promise<number>;onSeek:(time:number)=>void|Promise<void>;onBusy:(busy:boolean)=>void;onChanged:()=>void|Promise<void>;}
-  let {caption,sequenceId,frameRate,frameWidth,frameHeight,currentTime,visible,disabled=false,isDemo,read,edit,getCurrentTime,onSeek,onBusy,onChanged}:Props=$props();
+  interface Props {caption:CaptionItem;sequenceId:string;frameRate:number;frameWidth:number;frameHeight:number;currentTime:number;visible:boolean;disabled?:boolean;isDemo:boolean;read:(caption:CaptionItem,id:string,frame:number)=>Promise<TextAreaState>;edit:(caption:CaptionItem,id:string,request:TextAreaEdit)=>Promise<TextAreaState>;getCurrentTime:()=>Promise<number>;onSeek:(time:number)=>void|Promise<void>;onSelect:()=>void|Promise<void>;onBusy:(busy:boolean)=>void;onChanged:()=>void|Promise<void>;}
+  let {caption,sequenceId,frameRate,frameWidth,frameHeight,currentTime,visible,disabled=false,isDemo,read,edit,getCurrentTime,onSeek,onSelect,onBusy,onChanged}:Props=$props();
   let area=$state<TextAreaState|null>(null),busy=$state(false),problem=$state(''),notice=$state(''),expanded=$state(false);
+  let cachedArea=$state<{key:string;identity:string;value:TextAreaState}|null>(null);
   const sampleUndos=new Map<string,TextAreaState>();
   const samples=new Map<string,TextAreaState>();
   const names=[{key:'position',label:'Position'},{key:'width',label:'Width'},{key:'height',label:'Height'}] as const;
   const identity=$derived(JSON.stringify([sequenceId,caption.id,caption.clipNodeId,caption.mediaPath,caption.renderBounds,caption.startTime,caption.endTime,frameRate]));
+  const displayIdentity=$derived(JSON.stringify([sequenceId,caption.id,caption.clipNodeId]));
+  const shownArea=$derived(visible&&expanded&&cachedArea?.key===displayIdentity?(area??cachedArea.value):null);
+  const readOnly=$derived(busy||disabled||!area||!!problem||cachedArea?.identity!==identity);
   const controller=createTextAreaController({
     current:()=>({key:identity,caption,sequenceId,frameRate,currentTime,visible:visible&&expanded&&(isDemo||!!caption.clipNodeId),disabled}),
     read:async(context,at)=>isDemo?sampleAt(samples.get(context.key)??sampleArea(frameWidth,frameHeight,context.frameRate,context.caption.startTime,context.caption.endTime),at):read(context.caption,context.sequenceId,at),
@@ -119,11 +127,12 @@
       const next=request.operation==='undo'&&sampleUndos.has(context.key)?sampleUndos.get(context.key)!:editSample(previous,request);sampleUndos.set(context.key,previous);samples.set(context.key,next);return next;
     },
     seek:async(_context,time)=>{await onSeek(time);},getTime:async()=>isDemo?currentTime:getCurrentTime(),
-    state:next=>{area=next;},busy:value=>{busy=value;if(value){problem='';notice='';}if(!isDemo)onBusy(value);},error:message=>{problem=message;},
+    state:next=>{area=next;if(next)cachedArea={key:displayIdentity,identity,value:next};},busy:value=>{busy=value;if(value){problem='';notice='';}if(!isDemo)onBusy(value);},error:message=>{problem=message;},
     changed:async()=>{notice=isDemo?'Sample keyframes updated.':'Motion updated in Premiere. Width and height reflow after the edit.';await onChanged();},
   });
   $effect(()=>{identity;currentTime;visible;expanded;disabled;untrack(()=>{void controller.sync();});});
-  onDestroy(()=>controller.stop());
+  $effect(()=>{if(!visible||!expanded||cachedArea?.key!==displayIdentity)cachedArea=null;});
+  onDestroy(()=>{controller.stop();cachedArea=null;});
   const refresh=()=>controller.refresh();
   const seek=(at:number)=>controller.seek(at);
   const change=(request:Omit<TextAreaEdit,'signature'|'frame'>)=>controller.change(request);
@@ -138,18 +147,18 @@
   <div class="caption-section__body">
     <p class="caption-help">All word states · {frameWidth} × {frameHeight} px</p>
     {#if !isDemo&&!caption.clipNodeId}<p class="caption-help">Apply this caption to the Program Monitor first to edit its native Motion keyframes.</p>{/if}
-    <div class="text-area__toolbar"><button class="caption-button" disabled={busy||disabled||(!isDemo&&!caption.clipNodeId)} onclick={()=>refresh()}>Refresh from {isDemo?'sample':'playhead'}</button><button class="caption-button" disabled={busy||disabled||!area?.canUndo} onclick={()=>change({operation:'undo'})}>Undo area edit</button></div>
-    {#if busy&&!area}<p class="caption-help" role="status">Reading caption Motion…</p>{/if}
-    {#if area}
-      <fieldset disabled={busy||disabled}>
-        <label class="caption-field"><span>Playhead, caption frame</span><input type="number" aria-label="Text area playhead frame" min="0" max={area.count-1} step="1" value={area.frame} onchange={(e)=>seek(e.currentTarget.valueAsNumber)}/></label>
-        <input class="text-area__scrub" type="range" aria-label="Text area playhead" min="0" max={area.count-1} step="1" value={area.frame} onchange={(e)=>seek(e.currentTarget.valueAsNumber)}/>
-        <p class="caption-help">Sequence time · {(area.startTime+area.frame/area.frameRate).toFixed(3)}s</p>
+    <div class="text-area__toolbar"><button class="caption-button" disabled={busy||disabled||(!isDemo&&!caption.clipNodeId)} onclick={()=>refresh()}>Refresh from {isDemo?'sample':'playhead'}</button><button class="caption-button" disabled={busy||disabled||isDemo||!caption.clipNodeId} onclick={onSelect}>Select in Program Monitor</button><button class="caption-button" disabled={readOnly||!area?.canUndo} onclick={()=>change({operation:'undo'})}>Undo area edit</button></div>
+    {#if busy&&!shownArea}<p class="caption-help" role="status">Reading caption Motion…</p>{/if}
+    {#if shownArea}
+      <fieldset disabled={readOnly}>
+        <label class="caption-field"><span>Playhead, caption frame</span><input type="number" aria-label="Text area playhead frame" min="0" max={shownArea.count-1} step="1" value={shownArea.frame} onchange={(e)=>seek(e.currentTarget.valueAsNumber)}/></label>
+        <input class="text-area__scrub" type="range" aria-label="Text area playhead" min="0" max={shownArea.count-1} step="1" value={shownArea.frame} onchange={(e)=>seek(e.currentTarget.valueAsNumber)}/>
+        <p class="caption-help">Sequence time · {(shownArea.startTime+shownArea.frame/shownArea.frameRate).toFixed(3)}s</p>
         {#each names as item}
-          {@const track=area.tracks[item.key]}
-          {@const atKey=track.keys.find(k=>Math.abs(k.frame-area!.frame)<.001)}
-          {@const previous=[...track.keys].reverse().find(k=>k.frame<area!.frame&&k.frame>=0)}
-          {@const next=track.keys.find(k=>k.frame>area!.frame&&k.frame<area!.count)}
+          {@const track=shownArea.tracks[item.key]}
+          {@const atKey=track.keys.find(k=>Math.abs(k.frame-shownArea!.frame)<.001)}
+          {@const previous=[...track.keys].reverse().find(k=>k.frame<shownArea!.frame&&k.frame>=0)}
+          {@const next=track.keys.find(k=>k.frame>shownArea!.frame&&k.frame<shownArea!.count)}
           <div class="text-area__track">
             <div class="text-area__track-heading">
               <button class="caption-button caption-button--icon" aria-label="{item.label} keyframes" aria-pressed={track.animated} title="{track.animated?'Disable':'Enable'} {item.label.toLowerCase()} animation" onclick={()=>change({track:item.key,operation:'toggle'})}><MotionIcon name="clock"/></button>

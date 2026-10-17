@@ -48,6 +48,41 @@ test('a word or transcript seek updates the displayed frame and subsequent keyfr
   await h.controller.change({ operation: 'key', track: 'width' });
   assert.equal(h.edits[0].request.frame, 60); assert.equal(h.edits[0].request.signature, 'native-60');
 });
+test('the initial Motion read samples the confirmed native playhead instead of persisted session time', async t => {
+  const h = harness(t); h.nativeTime = 10.75;
+  await h.controller.sync();
+  assert.equal(h.context.currentTime, 10, 'The saved session time still differs from Premiere');
+  assert.deepEqual(h.reads.map(read => read.frame), [18]); assert.equal(h.view.frame, 18); assert.equal(h.edits.length, 0);
+});
+test('Refresh from playhead confirms the current native time on every explicit read', async t => {
+  const h = harness(t); h.nativeTime = 11; await h.controller.sync();
+  h.nativeTime = 12.5; await h.controller.refresh();
+  assert.equal(h.context.currentTime, 10); assert.deepEqual(h.reads.map(read => read.frame), [24, 60]); assert.equal(h.view.frame, 60);
+});
+test('a failed or invalid playhead confirmation pauses reads until explicit Refresh', async t => {
+  let result = new Error('Premiere playhead unavailable');
+  const h = harness(t, { getTime: () => { if (result instanceof Error) throw result; return result; } });
+  await h.controller.sync(); assert.equal(h.reads.length, 0); assert.match(h.errors[0], /playhead unavailable/);
+  h.context = { ...h.context, currentTime: 11 }; await h.controller.sync(); assert.equal(h.errors.length, 1);
+  result = NaN; await h.controller.refresh(); assert.equal(h.reads.length, 0); assert.match(h.errors[1], /confirm the current playhead/);
+  result = 12; await h.controller.refresh(); assert.equal(h.view.frame, 48); assert.equal(h.reads.length, 1);
+  assert.deepEqual(h.busy, [true, false, true, false, true, false]);
+});
+test('an old initial playhead failure cannot pause the queued new caption or dispatch an old read', async t => {
+  const old = deferred();
+  const h = harness(t, { getTime: context => context.caption.id === 'one' ? old.promise : 12 });
+  const pending = h.controller.sync(); await settle();
+  h.context = context('two'); h.controller.sync();
+  old.reject(new Error('Old playhead confirmation failed')); await pending; await settle();
+  assert.equal(h.errors.length, 0); assert.deepEqual(h.reads.map(read => read.id), ['two']); assert.equal(h.view.frame, 48);
+});
+test('hiding during initial playhead confirmation prevents native Motion reads and stale errors', async t => {
+  const pending = deferred(); const h = harness(t, { getTime: () => pending.promise });
+  const reading = h.controller.sync(); await settle();
+  h.context = { ...h.context, visible: false }; h.controller.sync();
+  pending.reject(new Error('Hidden playhead confirmation failed')); await reading; await settle();
+  assert.equal(h.reads.length, 0); assert.equal(h.errors.length, 0); assert.equal(h.view, null); assert.deepEqual(h.busy, [true, false]);
+});
 test('an edit confirms the actual native playhead instead of trusting an old read', async t => {
   const h = harness(t); await h.controller.sync(); h.nativeTime = 12;
   await h.controller.change({ operation: 'key', track: 'height' });
@@ -113,7 +148,8 @@ test('hide then show while an old read fails preserves the queued visible frame'
   assert.equal(h.errors.length, 0); assert.equal(h.view.frame, 72); assert.equal(h.reads.length, 2);
 });
 test('a caption switch while confirming the playhead cannot write the previous caption', async t => {
-  const playhead = deferred(); const h = harness(t, { getTime: () => playhead.promise }); await h.controller.sync();
+  const playhead = deferred(); let confirmations = 0;
+  const h = harness(t, { getTime: () => ++confirmations === 1 ? 10 : playhead.promise }); await h.controller.sync();
   const changing = h.controller.change({ operation: 'key', track: 'width' }); await settle();
   h.context = context('two'); h.controller.sync(); playhead.resolve(12); await changing; await settle();
   assert.equal(h.edits.length, 0); assert.equal(h.changed, 0); assert.equal(h.reads.at(-1).id, 'two');
@@ -153,6 +189,36 @@ test('stopping does not publish a pending native response or schedule a replacem
   const reading = h.controller.sync(); await settle(); h.controller.stop(); pending.resolve(state(0)); await reading;
   assert.equal(h.view, null); assert.equal(h.reads.length, 1); assert.deepEqual(h.busy, [true, false]);
 });
+function presentationHarness() {
+  const derived = source.match(/  const identity=\$derived[^\n]+\n  const displayIdentity=\$derived[^\n]+\n  const shownArea=\$derived[^\n]+\n  const readOnly=\$derived[^\n]+/)?.[0];
+  const publish = source.match(/    state:(next=>\{[^\n]+?\}),busy:/)?.[1];
+  const clear = source.match(/\$effect\(\(\)=>\{(if\(!visible\|\|!expanded\|\|cachedArea\?\.key!==displayIdentity\)cachedArea=null;)\}\);/)?.[1];
+  assert.ok(derived && publish && clear, 'Exercise the component’s actual presentation expressions and state callback');
+  const compiled = ts.transpileModule(`type TextAreaState=any;
+    let sequenceId='seq',caption={id:'one',clipNodeId:'clip-one',mediaPath:'/one.mov',startTime:10,endTime:14},frameRate=24;
+    let visible=true,expanded=true,disabled=false,busy=false,problem='',area=null,cachedArea=null;
+    function view(){${derived.replaceAll('$derived(', '(')};return {identity,displayIdentity,shownArea,readOnly};}
+    export function publish(next){const {identity,displayIdentity}=view();(${publish})(next);}
+    export function update(patch){if(patch.caption)caption=patch.caption;if(patch.sequenceId)sequenceId=patch.sequenceId;if('visible'in patch)visible=patch.visible;if('disabled'in patch)disabled=patch.disabled;if('busy'in patch)busy=patch.busy;if('problem'in patch)problem=patch.problem;const{displayIdentity}=view();${clear}}
+    export const state=view;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const api = {}; vm.runInNewContext(compiled, { exports: api }); return api;
+}
+test('the same clip retains presentation values without edit authority through busy, refresh and failure', () => {
+  const h = presentationHarness(); h.publish(state(0)); assert.equal(h.state().readOnly, false);
+  h.update({ disabled: true }); h.publish(null);
+  assert.equal(h.state().shownArea.tracks.width.value[0], 900); assert.equal(h.state().readOnly, true);
+  h.update({ disabled: false, busy: true, caption: { ...context().caption, mediaPath: '/one-refreshed.mov' } });
+  assert.equal(h.state().shownArea.frame, 0); assert.equal(h.state().readOnly, true);
+  h.update({ busy: false, problem: 'Refresh caption Motion.' }); assert.equal(h.state().shownArea.frame, 0); assert.equal(h.state().readOnly, true);
+  h.update({ problem: '' }); h.publish(state(48)); assert.equal(h.state().shownArea.frame, 48); assert.equal(h.state().readOnly, false);
+});
+test('presentation values cannot cross captions, sequences or hidden-panel lifetimes', () => {
+  for (const change of [{ caption: context('two').caption }, { caption: { ...context().caption, clipNodeId: 'replacement-clip' } }, { sequenceId: 'other' }, { visible: false }]) {
+    const h = presentationHarness(); h.publish(state(0)); h.update(change); h.publish(null);
+    assert.equal(h.state().shownArea, null); assert.equal(h.state().readOnly, true);
+    h.update({ visible: true }); assert.equal(h.state().shownArea, null, 'Returning must wait for a fresh native read');
+  }
+});
 test('playhead frames are bounded to the selected caption', () => {
   assert.equal(captionFrame(context(), 2), 0); assert.equal(captionFrame(context(), 100), 95);
 });
@@ -164,4 +230,31 @@ test('area and export busy owners cannot unlock each other', () => {
   const api = {}; vm.runInNewContext(compiled, { exports: api });
   api.apply(true); api.area(true); api.apply(false); assert.equal(api.busy(), true); api.area(false); assert.equal(api.busy(), false);
   api.area(true); api.apply(true); api.area(false); assert.equal(api.busy(), true); api.apply(false); assert.equal(api.busy(), false);
+});
+function selectionHarness(nativeSelect = async () => ({ ok: true, time: 10.2 })) {
+  const main = readFileSync(new URL('../webview-ui/src/main-webview.svelte', import.meta.url), 'utf8');
+  const functions = main.match(/  async function seekCaption\(time: number\)[\s\S]*?(?=  async function areaChanged)/)?.[0];
+  assert.ok(functions, 'Exercise the production explicit caption-selection action');
+  const nativeCalls = [], caption = { id: 'one', clipNodeId: 'clip-one', startTime: 10, endTime: 12, words: [{ startTime: 10, endTime: 10.4 }] };
+  const manager = { current: { sequenceId: 'seq', captions: [caption], currentTime: 10 }, setCurrentTime(time) { this.current.currentTime = time; } };
+  const nativeAPI = { isDemo: false, showInPremiere: async () => { nativeCalls.push('seek'); }, selectCaptionClip: async () => { nativeCalls.push('select'); return nativeSelect(); } };
+  const compiled = ts.transpileModule(`type CaptionItem=any;declare const api:any,sessionManager:any;let timelineBusy=false,selectedId='one',selectionHint=null,error='',nativeSelection=null,selectingCaption=false,selectionRevision=0;const plain=(value:any)=>JSON.parse(JSON.stringify(value)),message=(error:any)=>String(error.message||error),watchRevisionChanged=()=>{},showInPremiere=async(time:number)=>api.showInPremiere(time);${functions}\nexport const select=selectSelectedCaption,state=()=>({selectionHint,error});`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const output = {}; vm.runInNewContext(compiled, { exports: output, api: nativeAPI, sessionManager: manager });
+  return { ...output, manager, nativeCalls };
+}
+test('handle guidance is shown only after an explicit confirmed native selection', async () => {
+  const h = selectionHarness(); assert.equal(h.state().selectionHint, null); assert.equal(h.nativeCalls.length, 0);
+  await h.select(); assert.deepEqual(h.nativeCalls, ['seek', 'select']);
+  assert.deepEqual(clone(h.state().selectionHint), { sequenceId: 'seq', captionId: 'one' }); assert.equal(h.state().error, '');
+});
+test('selection callback failures remain visible and do not show handle guidance', async () => {
+  for (const callback of [async () => { throw new Error('Native selection failed'); }, async () => ({ ok: false })]) {
+    const h = selectionHarness(callback); await h.select();
+    assert.equal(h.state().selectionHint, null); assert.match(h.state().error, /selection/i);
+  }
+});
+test('a selection reply from an old sequence cannot show handle guidance', async () => {
+  const pending = deferred(), h = selectionHarness(() => pending.promise); const selecting = h.select(); await settle();
+  h.manager.current = { ...h.manager.current, sequenceId: 'other' }; pending.resolve({ ok: true, time: 10.2 }); await selecting;
+  assert.equal(h.state().selectionHint, null);
 });

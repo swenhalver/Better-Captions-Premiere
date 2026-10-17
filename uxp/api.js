@@ -14,6 +14,8 @@ function createHostAPI(options = {}) {
   const contexts = new Map();
   let currentId = '';
   const readTimeout = options.readTimeoutMs ?? 12000;
+  const startupGrace = Math.min(5000, Math.max(0, Number.isFinite(options.serviceStartupGraceMs) ? options.serviceStartupGraceMs : 5000));
+  const startupPoll = Math.min(250, Math.max(1, Number.isFinite(options.serviceStartupPollMs) ? options.serviceStartupPollMs : 150));
   const waiting = [];
   let active = null, unresolved = null, disposed = false;
   function drain() {
@@ -31,7 +33,7 @@ function createHostAPI(options = {}) {
     if (waiting.length >= 8) return Promise.reject(new Error('Better Captions is busy. Wait for the current operation before requesting more native work.'));
     const timeout = READ_METHODS.has(method) ? readTimeout : method === 'transcribeSequence' ? 60 * 60 * 1000 : method === 'finishCaption' || method === 'applyCaptionClips' ? 30 * 60 * 1000 : 60000;
     return new Promise((resolve, reject) => {
-      const job = { run, resolve, reject, timer: null };
+      const job = { run, resolve, reject, timer: null, deadline: Date.now() + timeout };
       job.timer = setTimeout(() => {
         if (active === job) {
           unresolved = job;
@@ -67,11 +69,30 @@ function createHostAPI(options = {}) {
     return ensureFolder(parent.replace(/\/$/, '') + '/Better Captions/' + context.id);
   }
   async function requireService(root, action) {
-    let status;
-    try { status = await readJSON(await root.getEntry('service.json'), 16384); } catch {}
-    const age = Date.now() - status?.updatedAt;
-    if (!record(status) || status.version !== 1 || !/^[a-f0-9]{24}$/.test(status.instanceId) || !Number.isFinite(status.updatedAt) || age < -5000 || age > 10000 || !Array.isArray(status.actions) || !status.actions.includes(action)) {
-      throw new Error('The Better Captions background renderer is unavailable or out of date. Save your work, restart Premiere, then reopen Better Captions to start it.');
+    const unavailable = () => new Error('The Better Captions background renderer is unavailable or out of date. Save your work, restart Premiere, then reopen Better Captions to start it.');
+    // Startup checks read only the private heartbeat. Leave time for the serial
+    // deadline to reject a missing renderer normally, before any request exists.
+    const reserve = Math.min(1000, Math.max(0, readTimeout / 2));
+    const grace = Math.max(0, Math.min(startupGrace, (active?.deadline ?? Date.now() + readTimeout) - Date.now() - reserve));
+    const deadline = Date.now() + grace;
+    let remaining = grace;
+    while (true) {
+      if (disposed) throw new Error('The Better Captions plugin was closed.');
+      let status;
+      try { status = await readJSON(await root.getEntry('service.json'), 16384); } catch {}
+      if (disposed) throw new Error('The Better Captions plugin was closed.');
+      const age = Date.now() - status?.updatedAt;
+      const fresh = record(status) && Number.isFinite(status.updatedAt) && age >= -5000 && age <= 10000;
+      if (fresh) {
+        if (status.version !== 1 || !/^[a-f0-9]{24}$/.test(status.instanceId) || !Array.isArray(status.actions) || !status.actions.includes(action)) throw unavailable();
+        return;
+      }
+      remaining = Math.min(remaining, deadline - Date.now());
+      if (remaining <= 0) throw unavailable();
+      const wait = Math.min(startupPoll, remaining);
+      await sleep(wait);
+      // A wall-clock adjustment cannot extend the bounded startup grace.
+      remaining -= wait;
     }
   }
   async function backend(action, args, sequenceId = currentId) {
