@@ -10,6 +10,7 @@ const compile = source => ts.transpileModule(source, { compilerOptions: { target
 vm.runInNewContext(compile(readFileSync(new URL('../webview-ui/src/lib/text-area.ts', import.meta.url), 'utf8')), { exports: loaded, structuredClone });
 const { sampleArea, sampleAt, editSample } = loaded;
 const plain = value => JSON.parse(JSON.stringify(value));
+const normalizeSource = source => source.replace(/\r\n?/g, '\n');
 function animated(track = 'position') {
   let area = sampleArea(1920, 1080, 24, 10, 14);
   area = editSample(area, { signature: area.signature, frame: 0, operation: 'toggle', track });
@@ -46,17 +47,22 @@ test('width and height stay independent when editing a selected size key', () =>
   const next = editSample(area, { signature: area.signature, frame: 48, operation: 'set-key', track: 'width', keyTicks: area.tracks.width.keys[1].ticks, value: [500] });
   assert.equal(next.tracks.width.keys[1].value[0], 500); assert.deepEqual(plain(next.tracks.height), height);
 });
-test('a native dirty revision requests one read-only refresh and does not poll unchanged revisions', () => {
-  const source = readFileSync(new URL('../webview-ui/src/components/TextAreaControls.svelte', import.meta.url), 'utf8');
-  const effect = source.match(/\$effect\(\(\)=>\{\n    const revision=refreshRevision;[\s\S]*?\n  \}\);/)?.[0];
+function revisionHarness(source) {
+  const effect = normalizeSource(source).match(/\$effect\(\(\)=>\{\n    const revision=refreshRevision;[\s\S]*?\n  \}\);/)?.[0];
   assert.ok(effect, 'Exercise the actual refreshRevision effect');
   const api = {}; vm.runInNewContext(compile(`let refreshRevision=0,refreshReady=false,lastRefreshRevision,refreshes=0,run;const controller={refresh(){refreshes++;}},untrack=fn=>fn(),$effect=fn=>run=fn;${effect};export function update(value){refreshRevision=value;run();return refreshes;}`), { exports: api });
+  return api;
+}
+for (const [ending, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) test(`a native dirty revision requests one read-only refresh without polling unchanged revisions (${ending})`, () => {
+  const source = normalizeSource(readFileSync(new URL('../webview-ui/src/components/TextAreaControls.svelte', import.meta.url), 'utf8')).replace(/\n/g, newline);
+  if (ending === 'CRLF') assert.ok(source.includes('\r\n'), 'Run the actual source with Windows line endings');
+  const api = revisionHarness(source);
   assert.equal(api.update(0), 0, 'Initial mount already has its normal read');
   assert.equal(api.update('native-one'), 1); assert.equal(api.update('native-one'), 1);
   assert.equal(api.update('native-two'), 2); assert.equal(api.update('native-two'), 2);
 });
 test('keyframe lane keyboard navigation moves both selection and focus to the next native key', () => {
-  const source = readFileSync(new URL('../webview-ui/src/components/TextAreaControls.svelte', import.meta.url), 'utf8');
+  const source = normalizeSource(readFileSync(new URL('../webview-ui/src/components/TextAreaControls.svelte', import.meta.url), 'utf8'));
   const handler = source.match(/  function keyNavigation\([\s\S]*?(?=  function setKeyValue)/)?.[0];
   assert.ok(handler, 'Exercise the actual component keyboard handler');
   const keys = [{ ticks: 'outside', frame: -10 }, { ticks: '0', frame: 0 }, { ticks: '24', frame: 24 }], chosen = [];
