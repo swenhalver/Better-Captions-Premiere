@@ -65,7 +65,7 @@ WordStyle readStyle(Reader& r) {
 }
 }
 void validate(const Document& d) {
- require(d.schemaVersion==kSchemaVersion,"unsupported schema version");require(d.containers.size()<=10000,"too many containers");
+ require(d.schemaVersion==kSchemaVersion,"unsupported schema version");require(finite(d.timeOriginSeconds)&&std::abs(d.timeOriginSeconds)<=864000,"invalid document time origin");require(d.containers.size()<=10000,"too many containers");
  std::size_t total=0,bytes=0;std::vector<std::string> ids;
  for(const auto& c:d.containers) {
   require(!c.id.empty()&&c.id.size()<=256,"invalid container id");text(c.id);ids.push_back(c.id);bytes+=c.id.size();
@@ -94,15 +94,15 @@ std::vector<Phrase> regroup(const Document& d,std::size_t maxChars,double pause)
 std::vector<std::uint8_t> encode(const Document& d) {
  validate(d);Writer w;w.u(0x50414342);w.u(d.schemaVersion);w.u(static_cast<std::uint32_t>(d.containers.size()));
  for(const auto& c:d.containers){w.s(c.id);w.u(c.manualSplit);w.u(static_cast<std::uint32_t>(c.words.size()));for(const auto& a:c.words){w.s(a.text);w.d(a.start);w.d(a.end);w.u(a.endOfSentence);}}
- writeStyle(w,d.style.upcoming);writeStyle(w,d.style.current);writeStyle(w,d.style.spoken);w.d(d.style.wordSpacing);w.d(d.style.lineHeight);w.u(d.style.titleCase);
+ writeStyle(w,d.style.upcoming);writeStyle(w,d.style.current);writeStyle(w,d.style.spoken);w.d(d.style.wordSpacing);w.d(d.style.lineHeight);w.u(d.style.titleCase);w.d(d.timeOriginSeconds);
  require(w.b.size()<=kMaxDocumentBytes,"document size exceeded");return w.b;
 }
 Document decode(const std::vector<std::uint8_t>& b) {
- require(b.size()<=kMaxDocumentBytes,"document size exceeded");Reader r{b};require(r.u()==0x50414342,"invalid document magic");Document d;d.schemaVersion=r.u();require(d.schemaVersion==kSchemaVersion,"unsupported schema version");
+ require(b.size()<=kMaxDocumentBytes,"document size exceeded");Reader r{b};require(r.u()==0x50414342,"invalid document magic");Document d;const auto wireVersion=r.u();require(wireVersion==1||wireVersion==kSchemaVersion,"unsupported schema version");
  auto n=r.u();require(n<=10000,"too many containers");std::size_t total=0;
  for(std::uint32_t i=0;i<n;++i){CaptionContainer c;c.id=r.s(256);c.manualSplit=r.flag();auto k=r.u();total+=k;require(total<=kMaxWords,"too many words");
  for(std::uint32_t j=0;j<k;++j){Word w;w.text=r.s(4096);w.start=r.d();w.end=r.d();w.endOfSentence=r.flag();c.words.push_back(std::move(w));}d.containers.push_back(std::move(c));}
- d.style.upcoming=readStyle(r);d.style.current=readStyle(r);d.style.spoken=readStyle(r);d.style.wordSpacing=r.d();d.style.lineHeight=r.d();d.style.titleCase=r.flag();require(r.p==b.size(),"trailing document bytes");validate(d);return d;
+ d.style.upcoming=readStyle(r);d.style.current=readStyle(r);d.style.spoken=readStyle(r);d.style.wordSpacing=r.d();d.style.lineHeight=r.d();d.style.titleCase=r.flag();if(wireVersion>=2)d.timeOriginSeconds=r.d();require(r.p==b.size(),"trailing document bytes");validate(d);return d;
 }
 std::string displayText(const std::string& text,bool title) {
  if(!title)return text;std::string out=text;bool initial=true;

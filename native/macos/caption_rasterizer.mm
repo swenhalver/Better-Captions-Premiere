@@ -40,13 +40,13 @@ struct Shaped {
 };
 }
 Metrics measureText(const std::string& text,const WordStyle& style){
- Document check;check.style.upcoming=check.style.current=check.style.spoken=style;validate(check);
+ Document check;check.style.current=style;check.containers.push_back({"measure",false,{{text,0,1,false}}});validate(check);
  return Shaped(text,style).metrics();
 }
 Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::size_t width,std::size_t height,std::size_t maxChars,double pause){
  validate(document);
  if(!width||!height||width>8192||height>8192||width*height>33554432)throw std::invalid_argument("Native frame exceeds bitmap bounds");
- auto frame=layoutFrame(document,time,box,measureText,maxChars,pause);
+ auto frame=layoutFrame(document,time,box,[](const std::string& text,const WordStyle& style){return Shaped(text,style).metrics();},maxChars,pause);
  Bitmap bitmap{width,height,width*4,std::vector<std::uint8_t>(width*height*4,0),frame.overflow};
  Ref<CGColorSpaceRef> space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
  Ref<CGContextRef> context(CGBitmapContextCreate(bitmap.pixels.data(),width,height,8,bitmap.stride,space,kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big));

@@ -5,7 +5,7 @@
 #include <vector>
 
 namespace better_captions {
-constexpr std::uint32_t kSchemaVersion = 1;
+constexpr std::uint32_t kSchemaVersion = 2;
 constexpr std::size_t kMaxWords = 100000;
 constexpr std::size_t kMaxDocumentBytes = 16 * 1024 * 1024;
 struct Color { double r=1,g=1,b=1,a=1; };
@@ -23,7 +23,7 @@ struct WordStyle {
 };
 struct Style { WordStyle upcoming,current,spoken; double wordSpacing=12,lineHeight=1.3; bool titleCase=false; };
 struct CaptionContainer { std::string id; bool manualSplit=false; std::vector<Word> words; };
-struct Document { std::uint32_t schemaVersion=kSchemaVersion; std::vector<CaptionContainer> containers; Style style; };
+struct Document { std::uint32_t schemaVersion=kSchemaVersion; std::vector<CaptionContainer> containers; Style style; double timeOriginSeconds=0; };
 struct Phrase { std::string containerId; std::size_t firstWord=0,wordCount=0; double start=0,end=0; };
 // Regrouping is derived; source words, container identities and manual splits never mutate.
 std::vector<Phrase> regroup(const Document&, std::size_t maxChars=56, double pauseSeconds=0.6);

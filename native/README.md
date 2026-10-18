@@ -2,10 +2,12 @@
 
 This directory builds a portable C++ caption data/layout core, a macOS
 CoreText/CoreGraphics bitmap renderer, and a real compiled experimental Adobe
-effect adapter. The arm64 `.plugin` and local installer package are built and
-tested outside Premiere; **Premiere loading/rendering acceptance is pending**.
-Program Monitor drag handles and panel-to-effect document transport remain
-unimplemented. The working Better Captions release is separate from this experiment.
+effect adapter. Premiere 26.5.2 has discovered/applied the native effect and
+rendered actual caption frames with live document/style updates. New instances
+place text toward the bottom. The intended host is an adjustment layer; the
+guarded transfer rejects footage clips. Program Monitor handles draw in an
+optional probe, while click/drag input remains unverified. The working
+Better Captions release is separate from this experiment.
 
 ## Build and test
 
@@ -35,41 +37,63 @@ and fail configuration explicitly on unsupported compiler selections.
 
 ## Current core boundary
 
-`core/caption_core.hpp` defines a bounded schema-v1 caption document, independent
+`core/caption_core.hpp` defines a bounded schema-v2 caption document with a persisted timing origin, independent
 upcoming/current/spoken styles, stable container IDs, derived phrase grouping,
 versioned binary encode/decode, and frame layout commands. Layout uses a supplied
 text-metrics callback: each platform renderer supplies font shaping and rasterizes
 glyphs, bubbles, outlines and shadows. Width changes can reflow commands at the
-same font size; this is not yet a rendered Premiere frame. Title Case currently
+same font size, including in exported native Premiere frames. Title Case currently
 converts ASCII characters only and preserves the source transcript and UTF-8
 bytes. It is not a complete language-aware title-casing algorithm.
 
 On macOS, `better_captions_macos` supplies real CoreText metrics and bitmap
 rasterization; `caption_rasterizer_test` exercises it outside Premiere. This
-platform implementation is linked by `adobe/BetterCaptionsEffect.cpp`; host
-rendering, coordinate conversion and pixel-format acceptance still need testing.
+platform implementation is linked by `adobe/BetterCaptionsEffect.cpp`. Baseline
+ARGB8 host rendering is verified; additional pixel formats and full coordinate
+coverage remain pending.
 
 ## Build the experimental Adobe effect
 
 ```sh
 AE_SDK_EXAMPLES="/path/to/AdobeAfterEffectsSDK_26.5_MacOS/Examples" \
+PREMIERE_SDK_HEADERS="/path/to/Premiere Pro 26.0 C++ SDK/Examples/Headers" \
   bash native/adobe/build-macos.sh
-bash native/adobe/package-macos.sh
+# After coordinating and quitting Premiere:
+bash native/adobe/install-user-macos.sh
 ```
 
 The first command builds and ad-hoc signs
 `artifacts/native/BetterCaptionsNativeProbe.plugin`, then runs a dynamic-load
 adapter smoke test and ASAN/UBSAN arbitrary-data lifecycle tests. The second
-creates a local unsigned `.pkg` for the documented shared MediaCore directory.
-Neither command installs anything or restarts Premiere. Coordinate host testing
-before opening the package; administrator authorization is required. See
+installs only the uniquely named experimental plug-in in the observed working
+per-user `~/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/`,
+backs up an existing experimental copy, compares files and verifies signature/hashes.
+It requires no administrator access and does not quit/restart applications.
+Coordinate host testing before installation. See
 [adapter details and limitations](adobe/README.md).
 
-The adapter exposes native Position, Width, Height, Characters, Font size and
-Text color parameters, plus a hidden static versioned document. It renders an
-embedded synthetic fixture through `PF_Cmd_RENDER`. Arbitrary-data callbacks
-implement bounded host-handle copy/serialization; that does not prove panel
-transport, save/reopen or copy/paste in Premiere.
+The adapter exposes native Position, Width, Height, Characters, Global font size
+(64 = 1x) and Global text tint parameters, plus a hidden static versioned document.
+Neutral global size/tint preserve each word state's independent size/color.
+Premiere requests each frame at the timeline's rational timestamp; there is no
+fixed/source-FPS render scheduler. The existing movie exporter also uses the
+active timeline rate and verifies it with FFprobe, including fractional rates.
+
+`PF_Cmd_RENDER` uses embedded caption data; a synthetic fixture is provided for
+new probe instances. Guarded CEP scripts have performed an exact read/write and
+immediate native-frame update. Arbitrary data uses validated UTF-16LE `BCDOC1:`
+hex, with a 16 MiB carrier / 4,194,300-byte document limit. SDK-created handles
+include a terminator; project flattening emits exact-length UTF-16 without it,
+matching Premiere's observed setter representation. Legacy raw BCAP and earlier
+UTF-16 carriers are accepted. Real host save/reopen and sequence cloning have
+preserved caption text. Full panel binding and clip copy/paste acceptance remain
+pending; see the detailed acceptance record.
+
+`package-macos.sh` optionally produces an unsigned package for the SDK-documented
+global `Common/Plugins/7.0/MediaCore` path. In this installed Premiere, the loading
+log scanned/loaded the per-user **Plug-ins** path and did not scan that canonical
+global **Plugins** path. The package is not the verified installation route here.
+Rebuild it after any binary change before using it elsewhere.
 
 ## SDK and build provenance
 
@@ -96,7 +120,7 @@ Keep licensed SDK files outside the repository unless redistribution is explicit
 permitted. Host loading/rendering must pass before panel migration.
 
 Adobe documents [Premiere support for the AE effect API](https://ae-plugins.docsforadobe.dev/ppro/ppro/).
-The intended binary runs inside Premiere without After Effects, Dynamic Link,
-or an AE-authored MOGRT. That intent is not yet host-verified. Do not introduce
+The binary has loaded and rendered inside Premiere without After Effects,
+Dynamic Link, or an AE-authored MOGRT. Do not introduce
 AEGP dependencies: Premiere does not support them. See the
 [acceptance plan](../docs/native-effect-acceptance.md) before installing anything.

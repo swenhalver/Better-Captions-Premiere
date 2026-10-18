@@ -7,10 +7,18 @@
 #include "Param_Utils.h"
 #include "../macos/caption_rasterizer.hpp"
 #include "caption_arbitrary.hpp"
+#include "render_style.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#if BC_ENABLE_CUSTOM_UI_PROBE
+#include "custom_ui.hpp"
+#endif
+#include "source_time.hpp"
+#if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
+#include "render_time_diagnostics.hpp"
+#endif
 
 namespace {
 // Disk IDs are permanent even if UI ordering changes. This prototype is demo-only.
@@ -19,16 +27,21 @@ enum DiskId { PositionId=1, WidthId=2, HeightId=3, MaxCharsId=4, SizeId=5, Color
 better_captions::Document demo();
 PF_Err parameters(PF_InData* in_data, PF_OutData* out_data) {
  PF_ParamDef def{};
- PF_ADD_POINT("Position",50,75,FALSE,PositionId);
+ PF_ADD_POINT("Position",50,90,FALSE,PositionId);
  PF_ADD_FLOAT_SLIDERX("Width",1,8192,1,3840,1536,PF_Precision_TENTHS,0,0,WidthId);
- PF_ADD_FLOAT_SLIDERX("Height",1,8192,1,2160,300,PF_Precision_TENTHS,0,0,HeightId);
+ PF_ADD_FLOAT_SLIDERX("Height",1,8192,1,2160,150,PF_Precision_TENTHS,0,0,HeightId);
  PF_ADD_FLOAT_SLIDERX("Characters per caption",1,500,1,100,56,PF_Precision_INTEGER,0,0,MaxCharsId);
- PF_ADD_FLOAT_SLIDERX("Font size",1,512,1,200,64,PF_Precision_TENTHS,0,0,SizeId);
- std::memset(&def,0,sizeof(def));PF_ADD_COLOR("Text color",255,255,255,ColorId);
+ PF_ADD_FLOAT_SLIDERX("Global font size (64 = 1x)",1,512,1,200,64,PF_Precision_TENTHS,0,0,SizeId);
+ std::memset(&def,0,sizeof(def));PF_ADD_COLOR("Global text tint",255,255,255,ColorId);
  std::memset(&def,0,sizeof(def));
  auto defaultDocument=better_captions::adobe::make(in_data,better_captions::encode(demo()));
  PF_ADD_ARBITRARY2("Caption document (experimental)",0,0,PF_ParamFlag_CANNOT_TIME_VARY,PF_PUI_NO_ECW_UI,defaultDocument,TranscriptId,nullptr);
- out_data->num_params=Count;return PF_Err_NONE;
+ out_data->num_params=Count;
+#if BC_ENABLE_CUSTOM_UI_PROBE
+ return better_captions::adobe::ui_probe::registerUI(in_data);
+#else
+ return PF_Err_NONE;
+#endif
 }
 better_captions::Document demo() {
  using namespace better_captions;
@@ -45,22 +58,47 @@ PF_Err render(PF_InData* in_data, PF_ParamDef* params[], PF_LayerDef* output) {
  const double sx=in_data->downsample_x.den?double(in_data->downsample_x.num)/in_data->downsample_x.den:1;
  const double sy=in_data->downsample_y.den?double(in_data->downsample_y.num)/in_data->downsample_y.den:1;
  const double width=params[Width]->u.fs_d.value*sx,height=params[Height]->u.fs_d.value*sy;
- const double x=double(params[Position]->u.td.x_value)/65536.0*sx;
- const double y=double(params[Position]->u.td.y_value)/65536.0*sy;
+ // SDK PF_InData: host already adjusts point parameters for downsampling.
+ // Scalar pixel-distance sliders still need sx/sy (see official CCU sample).
+ const double x=double(params[Position]->u.td.x_value)/65536.0;
+ const double y=double(params[Position]->u.td.y_value)/65536.0;
  LayoutBox box{x-width/2,y-height/2,width,height};
- const bool demoMode=!params[Transcript]->u.arb_d.value;
- auto document=demoMode?demo():decode(adobe::bytes(in_data,params[Transcript]->u.arb_d.value));
+ const bool missingDocument=!params[Transcript]->u.arb_d.value;
+ auto document=missingDocument?demo():decode(adobe::bytes(in_data,params[Transcript]->u.arb_d.value));
+ // Only the exact built-in fixture bypasses persisted-origin mapping. Matching
+ // its ID alone is insufficient; edited/custom documents must use their origin.
+ const bool demoMode=missingDocument||encode(document)==encode(demo());
  const auto color=params[TextColor]->u.cd.value;
- for(auto* style:{&document.style.upcoming,&document.style.current,&document.style.spoken}) {
-  style->fontSize=params[Size]->u.fs_d.value*sy;style->color={color.red/255.0,color.green/255.0,color.blue/255.0,1};
-  style->padding*=sx;style->radius*=sx;
- }
- document.style.wordSpacing*=sx;
+ adobe::applyNativeStyle(document,params[Size]->u.fs_d.value,
+                        {color.red/255.0,color.green/255.0,color.blue/255.0,1},sx,sy);
  double time=in_data->time_scale?double(in_data->current_time)/in_data->time_scale:0;
+#if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
+ adobe::source_time_probe::OwnLayerClock timeTrace;
+#endif
+#if BC_ENABLE_ADJUSTMENT_TIME_PROBE
+ adobe::source_time_probe::adjustmentDiagnostics(in_data);
+#else
+ if(!demoMode){
+#if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
+  const auto timeError=adobe::source_time_probe::documentSeconds(in_data,document.timeOriginSeconds,time,&timeTrace);
+  adobe::logRenderTime(in_data,timeTrace,document,time,box,demoMode,timeError,-1);
+#else
+  const auto timeError=adobe::source_time_probe::documentSeconds(in_data,document.timeOriginSeconds,time);
+#endif
+  if(timeError)return timeError;
+ }
+#if BC_ENABLE_SOURCE_TIME_PROBE
+ adobe::source_time_probe::mediaSeconds(in_data,time); // diagnostics never alter mapping
+#endif
+#endif
  // Short fixture repeats so every point on a long scratch clip remains testable.
  if(demoMode)time=std::fmod(std::max(0.0,time),8.0);
  auto bitmap=macos::rasterize(document,time,box,output->width,output->height,
                             static_cast<std::size_t>(std::max(1.0,params[MaxChars]->u.fs_d.value)));
+#if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
+ long long alphaCount=0;for(std::size_t i=3;i<bitmap.pixels.size();i+=4)if(bitmap.pixels[i])++alphaCount;
+ adobe::logRenderTime(in_data,timeTrace,document,time,box,demoMode,PF_Err_NONE,alphaCount);
+#endif
  for(A_long row=0;row<output->height;++row) {
   auto* dst=reinterpret_cast<PF_Pixel8*>(reinterpret_cast<char*>(output->data)+row*output->rowbytes);
   const auto* src=(input.data&&row<input.height)?reinterpret_cast<const PF_Pixel8*>(reinterpret_cast<const char*>(input.data)+row*input.rowbytes):nullptr;
@@ -86,10 +124,17 @@ extern "C" DllExport PF_Err EffectMain(PF_Cmd cmd,PF_InData* in_data,PF_OutData*
  try {
   switch(cmd) {
    case PF_Cmd_ABOUT:std::snprintf(out_data->return_msg,sizeof(out_data->return_msg),"Better Captions Native Probe 0.1: synthetic embedded transcript, not migrated captions.");break;
-   case PF_Cmd_GLOBAL_SETUP:out_data->my_version=PF_VERSION(0,1,0,PF_Stage_DEVELOP,1);out_data->out_flags=PF_OutFlag_NON_PARAM_VARY;break;
+   case PF_Cmd_GLOBAL_SETUP:out_data->my_version=PF_VERSION(0,1,0,PF_Stage_DEVELOP,1);out_data->out_flags=PF_OutFlag_NON_PARAM_VARY;
+#if BC_ENABLE_CUSTOM_UI_PROBE
+    out_data->out_flags|=PF_OutFlag_CUSTOM_UI;
+#endif
+    break;
    case PF_Cmd_PARAMS_SETUP:return parameters(in_data,out_data);
    case PF_Cmd_RENDER:return render(in_data,params,output);
    case PF_Cmd_ARBITRARY_CALLBACK:return better_captions::adobe::arbitrary(in_data,static_cast<PF_ArbParamsExtra*>(extra),demo());
+#if BC_ENABLE_CUSTOM_UI_PROBE
+   case PF_Cmd_EVENT:return better_captions::adobe::ui_probe::event(in_data,params,static_cast<PF_EventExtra*>(extra));
+#endif
    default:break;
   }
   return PF_Err_NONE;

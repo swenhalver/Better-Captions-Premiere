@@ -1,11 +1,15 @@
 /** Experimental transport only. These pure functions never call or mutate Premiere. */
 export const NATIVE_SCHEMA_VERSION = 1 as const;
 export const NATIVE_EFFECT_MATCH_NAME = 'com.swen.bettercaptions.native.experimental';
+/** Premiere's CEP component name adds exactly one AE. prefix for this effect. */
+export function normalizeNativeMatchName(value: unknown): typeof NATIVE_EFFECT_MATCH_NAME | null {
+  return value === NATIVE_EFFECT_MATCH_NAME || value === 'AE.' + NATIVE_EFFECT_MATCH_NAME ? NATIVE_EFFECT_MATCH_NAME : null;
+}
 export const NATIVE_PARAMETERS = ['positionX', 'positionY', 'width', 'height'] as const;
 export type NativeParameter = typeof NATIVE_PARAMETERS[number];
 export interface NativeWord { text: string; start: number; end: number; endOfSentence: boolean; }
 export interface NativeCaption { id: string; start: number; end: number; manualSplit: boolean; words: NativeWord[]; }
-export interface NativeDocument { version: 1; animationAuthority: 'premiere-effect'; sequenceId: string; captions: NativeCaption[]; style: NativeStyle; }
+export interface NativeDocument { version: 1; animationAuthority: 'premiere-effect'; sequenceId: string; captions: NativeCaption[]; style: NativeStyle; timeOriginSeconds: number; }
 export interface NativeHostEvidence {
   host: 'premiere'; matchName: string; loaded: boolean; renderVerified: boolean;
   parameterReadWriteVerified: boolean; serializationVerified: boolean;
@@ -35,7 +39,7 @@ function interval(value: Record<string, unknown>): [number, number] {
   return [start, end];
 }
 export function validateNativeDocument(input: unknown): NativeDocument {
-  const doc = record(input, ['version', 'animationAuthority', 'sequenceId', 'captions', 'style']);
+  const doc = record(input, ['version', 'animationAuthority', 'sequenceId', 'captions', 'style', 'timeOriginSeconds']);
   if (doc.version !== NATIVE_SCHEMA_VERSION || doc.animationAuthority !== 'premiere-effect') throw new Error('Unsupported native schema or animation authority.');
   if (!Array.isArray(doc.captions) || doc.captions.length > 10000) throw new Error('Expected at most 10000 captions.');
   const seen = new Set<string>(); let words = 0, characters = 0;
@@ -56,10 +60,10 @@ export function validateNativeDocument(input: unknown): NativeDocument {
     });
     return { id: captionId, start, end, manualSplit: caption.manualSplit, words: result };
   });
-  return { version: 1, animationAuthority: 'premiere-effect', sequenceId: id(doc.sequenceId), captions, style: validateNativeStyle(doc.style) };
+  return { version: 1, animationAuthority: 'premiere-effect', sequenceId: id(doc.sequenceId), captions, style: validateNativeStyle(doc.style), timeOriginSeconds: doc.timeOriginSeconds === undefined ? 0 : numeric(doc.timeOriginSeconds, -864000, 864000) };
 }
 export function requireNativeHost(evidence: NativeHostEvidence): void {
-  if (evidence.host !== 'premiere' || evidence.matchName !== NATIVE_EFFECT_MATCH_NAME || evidence.loaded !== true || evidence.renderVerified !== true || evidence.parameterReadWriteVerified !== true || evidence.serializationVerified !== true) throw new Error('Native effect is unavailable or unverified. No automatic movie fallback.');
+  if (evidence.host !== 'premiere' || !normalizeNativeMatchName(evidence.matchName) || evidence.loaded !== true || evidence.renderVerified !== true || evidence.parameterReadWriteVerified !== true || evidence.serializationVerified !== true) throw new Error('Native effect is unavailable or unverified. No automatic movie fallback.');
 }
 function target(input: unknown): NativeTarget {
   const value = record(input, ['sequenceId', 'clipId', 'effectId', 'revision']);
@@ -88,19 +92,20 @@ export function planNativeParameterEdit(input: unknown, current: NativeTarget, e
   const value = request.operation === 'set-value' ? numeric(request.value, dimension ? 1 : -100000, dimension ? 8192 : 100000) : undefined;
   return { target: requested, parameter: request.parameter as NativeParameter, operation: request.operation, timeTicks: request.timeTicks, ...(value === undefined ? {} : { value }), animationAuthority: 'premiere-effect' as const, preserveOtherKeysAndInterpolation: true as const, retry: 'never' as const };
 }
-export interface MigrationSnapshot { target: NativeTarget; snapshotId: string; sourceFingerprint: string; protectedAnimation: boolean; }
+export interface MigrationSnapshot { target: NativeTarget; snapshotId: string; sourceFingerprint: string; protectedAnimation: boolean; adjustmentLayer: boolean; }
 /** Plan creation is explicit and reversible; execution belongs to a separate verified host adapter. */
 export function planNativeMigration(input: unknown, evidence: NativeHostEvidence) {
   requireNativeHost(evidence);
   const request = record(input, ['explicitConsent', 'document', 'snapshot']);
   if (request.explicitConsent !== true) throw new Error('Explicit native migration consent is required.');
-  const snapshot = record(request.snapshot, ['target', 'snapshotId', 'sourceFingerprint', 'protectedAnimation']);
+  const snapshot = record(request.snapshot, ['target', 'snapshotId', 'sourceFingerprint', 'protectedAnimation', 'adjustmentLayer']);
   const nativeTarget = target(snapshot.target);
+  if (snapshot.adjustmentLayer !== true) throw new Error('Native captions require an adjustment layer.');
   if (snapshot.protectedAnimation !== false) throw new Error('Protected animated captions require separate manual migration.');
   if (typeof snapshot.sourceFingerprint !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(snapshot.sourceFingerprint)) throw new Error('A SHA-256 preservation fingerprint is required.');
   const document = validateNativeDocument(request.document);
   if (document.sequenceId !== nativeTarget.sequenceId) throw new Error('Migration sequence changed.');
-  return { version: 1 as const, document, source: { target: nativeTarget, snapshotId: id(snapshot.snapshotId), sourceFingerprint: id(snapshot.sourceFingerprint) }, strategy: 'create-separate-native-container' as const, preserveLegacy: true as const, rollback: 'remove-new-container-only' as const, retry: 'never' as const };
+  return { version: 1 as const, document, source: { target: nativeTarget, snapshotId: id(snapshot.snapshotId), sourceFingerprint: id(snapshot.sourceFingerprint) }, strategy: 'create-separate-native-container' as const, targetKind: 'adjustment-layer' as const, preserveLegacy: true as const, rollback: 'remove-new-container-only' as const, retry: 'never' as const };
 }
 
 export interface NativeColor { r: number; g: number; b: number; a: number; }
@@ -129,4 +134,33 @@ export function validateNativeStyle(input: unknown): NativeStyle {
 export function defaultNativeStyle(): NativeStyle {
   const word: NativeWordStyle = { fontFamily: 'Arial', fontSize: 64, sizeScale: 1, opacity: 1, color: {r:1,g:1,b:1,a:1}, bubble: false, bubbleColor: {r:0,g:0,b:0,a:1}, padding:8, radius:10, outlineWidth:0, outlineColor:{r:0,g:0,b:0,a:1}, shadowBlur:0, shadowX:0, shadowY:0, shadowColor:{r:0,g:0,b:0,a:.5} };
   return { upcoming: structuredClone(word), current: structuredClone(word), spoken: structuredClone(word), wordSpacing:12, lineHeight:1.3, titleCase:false };
+}
+
+export interface NativePointCalibration {
+  target: NativeTarget;
+  /** Must be proved against rendering in the specific host/sequence, not guessed
+   * from a getter roundtrip or transferred from native Motion. */
+  renderingVerified: boolean;
+  space: 'normalized-sequence' | 'sequence-pixels';
+  frameWidth: number;
+  frameHeight: number;
+}
+/** Pure mapping for a single Position coordinate; no host write or keys created.
+ * Pixel intent stays separate from calibrated host point representation. */
+export function planNativePointCoordinate(
+  plan: ReturnType<typeof planNativeParameterEdit>,
+  currentHostPoint: { x: number; y: number },
+  calibration: NativePointCalibration,
+) {
+  if (plan.parameter !== 'positionX' && plan.parameter !== 'positionY') throw new Error('Expected a Position coordinate plan.');
+  if (plan.operation !== 'set-value' || plan.value === undefined) throw new Error('Native reset requires verified host defaults.');
+  const calibrationTarget = target(calibration.target);
+  if (JSON.stringify(calibrationTarget) !== JSON.stringify(plan.target) || calibration.renderingVerified !== true) throw new Error('Position host coordinates require current rendering verification.');
+  if (calibration.space !== 'normalized-sequence' && calibration.space !== 'sequence-pixels') throw new Error('Unknown host Position coordinate space.');
+  const width = numeric(calibration.frameWidth, 1, 32768), height = numeric(calibration.frameHeight, 1, 32768);
+  const point = { x: numeric(currentHostPoint.x, -100000, 100000), y: numeric(currentHostPoint.y, -100000, 100000) };
+  const coordinate = plan.parameter === 'positionX' ? 'x' : 'y';
+  const scale = calibration.space === 'normalized-sequence' ? (coordinate === 'x' ? width : height) : 1;
+  point[coordinate] = plan.value / scale;
+  return { target: { ...plan.target }, point, timeTicks: plan.timeTicks, coordinateSpace: calibration.space, preserveOtherKeysAndInterpolation: true as const, retry: 'never' as const };
 }

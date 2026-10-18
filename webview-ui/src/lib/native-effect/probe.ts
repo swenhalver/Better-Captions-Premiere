@@ -1,4 +1,4 @@
-import { NATIVE_EFFECT_MATCH_NAME } from './contract.ts';
+import { normalizeNativeMatchName } from './contract.ts';
 /** Structural subset of Adobe's documented UXP Component/ComponentParam API.
  * No setters, actions, QE calls, undocumented native handles, or effect insertion. */
 interface UxpParam {
@@ -20,7 +20,7 @@ export interface ParameterProbe {
  * never evidence of rendering, write support, serialization, or arbitrary SCAN support. */
 export async function probeNativeComponent(component: UxpComponent) {
   const matchName = await component.getMatchName();
-  if (matchName !== NATIVE_EFFECT_MATCH_NAME) throw new Error('Select the experimental Better Captions native component.');
+  if (!normalizeNativeMatchName(matchName)) throw new Error('Select the experimental Better Captions native component.');
   const count = component.getParamCount();
   if (!Number.isInteger(count) || count < 0 || count > 128) throw new Error('Native parameter count exceeds probe bounds.');
   const parameters: ParameterProbe[] = [];
@@ -41,5 +41,5 @@ export async function probeNativeComponent(component: UxpComponent) {
     }
     parameters.push(result);
   }
-  return { matchName, parameters, readOnly: true as const, writeSupportVerified: false as const, arbitraryTextTransportVerified: false as const };
+  return { matchName, canonicalMatchName: normalizeNativeMatchName(matchName), parameters, readOnly: true as const, writeSupportVerified: false as const, arbitraryTextTransportVerified: false as const };
 }

@@ -4,6 +4,7 @@
 #include "../core/caption_core.hpp"
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <fstream>
 #include <iterator>
@@ -34,6 +35,16 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  p=regroup(d,8);assert(p.size()==4);assert(d.containers[0].id=="original"&&d.containers[0].words[0].text=="HELLO");
  d.containers.push_back({"razor-right",true,{{"separate",3,4,false}}});assert(regroup(d,500).size()==3);assert(d.containers[1].manualSplit);
  auto encoded=encode(d);auto copy=decode(encoded);assert(encode(copy)==encoded&&copy.containers[1].manualSplit&&copy.style.spoken.opacity==0.5);
+ // Schema 2 adds a persistent source/sequence origin without rewriting word times.
+ auto originDoc=d;originDoc.timeOriginSeconds=3600;auto originBytes=encode(originDoc);auto originCopy=decode(originBytes);
+ assert(originCopy.schemaVersion==2&&originCopy.timeOriginSeconds==3600&&originCopy.containers[0].words[0].start==d.containers[0].words[0].start);
+ originDoc.timeOriginSeconds=-864000;assert(decode(encode(originDoc)).timeOriginSeconds==-864000);originDoc.timeOriginSeconds=864000;assert(decode(encode(originDoc)).timeOriginSeconds==864000);
+ auto legacy=encoded;legacy.resize(legacy.size()-8);legacy[4]=1;auto legacyCopy=decode(legacy);assert(legacyCopy.schemaVersion==2&&legacyCopy.timeOriginSeconds==0&&legacyCopy.containers[0].words[0].text=="HELLO");
+ assert(encode(legacyCopy)==encoded); // v1 upgrades explicitly to the canonical v2 payload.
+ for(double invalidOrigin:{std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN(),864000.001,-864000.001}){
+  originDoc.timeOriginSeconds=invalidOrigin;rejects([&]{encode(originDoc);});
+  auto malformed=encoded;std::uint64_t bits=0;std::memcpy(&bits,&invalidOrigin,8);for(int j=0;j<8;++j)malformed[malformed.size()-8+j]=static_cast<std::uint8_t>(bits>>(8*j));rejects([&]{decode(malformed);});
+ }
  auto bad=encoded;bad[4]=99;rejects([&]{decode(bad);});bad=encoded;bad.pop_back();rejects([&]{decode(bad);});bad=encoded;bad.push_back(0);rejects([&]{decode(bad);});rejects([&]{decode({});});
  bad=encoded;bad[8]=255;bad[9]=255;rejects([&]{decode(bad);});
  auto invalid=d;invalid.containers[1].id="original";rejects([&]{validate(invalid);});invalid=d;invalid.containers[0].words[0].start=std::numeric_limits<double>::quiet_NaN();rejects([&]{validate(invalid);});invalid=d;invalid.style.current.opacity=2;rejects([&]{validate(invalid);});rejects([&]{regroup(d,0);});
@@ -46,6 +57,17 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  rejects([&]{layoutFrame(d,0.4,{0,0,1200,300},[](const std::string&,const WordStyle&){return Metrics{-1,0,0};});});
  // Every truncation boundary is rejected; malformed data cannot partially load.
  for(std::size_t i=0;i<encoded.size();++i){std::vector<std::uint8_t> part(encoded.begin(),encoded.begin()+i);rejects([&]{decode(part);});}
+ // Native rendering follows the host's sample time directly, including fractional
+ // sequence rates. No source rate or 30fps quantization participates in layout.
+ Document timeline;timeline.containers.push_back({"timeline",false,{{"first",0,.04,false},{"second",.04,.08,false},{"third",.08,.3,false}}});
+ auto activeAt=[&](double hostTime){auto f=layoutFrame(timeline,hostTime,{0,0,1200,300},measure);assert(f.words.size()==3);std::size_t active=99;for(const auto& word:f.words)if(word.state==WordState::Current)active=word.wordIndex;return active;};
+ assert(activeAt(1001.0/24000.0)==1); // 23.976 sequence, frame 1
+ assert(activeAt(1001.0/30000.0)==0); // 29.97 sequence, frame 1
+ assert(activeAt(2*1001.0/30000.0)==1); // 29.97 sequence, frame 2
+ assert(activeAt(2*1001.0/24000.0)==2); // 23.976 sequence, frame 2
+ assert(activeAt(.039)==0&&activeAt(.041)==1); // samples within one 30fps bucket
+ assert(activeAt(std::nextafter(.04,0.0))==0&&activeAt(.04)==1);
+ assert(activeAt(std::nextafter(.08,0.0))==1&&activeAt(.08)==2);
  // Bubble adds padding around real metrics without changing the source font size.
  auto bubbles=sample();bubbles.style.current.bubble=true;bubbles.style.current.padding=10;
  auto bubbleFrame=layoutFrame(bubbles,0.1,{0,0,1200,300},measure);
