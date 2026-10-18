@@ -9,6 +9,14 @@ is unresolved**, so this is not yet ready for production caption work.
 
 ## Verified evidence
 
+- Development panel 0.7.9 and the new native control build are installed on the
+  Mac. Selecting an existing native adjustment layer automatically restored its
+  timed words/styles without Refresh. A Current-word color edit changed that
+  same layer's visible Program Monitor frame without a movie export; the test
+  color was then restored. Current/Past/Next groups appear in Effect Controls.
+  Current-word Size 100%→150% enlarged the rendered word/bubble and was restored.
+  These checks used only the saved scratch project. The production project stayed
+  closed and its SHA-256 stayed identical. See [0.7.9 verification](mac-verification-0.7.9.md).
 - Portable core and macOS raster CTests pass with ASAN/UBSAN. The compiled adapter
   dynamically loads and renders deterministic premultiplied ARGB 8 frames. SDK
   arbitrary-data tests cover copy, flatten/unflatten, scan, compare and disposal.
@@ -57,9 +65,12 @@ Build hashes identify snapshots, not acceptance:
 | --- | --- |
 | Standard own-layer-clock candidate | `53943c539d4b9ad6fc6120a8039a38c0bb736edadf647d4faf9c7a4552f41e47` |
 | Same mapping with opt-in numeric render diagnostics | `d23470ea5cc798a2de18d8d45bc47e544b57f5bee04e32bc3365748d116ad633` |
+| Installed panel-integration/control candidate | `688697ac134ff530f9e02121f4843a53b33346b50c7cba40615631a9c910ec03` |
 
-Regenerate hashes after rebuilding. The diagnostic snapshot is currently installed
-for scratch testing; standard builds disable custom UI and all probe logging.
+Regenerate hashes after rebuilding. The panel-integration/control candidate is
+currently installed for scratch testing; standard builds disable custom UI and
+all probe logging. The earlier diagnostic snapshots are retained as historical
+timing evidence.
 The optional global `.pkg` path was not scanned by this Premiere installation and
 is not the verified install route.
 
@@ -91,13 +102,13 @@ on footage underneath the adjustment layer is accepted.
 | Bottom placement/independent box reflow | Native defaults and width/height behavior verified; broader resolution/pixel-aspect coverage pending. |
 | Position/Width/Height animation | Numeric interpolation verified; native Position edit/Undo observed. Complete point keys, easing, Redo and individual reset pending. |
 | Program Monitor move/resize | Optional probe draws 4 blue handles. Host drag delivered no click/drag callbacks and changed no native value. Input remains unverified; standard build keeps it off. |
-| Embedded document transfer/live update | Exact guarded CEP write/readback and changed native frames verified. Full user-facing panel binding pending. |
+| Embedded document transfer/live update | Exact guarded CEP write/readback and changed native frames verified. Installed panel adoption and supported color update verified in 0.7.9; native keys/geometry stay host-owned. |
 | Save/reopen/clone | Transcript retained; BCAP 2 origin retained. Copy/paste, keys and complete pixel persistence remain open. |
 | Adjustment-layer trim/Razor/move | Move sample matches baseline pixels; unmoved QE Razor is failing. Not accepted. |
 | Adjustment-only application | Live transfer requires exact true role check; manual native effect selection remains a Premiere UI operation. |
-| Built-in Transcribe/editable word timing | Existing panel remains separate; native binding pending. |
+| Built-in Transcribe/editable word timing | Existing native document words/timing restore into the panel; timing edits have adapter/controller tests. Fresh transcription still follows the existing movie workflow; replacing a native embedded transcript is refused. Full installed native timing-edit acceptance pending. |
 | One adjustment container above footage | Manually created genuine layer verified. Automatic creation/migration pending. |
-| Compact panel/agent hooks | Pure contracts/helpers implemented; installed native panel/agent endpoint binding pending. |
+| Compact panel/agent hooks | Installed compact panel and agent get_state/patch_style adopted the existing native layer and changed its visible color. Unsupported native styles are disabled/refused. |
 | Retimed/reversed native layers | Explicitly unsupported; callback/speed failures return errors. |
 | Additional formats/Windows | Baseline ARGB 8 Mac host verified. Float/YUV/GPU and Windows installed-host loading/drawing pending. |
 

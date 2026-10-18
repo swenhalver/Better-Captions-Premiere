@@ -6,13 +6,15 @@ export const SERVICE_ACTIONS = [
   'getFonts', 'beginCaption', 'saveCaptionFrames', 'finishCaption',
   'preflightCaptionClips', 'prepareCaptionTrack', 'applyCaptionClips', 'readTimeline', 'showInPremiere',
   'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'patchCaptionKeyValues',
+  'readCaptionConnections', 'writeNativeCaptionDocument',
 ] as const;
-const READ_ACTIONS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
+const READ_ACTIONS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 const ARG_COUNTS: Record<string, number[]> = {
   readCaptionConsolidation:[1], stageCaptionConsolidation:[4], verifyCaptionConsolidation:[3], rollbackCaptionConsolidation:[3],
   getFonts: [0], beginCaption: [1], saveCaptionFrames: [3], finishCaption: [3, 4],
   preflightCaptionClips: [2, 3], prepareCaptionTrack: [2, 3, 4], applyCaptionClips: [2, 3, 4], readTimeline: [1], showInPremiere: [1],
   selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1], readCaptionAreaDescriptor: [1], patchCaptionKeyValues: [2],
+  readCaptionConnections:[2],writeNativeCaptionDocument:[2],
 };
 interface Request { version: number; id: string; createdAt: number; expiresAt?: number; sequenceId: string; projectPath: string; action: string; args: any[]; }
 interface ServiceOptions { api?: any; fs?: any; path?: any; os?: any; crypto?: any; process?: any; platform?: any; root?: string; intervalMs?: number; maxRequestsPerPoll?: number; }
@@ -31,6 +33,10 @@ export function validateServiceRequest(value: unknown, filename: string, now = D
   if(request.action==='readCaptionMotion'&&request.args.length===2){
     const options=request.args[1];
     if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).length!==1||options.includeDiagnostics!==true)throw new Error('Invalid caption service arguments.');
+  }
+  if(request.action==='readCaptionConnections'){
+    const [links,options]=request.args;
+    if(!Array.isArray(links)||links.length>10000||!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).length!==1||typeof options.includeDocuments!=='boolean')throw new Error('Invalid caption discovery arguments.');
   }
   if (READ_ACTIONS.has(request.action)) {
     const expiresAt = request.expiresAt ?? request.createdAt + 10000;
@@ -64,6 +70,8 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
     case 'readCaptionAreaDescriptor': return api.readCaptionAreaDescriptor(a, id);
     case 'patchCaptionKeyValues': return api.patchCaptionKeyValues(a, b, id);
     case 'readCaptionSelection': return api.readCaptionSelection(a, id);
+    case 'readCaptionConnections': return api.readCaptionConnections(id,a,b);
+    case 'writeNativeCaptionDocument': return api.writeNativeCaptionDocument(a,b,id);
     default: throw new Error('Unsupported caption service action.');
   }
 }
@@ -164,7 +172,10 @@ export function startBackendService(options: ServiceOptions = {}) {
           const result = await dispatchServiceRequest(api, request);
           atomic(output, { version: 1, id, sequenceId: request.sequenceId, projectPath: request.projectPath, result: result ?? null });
         } catch (failure) {
-          atomic(output, { version: 1, id, sequenceId: request?.sequenceId ?? null, projectPath: request?.projectPath ?? null, error: failure instanceof Error ? failure.message : String(failure) });
+          const nativeFailure=failure as {code?:string;recoverable?:boolean;outputApplied?:boolean};
+          const metadata=nativeFailure?.code==='BC_OUTPUT_UNCONFIRMED'&&nativeFailure.recoverable===false&&typeof nativeFailure.outputApplied==='boolean'
+            ? {code:'BC_OUTPUT_UNCONFIRMED',recoverable:false,outputApplied:nativeFailure.outputApplied}:{};
+          atomic(output, { version: 1, id, sequenceId: request?.sequenceId ?? null, projectPath: request?.projectPath ?? null, error: failure instanceof Error ? failure.message : String(failure),...metadata });
         } finally { currentRequest = null; try { fs.unlinkSync(claimed); } catch {} }
       }
     } finally { busy = false; if (alive) announce(); else release(); }

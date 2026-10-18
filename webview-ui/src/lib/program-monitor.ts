@@ -120,7 +120,7 @@ interface WatchOptions {
   autoStart?: boolean;
 }
 const identity = (context: MotionWatchContext) => JSON.stringify([context.sequenceId, context.captionId, context.clipNodeId]);
-const recoverableReadMethods = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation']);
+const recoverableReadMethods = new Set(['readCaptionConnections', 'loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation']);
 export function startProgramMonitorWatcher(options: WatchOptions) {
   const now = options.now ?? Date.now;
   let alive = true, visible = true, inFlight = false, generation = 0, selectionPaused = false;

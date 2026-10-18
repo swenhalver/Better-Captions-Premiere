@@ -9,7 +9,7 @@ const HOST_METHODS = new Set([
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession', 'loadStylePresets', 'saveStylePresets',
   'transcribeSequence', 'getFonts', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'writeNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
 ]);
 const AGENT_METHODS = new Set(['getState', 'patchStyle', 'patchAnimation', 'setCaptions', 'refresh', 'apply', 'readArea', 'editArea']);
 const ID = /^(?:ui|host)-[a-zA-Z0-9_-]{1,100}$/;
@@ -42,10 +42,11 @@ function send(data) {
 }
 function safeError(error) {
   const result = { message: String(error && error.message || error || 'Premiere caption operation failed.').slice(0, 4000) };
-  if (error && ['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE', 'BC_NATIVE_CLOSED'].includes(error.code)) {
+  if (error && ['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE', 'BC_NATIVE_CLOSED', 'BC_OUTPUT_UNCONFIRMED'].includes(error.code)) {
     result.code = error.code;
     if (typeof error.recoverable === 'boolean') result.recoverable = error.recoverable;
     if (typeof error.operationPending === 'boolean') result.operationPending = error.operationPending;
+    if (error.code === 'BC_OUTPUT_UNCONFIRMED' && error.recoverable === false && typeof error.outputApplied === 'boolean') result.outputApplied = error.outputApplied;
     if (HOST_METHODS.has(error.method)) result.method = error.method;
   }
   return result;

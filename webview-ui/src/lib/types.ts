@@ -146,6 +146,10 @@ export interface AnimationConfig {
 
 export interface SessionState {
   sequenceId: string;
+  /** Bind sidecar saves to the project that supplied this session. */
+  projectPath?: string;
+  /** Native documents live in this effect instance, never in legacy movie output. */
+  nativeClipId?: string;
   sequenceName: string;
   transcriptJson: TranscriptJSON | null;
   captions: CaptionItem[];

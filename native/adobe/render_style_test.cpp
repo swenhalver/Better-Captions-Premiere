@@ -20,5 +20,23 @@ int main(){try{
  auto half=source;adobe::applyNativeStyle(half,64,{1,1,1,1},0.5,0.5);
  check(half.style.current.fontSize==24&&half.style.current.outlineWidth==2&&half.style.current.shadowBlur==4&&half.style.current.shadowX==5&&half.style.current.shadowY==6&&half.style.wordSpacing==7);
  check(encode(source)!=encode(scaled)); // original was not changed through copy
- std::cout<<"Native styles passed: neutral byte equality, state size/color ratios, alpha/opacity preservation, tint and half-resolution extents.\n";return 0;
+ adobe::NativeAppearanceControls controls;
+ auto neutralAppearances=source;adobe::applyNativeStyle(neutralAppearances,64,{1,1,1,1},1,1,controls);
+ check(encode(neutralAppearances)==encode(source));
+ controls.current.sizePercent=150;controls.current.textTint={0.5,1,0.5,1};controls.current.opacityPercent=40;
+ controls.current.bubbleMode=2;controls.current.bubbleTint={0.5,0.25,1,1};controls.current.bubbleOpacityPercent=30;
+ controls.current.paddingPercent=200;controls.current.radiusPercent=50;
+ auto appearance=source;adobe::applyNativeStyle(appearance,64,{1,1,1,1},1,1,controls);
+ check(near(appearance.style.current.fontSize,72)&&near(appearance.style.current.opacity,0.32));
+ check(appearance.style.current.sizeScale==source.style.current.sizeScale&&appearance.style.current.color.a==source.style.current.color.a);
+ check(near(appearance.style.current.color.r,source.style.current.color.r*0.5)&&appearance.style.current.bubble);
+ check(near(appearance.style.current.bubbleColor.a,source.style.current.bubbleColor.a*0.3));
+ check(appearance.style.current.padding==source.style.current.padding*2&&appearance.style.current.radius==source.style.current.radius/2);
+ auto untouched=source;untouched.style.current=appearance.style.current;check(encode(untouched)==encode(appearance));
+ auto appearanceHalf=source;adobe::applyNativeStyle(appearanceHalf,128,{1,1,1,1},0.5,0.5,controls);
+ check(appearanceHalf.style.current.fontSize==source.style.current.fontSize*1.5);
+ check(appearanceHalf.style.current.padding==source.style.current.padding&&appearanceHalf.style.current.radius==source.style.current.radius/4);
+ controls.current.bubbleMode=3;auto off=source;adobe::applyNativeStyle(off,64,{1,1,1,1},1,1,controls);check(!off.style.current.bubble);
+ bool rejected=false;controls.current.sizePercent=0;try{adobe::applyNativeStyle(off,64,{1,1,1,1},1,1,controls);}catch(const std::invalid_argument&){rejected=true;}check(rejected);
+ std::cout<<"Native styles passed: neutral byte equality, independent state overrides, bubble mode/tint/opacity/extents, alpha preservation and downsampling.\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

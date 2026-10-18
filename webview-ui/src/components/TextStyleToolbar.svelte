@@ -80,8 +80,8 @@
 </script>
 
 <script lang="ts">
-  interface Props { style: StyleConfig; fonts?: string[]; scope?: TextStyleScope; onScopeChange: (scope: TextStyleScope) => void; onUpdate: (updates: Partial<StyleConfig>) => void; disabled?: boolean; }
-  let { style, fonts = [], scope = "all", onScopeChange, onUpdate, disabled = false }: Props = $props();
+  interface Props { style: StyleConfig; fonts?: string[]; scope?: TextStyleScope; onScopeChange: (scope: TextStyleScope) => void; onUpdate: (updates: Partial<StyleConfig>) => void; disabled?: boolean; nativeMode?: boolean; }
+  let { style, fonts = [], scope = "all", onScopeChange, onUpdate, disabled = false, nativeMode = false }: Props = $props();
   const componentId = $props.id();
   let appearance = $derived(textStyleAppearance(style, scope));
   let boldState = $derived(textStyleBoldState(style, scope));
@@ -122,30 +122,30 @@
     <input class="text-style__input" list={`${componentId}-fonts`} aria-label="Font family" title="Font family" maxlength="160" value={mixed("fontFamily") ? "" : appearance.fontFamily} placeholder={mixed("fontFamily") ? "Mixed fonts" : "Font family"} onchange={(event) => { const font = value(event).trim(); if (font) update({ fontFamily: font }); }} />
     <datalist id={`${componentId}-fonts`}>{#each fonts as font}<option value={font}></option>{/each}</datalist>
     <label class="text-style__number" title={scope === "all" ? "Base font size, px — keeps relative word sizes" : "Font size, px"}><input type="number" aria-label={scope === "all" ? "Base font size, px" : "Font size, px"} min="8" max={sizeMax} step=".5" value={Number(appearance.fontSize.toFixed(2))} onchange={(event) => numeric(event, 8, sizeMax, fontSize => update({ fontSize }))} /><span aria-hidden="true">px</span></label>
-    <button class="text-style__toggle" aria-label="Bold" title={style.fontWeight >= 1000 ? boldState === false ? "All words is already at weight 1000; no heavier step is available" : "Turn off the +100 weight step and follow All words" : `One step bolder (+100) than All words (${style.fontWeight})`} aria-pressed={boldState} disabled={textStyleBoldDisabled(style, scope)} onclick={() => onUpdate(textStyleBoldPatch(style, scope))}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3.5h4a3.25 3.25 0 0 1 0 6.5H6m4 0a3.25 3.25 0 0 1 0 6.5H6v-13"/></svg></button>
-    <button class="text-style__toggle" aria-label="Italic" title="Italic" aria-pressed={mixed("italic") ? "mixed" : appearance.italic} onclick={() => update({ italic: mixed("italic") || !appearance.italic })}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 3.5h8M4 16.5h8M12 3.5l-4 13"/></svg></button>
+    <button class="text-style__toggle" aria-label="Bold" title={style.fontWeight >= 1000 ? boldState === false ? "All words is already at weight 1000; no heavier step is available" : "Turn off the +100 weight step and follow All words" : `One step bolder (+100) than All words (${style.fontWeight})`} aria-pressed={boldState} disabled={nativeMode || textStyleBoldDisabled(style, scope)} onclick={() => onUpdate(textStyleBoldPatch(style, scope))}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3.5h4a3.25 3.25 0 0 1 0 6.5H6m4 0a3.25 3.25 0 0 1 0 6.5H6v-13"/></svg></button>
+    <button class="text-style__toggle" aria-label="Italic" title={nativeMode ? "Italic is unavailable in the experimental native renderer" : "Italic"} disabled={nativeMode} aria-pressed={mixed("italic") ? "mixed" : appearance.italic} onclick={() => update({ italic: mixed("italic") || !appearance.italic })}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 3.5h8M4 16.5h8M12 3.5l-4 13"/></svg></button>
     <input class="text-style__color" type="color" value={appearance.color} aria-label="Text color" title={mixed("color") ? "Text color — mixed word colors" : "Text color"} oninput={(event) => update({ color: value(event) })} />
   </div>
 
   <div class="text-style__format-row">
-    <select class="text-style__input" aria-label="Font weight" title={scope === "all" ? "All words font weight" : "Font weight — absolute override"} value={scope === "all" ? style.fontWeight : appearance.fontWeight} onchange={(event) => update({ fontWeight: Number(value(event)) })}>{#each [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000] as weight}<option value={weight}>{weight}</option>{/each}</select>
-    <select class="text-style__input" aria-label="Text case" title="Text case" value={mixed("textTransform") ? "" : appearance.textTransform} onchange={(event) => update({ textTransform: value(event) as WordAppearance["textTransform"] })}>{#if mixed("textTransform")}<option value="" disabled>Mixed case</option>{/if}<option value="none">As typed</option><option value="uppercase">UPPERCASE</option><option value="lowercase">lowercase</option><option value="titlecase">Title Case</option></select>
+    <select class="text-style__input" aria-label="Font weight" disabled={nativeMode} title={scope === "all" ? "All words font weight" : "Font weight — absolute override"} value={scope === "all" ? style.fontWeight : appearance.fontWeight} onchange={(event) => update({ fontWeight: Number(value(event)) })}>{#each [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000] as weight}<option value={weight}>{weight}</option>{/each}</select>
+    <select class="text-style__input" aria-label="Text case" title="Text case" disabled={nativeMode && scope !== "all"} value={mixed("textTransform") ? "" : appearance.textTransform} onchange={(event) => update({ textTransform: value(event) as WordAppearance["textTransform"] })}>{#if mixed("textTransform")}<option value="" disabled>Mixed case</option>{/if}<option value="none">As typed</option><option value="uppercase" disabled={nativeMode}>UPPERCASE</option><option value="lowercase" disabled={nativeMode}>lowercase</option><option value="titlecase">Title Case</option></select>
     <label class="text-style__number" title="Text opacity, %"><input type="number" aria-label="Text opacity, %" min="0" max="100" value={mixed("opacity") ? "" : Math.round(appearance.opacity * 100)} placeholder="Mixed" onchange={(event) => numeric(event, 0, 100, opacity => update({ opacity }), 100)} /><span aria-hidden="true">%</span></label>
   </div>
 
   <div class="text-style__more" role="group" aria-label="More text settings">
     {#each [{ key: "spacing", label: "Spacing" }, { key: "stroke", label: "Outline" }, { key: "shadow", label: "Shadow" }, { key: "bubble", label: "Bubble" }, { key: "layout", label: "Layout" }] as item}
-      <button class="text-style__more-button" aria-expanded={expanded === item.key} aria-controls={`${componentId}-${item.key}`} onclick={() => expanded = expanded === item.key ? null : item.key as typeof expanded}>{item.label}</button>
+      <button class="text-style__more-button" disabled={nativeMode && item.key === "layout"} aria-expanded={expanded === item.key} aria-controls={`${componentId}-${item.key}`} onclick={() => expanded = expanded === item.key ? null : item.key as typeof expanded}>{item.label}</button>
     {/each}
   </div>
 
   {#if expanded === "spacing"}
     <div class="text-style__expanded" id={`${componentId}-spacing`} role="group" aria-label="Text spacing">
       <div class="caption-controls">
-        <label class="caption-field"><span>Letter spacing, px</span><input type="number" min="-10" max="40" step=".5" value={mixed("letterSpacing") ? "" : appearance.letterSpacing} placeholder="Mixed" onchange={(event) => numeric(event, -10, 40, letterSpacing => update({ letterSpacing }))} /></label>
-        <label class="caption-field"><span>Word spacing, %</span><input type="number" min="0" max="300" value={style.wordSpacing ?? ""} placeholder="Original" onchange={(event) => numeric(event, 0, 300, wordSpacing => onUpdate({ wordSpacing }))} /></label>
+        <label class="caption-field"><span>Letter spacing, px</span><input type="number" min="-10" max="40" step=".5" disabled={nativeMode} value={mixed("letterSpacing") ? "" : appearance.letterSpacing} placeholder="Mixed" onchange={(event) => numeric(event, -10, 40, letterSpacing => update({ letterSpacing }))} /></label>
+        <label class="caption-field"><span>Word spacing, %</span><input type="number" min="0" max="300" disabled={nativeMode} value={style.wordSpacing ?? ""} placeholder="Original" onchange={(event) => numeric(event, 0, 300, wordSpacing => onUpdate({ wordSpacing }))} /></label>
         <label class="caption-field"><span>Line height</span><input type="number" min=".6" max="3" step=".05" value={style.lineHeight} onchange={(event) => numeric(event, .6, 3, lineHeight => onUpdate({ lineHeight }))} /></label>
-        {#if style.wordSpacing === undefined}<button class="caption-button" onclick={() => onUpdate({ wordSpacing: 100 })}>Use normal spacing</button>{/if}
+        {#if style.wordSpacing === undefined && !nativeMode}<button class="caption-button" onclick={() => onUpdate({ wordSpacing: 100 })}>Use normal spacing</button>{/if}
       </div>
       <p class="caption-help">Word spacing and line height apply to all words.</p>
     </div>
@@ -154,11 +154,11 @@
   {#each effects as effect}
     {#if expanded === effect.key}
       <div class="text-style__expanded" id={`${componentId}-${effect.key}`} role="group" aria-label={effect.label}>
-        <label class="caption-check"><input type="checkbox" checked={appearance[effect.enabled]} aria-checked={mixed(effect.enabled) ? "mixed" : appearance[effect.enabled]} onchange={(event) => update({ [effect.enabled]: event.currentTarget.checked })} /><span>{effect.label}</span></label>
+        <label class="caption-check"><input type="checkbox" disabled={nativeMode && effect.key !== "bubble"} checked={appearance[effect.enabled]} aria-checked={mixed(effect.enabled) ? "mixed" : appearance[effect.enabled]} onchange={(event) => update({ [effect.enabled]: event.currentTarget.checked })} /><span>{effect.label}</span></label>
         <div class="caption-controls">
           {#each effect.fields as raw}
             {@const field = raw as { key: keyof WordAppearance; label: string; type?: string; min?: number; max?: number; step?: number; factor?: number }}
-            <label class="caption-field"><span>{field.label}</span><input type={field.type ?? "number"} min={field.min} max={field.max} step={field.step ?? 1} disabled={!appearance[effect.enabled] && !mixed(effect.enabled)} value={field.type === "color" ? appearance[field.key] as string : mixed(field.key) ? "" : Number(appearance[field.key]) * (field.factor ?? 1)} placeholder={field.type === "color" ? undefined : "Mixed"} onchange={(event) => field.type === "color" ? update({ [field.key]: value(event) }) : numeric(event, field.min ?? 0, field.max ?? 100, next => update({ [field.key]: next }), field.factor ?? 1)} /></label>
+            <label class="caption-field"><span>{field.label}</span><input type={field.type ?? "number"} min={field.min} max={field.max} step={field.step ?? 1} disabled={!nativeMode && !appearance[effect.enabled] && !mixed(effect.enabled)} value={field.type === "color" ? appearance[field.key] as string : mixed(field.key) ? "" : Number(appearance[field.key]) * (field.factor ?? 1)} placeholder={field.type === "color" ? undefined : "Mixed"} onchange={(event) => field.type === "color" ? update({ [field.key]: value(event) }) : numeric(event, field.min ?? 0, field.max ?? 100, next => update({ [field.key]: next }), field.factor ?? 1)} /></label>
           {/each}
         </div>
       </div>

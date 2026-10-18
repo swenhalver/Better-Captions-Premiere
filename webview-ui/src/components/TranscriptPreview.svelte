@@ -11,9 +11,9 @@
     sequenceId: string; captions: CaptionItem[]; currentTime: number; maxChars: number; selectedId?: string | null;
     onSeek: (time: number) => void; onSelect: (id: string) => void;
     onMaxCharsChange: (maxChars: number) => void; onUpdate: (captions: CaptionItem[]) => void;
-    onShowInPremiere?: (time: number) => void; isDemo?: boolean; disabled?: boolean;
+    onShowInPremiere?: (time: number) => void; isDemo?: boolean; disabled?: boolean; groupingDisabled?: boolean;
   }
-  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, onShowInPremiere, isDemo = false, disabled = false }: Props = $props();
+  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, onShowInPremiere, isDemo = false, disabled = false, groupingDisabled = false }: Props = $props();
   let activeId = $derived(captions.find((caption) => currentTime >= caption.startTime && currentTime < caption.endTime)?.id ?? null);
   let selectedContainer = $derived(captions.find((caption) => caption.id === selectedId) ?? captions[0]);
   let selectedRowKey = $state<string | null>(null);
@@ -114,7 +114,7 @@
     if (disabled) return;
     try {
       const next = regroupCaptions(captions, maxChars);
-      commit(next, hasLinked ? `${captionSentenceCount(next)} caption groups updated. Update Program Monitor to show them; timeline clips and keyframes stay in place.` : "Character limit applied. Short captions join where timing, sentences and placement allow.");
+      commit(next, `${captionSentenceCount(next)} caption groups updated.`);
       selectedRowKey = null;
       if (next[0]) onSelect(next[0].id);
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
@@ -139,6 +139,7 @@
 <section class="transcript-editor" aria-label="Transcript editor">
   <div class="transcript-editor__heading"><label class="transcript-editor__search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.5 12.5 4 4"/></svg><input type="search" aria-label="Search captions" placeholder="Search captions" bind:value={query} /></label><button class="caption-button" onclick={undo} disabled={!canUndo} title="Restore the previous transcript edit">Undo edit</button></div>
   {#if captions.length}
+    {#if !groupingDisabled}
     <details class="transcript-editor__grouping">
       <summary>Caption grouping <span>{maxChars} characters · {sentenceCount} groups</span></summary>
       <div class="transcript-editor__grouping-body">
@@ -147,6 +148,7 @@
         <p class="caption-help">{hasLinked ? `${sentenceCount} caption groups across ${captions.length} timeline ${captions.length === 1 ? 'clip' : 'clips'}. Keyframes stay with their clips.` : "Regroup splits or joins captions, respecting sentences, pauses and placement."}</p>
       </div>
     </details>
+    {/if}
     <div class="transcript-editor__workspace">
       <div class="transcript-editor__browse">
 

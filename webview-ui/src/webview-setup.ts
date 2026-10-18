@@ -7,10 +7,10 @@ const HOST_METHODS = [
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession', 'loadStylePresets', 'saveStylePresets',
   'transcribeSequence', 'getFonts', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'writeNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
 ] as const;
-const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation']);
-const TRANSPORT_CODES = new Set(['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE', 'BC_NATIVE_CLOSED']);
+const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionArea', 'readCaptionConsolidation']);
+const TRANSPORT_CODES = new Set(['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE', 'BC_NATIVE_CLOSED', 'BC_OUTPUT_UNCONFIRMED']);
 export interface NativeTransportAvailability {
   version: 1;
   revision: number;
@@ -29,7 +29,7 @@ interface UXPMessageHost {
 }
 interface Message {
   channel?: string; id?: string; method?: string; args?: unknown[];
-  result?: unknown; error?: { message?: string; code?: unknown; method?: unknown; recoverable?: unknown; operationPending?: unknown } | string;
+  result?: unknown; error?: { message?: string; code?: unknown; method?: unknown; recoverable?: unknown; operationPending?: unknown; outputApplied?:unknown } | string;
   type?: string; visible?: boolean;
 }
 function nativeTransport(host: UXPMessageHost, webviewAPI: unknown) {
@@ -68,6 +68,7 @@ function nativeTransport(host: UXPMessageHost, webviewAPI: unknown) {
   }
   function responseError(value: NonNullable<Message['error']>, method: string): Error {
     const message = (typeof value === 'string' ? value : typeof value.message === 'string' ? value.message : 'Premiere caption operation failed.').slice(0, 4000);
+    if (typeof value !== 'string' && value.code === 'BC_OUTPUT_UNCONFIRMED' && value.method === method && value.recoverable === false && typeof value.outputApplied === 'boolean') return Object.assign(transportError(message,value.code,method,false,false),{outputApplied:value.outputApplied});
     if (typeof value === 'string' || typeof value.code !== 'string' || !TRANSPORT_CODES.has(value.code) || value.method !== method || typeof value.recoverable !== 'boolean' || typeof value.operationPending !== 'boolean') return new Error(message);
     return transportError(message, value.code, method, value.recoverable && (value.code !== 'BC_NATIVE_PENDING' || READ_METHODS.has(method)), value.operationPending);
   }

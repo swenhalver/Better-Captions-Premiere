@@ -11,6 +11,8 @@ vm.runInNewContext(transpile(readFileSync(new URL('../webview-ui/src/lib/program
 const { legacyMotionBaseline, legacyMotionIdentity, startProgramMonitorWatcher } = loaded;
 const liveOutput = {};
 vm.runInNewContext(transpile(readFileSync(new URL('../webview-ui/src/lib/live-output.ts', import.meta.url), 'utf8')), { exports: liveOutput });
+const connections = {};
+vm.runInNewContext(transpile(readFileSync(new URL('../webview-ui/src/lib/clip-connections.ts', import.meta.url), 'utf8')), { exports: connections, require: () => ({ MAX_NATIVE_CARRIER_BYTES: 16 * 1024 * 1024 }) });
 const clone = value => JSON.parse(JSON.stringify(value));
 const profile = (signature, x = .99, watchSignature) => ({ signature, ...(watchSignature ? { watchSignature } : {}), samples: [
   { time: .5, scaleX: x, scaleY: .99 }, { time: 1.5, scaleX: x, scaleY: .99 },
@@ -30,7 +32,7 @@ function harness(t, options = {}) {
   // Execute the production controller functions; only Svelte reactivity/mounting are shimmed.
   const extension = `
     export { getState, ensureLegacyBaseline, motionContext, motionPauseReason };
-    appliedSignatures[sessionManager.current.sequenceId] = outputSignature(sessionManager.current);
+    appliedSignatures[outputKey(sessionManager.current)] = outputSignature(sessionManager.current);
     export function baselineCacheSize() { return legacyBaselines.size; }
     export function setTestState(change) {
       if ('hostPanelVisible' in change) hostPanelVisible = change.hostPanelVisible;
@@ -44,13 +46,14 @@ function harness(t, options = {}) {
   const exports = {};
   vm.runInNewContext(transpile(source + extension), {
     exports, document, window: {}, HTMLElement: class {},
-    $state: value => value, $derived: value => value, $effect() {},
+    $state: Object.assign(value => value, { raw: value => value }), $derived: value => value, $effect() {},
     require(name) {
       if (name === 'svelte') return { onMount() {}, tick: async () => {} };
       if (name === './webview-setup') return { initWebview: () => ({ api }) };
       if (name === './lib/session/manager.svelte') return { sessionManager: manager };
       if (name === './lib/program-monitor') return loaded;
       if (name === './lib/live-output') return liveOutput;
+      if (name === './lib/clip-connections') return connections;
       return {};
     }
   });

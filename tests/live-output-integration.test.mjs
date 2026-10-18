@@ -5,6 +5,11 @@ import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import * as nativePanel from '../webview-ui/src/lib/native-effect/panel.ts';
+import { defaultNativeStyle, NATIVE_EFFECT_MATCH_NAME } from '../webview-ui/src/lib/native-effect/contract.ts';
+import * as nativeEncode from '../webview-ui/src/lib/native-effect/encode.ts';
+import { connectionKey } from '../webview-ui/src/lib/clip-connections.ts';
+const { encodeNativeTransportText } = nativeEncode;
 
 const require = createRequire(new URL('../webview-ui/package.json', import.meta.url));
 const ts = require('typescript');
@@ -45,22 +50,24 @@ function transpile(source) {
 
 function fixture(t, options = {}) {
   let time = 0, nextTimer = 0, main, component, mounted, cleanup, availability, liveOptions;
-  const timers = new Map(), modules = new Map(), effects = [], calls = { apply: [], commits: [], saves: [], renders: [], seeks: [], transcript: 0, supersedes: 0 };
+  const timers = new Map(), modules = new Map(), storage = new Map(), effects = [], calls = { apply: [], commits: [], saves: [], renders: [], seeks: [], transcript: 0, supersedes: 0 };
   const info = { id: 'sequence', name: 'Caption verification', projectPath: '/project/test.prproj', frameWidth: 1920, frameHeight: 1080, frameRate: 24, duration: 8, playhead: .25, tracks: [{ index: 2, name: 'Captions', clips: 1, locked: false }] };
   const profile = { signature: 'motion-rendered', watchSignature: 'geometry-rendered', samples: [{ time: .25, scaleX: 1, scaleY: 1 }, { time: 7.75, scaleX: 1, scaleY: 1 }] };
   const document = { hidden: false, visibilityState: 'visible', activeElement: null, hasFocus: () => false, addEventListener() {}, removeEventListener() {} };
   const window = { addEventListener() {}, removeEventListener() {} };
   const clockDate = class extends Date { static now() { return time; } };
   const globals = {
-    document, window, Date: clockDate, HTMLElement: class {}, AbortController,
-    $state: value => value, $derived: Object.assign(value => value, { by: fn => fn }), $effect: fn => effects.push(fn),
-    localStorage: { getItem: () => null, setItem() {} },
+    document, window, Date: clockDate, HTMLElement: class {}, AbortController, structuredClone, TextDecoder, TextEncoder, Uint8Array, DataView, BigInt,
+    $state: Object.assign(value => value, { raw: value => value }), $derived: Object.assign(value => value, { by: fn => fn }), $effect: fn => effects.push(fn),
+    localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) },
     setTimeout: (fn, delay = 0) => { timers.set(++nextTimer, { fn, at: time + delay }); return nextTimer; }, clearTimeout: id => timers.delete(id),
   };
   const watcher = { reset() {}, notifyRevision() {}, setVisible() {}, stop() {}, diagnostics: () => ({ inFlight: false, paused: false }) };
   const api = {
     isDemo: false,
-    getActiveSequenceInfo: async () => clone(info), loadSession: async () => options.stored === null ? null : clone(options.stored ?? saved()),
+    getActiveSequenceInfo: async () => options.getInfo ? options.getInfo() : clone(info), loadSession: async () => options.stored === null ? null : clone(options.stored ?? saved()),
+    readCaptionConnections: options.connections ? async (id, links, optionsRead) => options.connections(id, links, optionsRead) : undefined,
+    writeNativeCaptionDocument: options.writeNative,
     fetchTranscriptJSON: async () => { calls.transcript++; return options.transcript ? JSON.stringify(options.transcript) : null; },
     saveSession: async value => calls.saves.push(clone(value)), getFonts: async () => ['Arial'], startAgentBridge: () => () => {},
     onTransportAvailability(listener) { availability = listener; listener({ state: options.availability ?? 'ready' }); return () => {}; },
@@ -92,6 +99,10 @@ function fixture(t, options = {}) {
     if (name === './webview-setup') return { initWebview: () => ({ api }) };
     const base = resolve(dirname(from), name), filename = [base, base + '.ts'].find(existsSync);
     if (!filename) throw new Error('Unexpected controller dependency: ' + name);
+    // The real native adapter validates plain-object prototypes. Keep it and
+    // its decoder/contract in one Node module realm, matching a real bundle.
+    if (filename === resolve(sourceRoot, 'lib/native-effect/panel.ts')) return nativePanel;
+    if (filename === resolve(sourceRoot, 'lib/native-effect/encode.ts')) return nativeEncode;
     const result = load(filename);
     if (moduleRoute(filename) === 'watcher') return { ...result, startProgramMonitorWatcher: () => watcher };
     if (moduleRoute(filename) === 'live') return { ...result, createLiveOutput: value => { liveOptions = value; return result.createLiveOutput(value); } };
@@ -114,7 +125,7 @@ function fixture(t, options = {}) {
     return { sequenceId: info.id, sequenceName: info.name, transcriptJson: null, captions, style: clone(types.DEFAULT_STYLE), animation: clone(types.DEFAULT_ANIMATION), hasTranscript: true, isLoading: false, currentTime: .25, duration: info.duration, frameRate: info.frameRate, frameWidth: info.frameWidth, frameHeight: info.frameHeight };
   }
   main = execute(script(resolve(sourceRoot, 'main-webview.svelte')) + `
-    export { refreshSequence, updateStyle, changeCharacterLimit, updateCaptions, outputSignature, selectionPauseReason, motionPauseReason, motionContext, ensureLegacyBaseline, getState, recordApplied, recordMonitorApplied, flushSave, setTimelineBusy };
+    export { refreshSequence, transcribe, restoreTranscription, updateStyle, changeCharacterLimit, updateCaptions, outputSignature, selectionPauseReason, motionPauseReason, motionContext, ensureLegacyBaseline, getState, recordApplied, recordMonitorApplied, flushSave, setTimelineBusy, inspectConnections };
     export function setExport(value) { exportButton = value; }
     export function setPhase(value) { outputPhase = value; }
     export function selectForTest(id) { selectedId = id; const s=sessionManager.current,c=s?.captions.find(c=>c.id===id); nativeSelection=c?.clipNodeId?{sequenceId:s.sequenceId,captionId:id,clipNodeId:c.clipNodeId}:null; }
@@ -143,7 +154,7 @@ function fixture(t, options = {}) {
     main.setExport(component); sync();
   }
   t.after(() => cleanup?.());
-  return { main, manager, calls, info, api, caption, saved, parser, realExport, sync, advance, settle,
+  return { main, manager, storage, calls, info, api, caption, saved, parser, realExport, sync, advance, settle,
     context: () => liveOptions.current(), emitAvailability: state => { availability({ state }); sync(); },
     async start() { cleanup = mounted(); await settle(); sync(); return this; },
   };
@@ -253,4 +264,207 @@ test('editing through the actual main and export controllers supersedes an obsol
   assert.equal(h.calls.commits.length, 1); assert.equal(h.calls.commits[0][0].mediaPath, '/render-2.mov');
   assert.equal(h.context().needed, false, JSON.stringify(h.main.getState().runtime)); assert.equal(h.main.getState().runtime.busy.timeline, false);
   assert.equal(h.main.getState().runtime.liveOutput.phase, 'idle');
+});
+
+function connectionSnapshot(info, captions, change = {}) {
+  const ticks = seconds => String(Math.round(seconds * 254016000000));
+  return { ok: true, version: 1, readOnly: true, projectPath: info.projectPath, sequenceId: info.id, nativeSequenceId: info.id,
+    playhead: info.playhead, playheadTicks: ticks(info.playhead), selectedClipNodeIds: [], native: [], warnings: [],
+    legacy: captions.filter(c => c.clipNodeId).map((c, clipIndex) => ({ kind: 'generated-movie', clipNodeId: c.clipNodeId, projectItemId: c.projectItemId, path: c.mediaPath,
+      trackIndex: 2, clipIndex, startTime: c.startTime, endTime: c.endTime, startTicks: ticks(c.startTime), endTicks: ticks(c.endTime), inTicks: '0', outTicks: ticks(c.endTime - c.startTime), selected: false })), ...change };
+}
+
+test('returning to a project reloads its saved sidecar after the other project discarded its in-memory session', async t => {
+  const h = fixture(t, { availability: 'waiting' }), originalPath = h.info.projectPath, reads = [];
+  h.api.loadSession = async () => {
+    reads.push(h.info.projectPath);
+    return h.saved([h.caption(h.info.projectPath === originalPath ? 'project-a' : 'project-b')]);
+  };
+  await h.start(); assert.equal(h.manager.current.captions[0].id, 'project-a');
+  h.info.projectPath = '/project/copy.prproj'; await h.main.refreshSequence(); h.sync();
+  assert.equal(h.manager.current.captions[0].id, 'project-b'); assert.equal(h.manager.current.projectPath, '/project/copy.prproj');
+  h.info.projectPath = originalPath; await h.main.refreshSequence(); h.sync();
+  assert.deepEqual(reads, [originalPath, '/project/copy.prproj', originalPath]);
+  assert.equal(h.manager.current.captions[0].id, 'project-a'); assert.equal(h.manager.current.captions[0].clipNodeId, 'clip-project-a');
+  assert.equal(h.manager.current.projectPath, originalPath); assert.equal(h.context().needed, false); assert.equal(h.calls.apply.length, 0);
+});
+
+test('same-GUID project copies cannot inherit an applied signature for an identical but unlinked transcript', async t => {
+  const h = fixture(t, { availability: 'waiting' }), originalPath = h.info.projectPath;
+  h.api.loadSession = async () => h.saved([h.caption('cue', 'Identical saved words', 0, h.info.projectPath === originalPath)]);
+  await h.start(); const appliedContext = h.context(); assert.equal(appliedContext.needed, false);
+  h.info.projectPath = '/project/copy.prproj'; await h.main.refreshSequence(); h.sync();
+  assert.equal(h.manager.current.captions[0].clipNodeId, undefined);
+  assert.notEqual(h.context().sequenceId, appliedContext.sequenceId, 'Automatic output identity includes the project path');
+  assert.equal(h.context().needed, true); assert.equal(h.main.selectionPauseReason(), 'waiting-for-premiere');
+  await h.advance(5000); assert.equal(h.calls.apply.length, 0);
+});
+
+test('same-GUID project transitions invalidate a prior native selection even when copied caption nodes match', async t => {
+  const h = fixture(t, { availability: 'waiting' }); await h.start(); h.main.selectForTest('cue'); h.sync();
+  assert.equal(h.main.getState().runtime.nativeSelection.clipNodeId, 'clip-cue');
+  h.info.projectPath = '/project/copied.prproj'; await h.main.refreshSequence(); h.sync();
+  assert.equal(h.manager.current.captions[0].clipNodeId, 'clip-cue');
+  assert.equal(h.main.getState().runtime.nativeSelection, null, 'Native selection proof must come from the current project');
+});
+
+test('a previous-transcription backup from another project cannot replace a same-GUID project copy', async t => {
+  const h = fixture(t, { availability: 'waiting' }), firstPath = h.info.projectPath;
+  h.api.loadSession = async () => h.saved([h.caption('unlinked', h.info.projectPath === firstPath ? 'Original project A' : 'Original project B', 0, false)]);
+  h.api.transcribeSequence = async () => ({ segments: [{ words: [{ text: 'Retranscribed', start: 0, duration: .3 }] }] });
+  await h.start(); await h.main.transcribe(); h.sync();
+  assert.equal(h.manager.current.captions[0].text, 'Retranscribed');
+  h.info.projectPath = '/project/copied.prproj'; await h.main.refreshSequence(); h.sync();
+  h.main.restoreTranscription(); h.sync();
+  assert.equal(h.manager.current.projectPath, h.info.projectPath); assert.equal(h.manager.current.captions[0].text, 'Original project B');
+});
+
+test('reconnecting a stale legacy node saves the repaired link once without rendering or changing words and Motion', async t => {
+  const requested = [], h = fixture(t, { connections: async (_id, links) => {
+    requested.push(clone(links));
+    const result = connectionSnapshot(h.info, h.manager.current.captions);
+    result.legacy[0].clipNodeId = 'reconnected-node';
+    return result;
+  } });
+  const original = h.saved(); h.api.loadSession = async () => clone(original);
+  await h.start(); await h.main.flushSave(); h.sync();
+  assert.equal(requested[0][0].clipNodeId, 'clip-cue'); assert.equal(h.manager.current.captions[0].clipNodeId, 'reconnected-node');
+  assert.deepEqual({ ...clone(h.manager.current.captions[0]), clipNodeId: 'clip-cue' }, original.captions[0]);
+  assert.equal(h.calls.saves.length, 1); assert.equal(h.calls.saves[0].captions[0].clipNodeId, 'reconnected-node');
+  await h.main.inspectConnections(); await h.advance(5000);
+  assert.equal(h.calls.saves.length, 1, 'Unchanged polling never rewrites the saved caption session');
+  assert.equal(h.context().needed, false); assert.equal(h.calls.renders.length, 0); assert.equal(h.calls.apply.length, 0); assert.equal(h.calls.commits.length, 0);
+});
+
+test('a slow reconnect result cannot repair old links over a newer style edit', async t => {
+  const h = fixture(t); await h.start();
+  const pending = deferred(), reply = connectionSnapshot(h.info, h.manager.current.captions); reply.legacy[0].clipNodeId = 'obsolete-node';
+  h.api.readCaptionConnections = async () => pending.promise;
+  const inspection = h.main.inspectConnections(); await h.settle();
+  h.main.updateStyle({ textColor: '#00FF00' }); h.sync();
+  pending.resolve(reply); await inspection; await h.main.flushSave();
+  assert.equal(h.manager.current.captions[0].clipNodeId, 'clip-cue'); assert.equal(h.manager.current.style.textColor, '#00FF00');
+  assert.equal(h.context().needed, true); assert.equal(h.calls.saves.length, 1); assert.equal(h.calls.saves[0].style.textColor, '#00FF00');
+});
+
+test('late reconnect replies cannot replace the session after a project or sequence transition', async t => {
+  for (const transition of ['project', 'sequence']) {
+    const h = fixture(t, { availability: 'waiting' }); await h.start();
+    h.emitAvailability('ready');
+    const old = connectionSnapshot(h.info, h.manager.current.captions), pending = deferred(); old.legacy[0].clipNodeId = 'obsolete-node';
+    let first = true;
+    h.api.readCaptionConnections = async () => { if (first) { first = false; return pending.promise; } return connectionSnapshot(h.info, h.manager.current.captions); };
+    const inspection = h.main.inspectConnections(); await h.settle();
+    if (transition === 'project') h.info.projectPath = '/project/another.prproj'; else h.info.id = 'another-sequence';
+    h.api.loadSession = async () => h.saved([h.caption('new-context')]);
+    await h.main.refreshSequence(); h.sync();
+    pending.resolve(old); await inspection;
+    assert.equal(h.manager.current.sequenceId, h.info.id); assert.equal(h.manager.current.projectPath, h.info.projectPath);
+    assert.equal(h.manager.current.captions[0].id, 'new-context'); assert.equal(h.manager.current.captions[0].clipNodeId, 'clip-new-context');
+    assert.equal(h.calls.apply.length, 0); assert.equal(h.calls.saves.length, 0);
+  }
+});
+
+test('loading a GUID-equivalent saved sidecar restores its current sequence identity without importing another transcript', async t => {
+  const h = fixture(t); h.info.id = 'f18a14ea-2be5-4393-a113-c1b43bfcab1e';
+  h.api.loadSession = async () => ({ ...h.saved(), sequenceId: '{' + h.info.id.toUpperCase() + '}' });
+  await h.start();
+  assert.equal(h.manager.current.sequenceId, h.info.id); assert.equal(h.manager.current.captions[0].text, 'Alpha beta gamma delta epsilon zeta');
+  assert.equal(h.calls.transcript, 0); assert.equal(h.context().needed, false); assert.equal(h.calls.apply.length, 0);
+});
+
+function nativeConnection(info) {
+  const ticks = seconds => String(Math.round(seconds * 254016000000));
+  const document = { version: 1, animationAuthority: 'premiere-effect', sequenceId: info.id, timeOriginSeconds: 0, style: defaultNativeStyle(),
+    captions: [{ id: 'native-sentence', start: 0, end: .7, manualSplit: true, words: [{ text: 'Native', start: 0, end: .3, endOfSentence: false }, { text: 'words', start: .4, end: .7, endOfSentence: true }] }] };
+  const entry = { kind: 'native-effect', clipNodeId: 'native-layer', projectItemId: 'native-item', trackIndex: 2, clipIndex: 0, startTicks: '0', endTicks: ticks(8), inTicks: '0', outTicks: ticks(8), selected: true,
+    locator: { projectPath: info.projectPath, sequenceId: '{' + info.id.toUpperCase() + '}', clipNodeId: 'native-layer', trackIndex: 2, clipIndex: 0, componentIndex: 1, documentParamIndex: 6 },
+    matchName: 'AE.' + NATIVE_EFFECT_MATCH_NAME, connectionRevision: 'native-connection-1', documentText: encodeNativeTransportText(document) };
+  function revision() {
+    return JSON.stringify({ projectPath: entry.locator.projectPath, sequenceId: entry.locator.sequenceId, clipNodeId: entry.clipNodeId, adjustmentLayer: true,
+      start: entry.startTicks, end: entry.endTicks, inPoint: entry.inTicks, outPoint: entry.outTicks, components: ['AE.ADBE Motion', entry.matchName], documentIndex: entry.locator.documentParamIndex, documentText: entry.documentText });
+  }
+  entry.revision = revision();
+  return { entry, document, revision };
+}
+
+test('real native adoption and a supported style update bypass legacy sidecars and transparent movie exports', async t => {
+  let native; const writes = [], h = fixture(t, { stored: null,
+    connections: async (_id, _links, options) => {
+      const { documentText, revision, ...summary } = native.entry;
+      return connectionSnapshot(h.info, [], { nativeSequenceId: native.entry.locator.sequenceId, selectedClipNodeIds: ['native-layer'], native: [options.includeDocuments ? clone(native.entry) : summary] });
+    },
+    writeNative: async (snapshot, documentText, sequenceId) => {
+      writes.push({ snapshot: clone(snapshot), documentText, sequenceId });
+      native.entry.documentText = documentText; native.entry.revision = native.revision();
+      return { ok: true, readbackVerified: true, documentText, revision: native.entry.revision };
+    },
+  });
+  h.info.id = 'f18a14ea-2be5-4393-a113-c1b43bfcab1e'; native = nativeConnection(h.info);
+  await h.start();
+  assert.equal(h.manager.current.nativeClipId, 'native-layer'); assert.equal(h.manager.current.captions[0].text, 'Native words');
+  assert.equal(h.manager.current.captions[0].manualSplit, true); assert.equal(h.manager.current.captions[0].clipNodeId, undefined);
+  const recovered = { ...nativePanel.rehydrateNativePanel(native.entry, h.info).session, projectPath: h.info.projectPath, nativeClipId: 'native-layer' };
+  assert.deepEqual(JSON.parse(h.main.outputSignature(h.manager.current)), JSON.parse(h.main.outputSignature(recovered)), 'Native restore retains semantically identical render inputs');
+  assert.equal(h.context().needed, false); assert.equal(writes.length, 0); assert.equal(h.calls.saves.length, 0); assert.equal(h.calls.transcript, 0);
+  h.main.updateStyle({ activeWord: { color: '#FF0000' } }); h.sync(); await h.advance(400); await h.settle();
+  assert.equal(writes.length, 1, JSON.stringify(h.main.getState().runtime)); assert.equal(writes[0].sequenceId, h.info.id, 'Native API receives its real GUID, never the project-scoped output key');
+  assert.equal(writes[0].snapshot.locator.clipNodeId, 'native-layer');
+  const result = nativePanel.decodeNativePanelDocument(writes[0].documentText, h.info.id);
+  assert.deepEqual(result.style.current.color, { r: 1, g: 0, b: 0, a: native.document.style.current.color.a });
+  assert.deepEqual(result.captions, native.document.captions); assert.deepEqual(result.style.upcoming, native.document.style.upcoming);
+  await h.advance(5000); assert.equal(writes.length, 1); assert.equal(h.context().needed, false);
+  assert.equal(h.calls.saves.length, 0); assert.equal(h.calls.apply.length, 0); assert.equal(h.calls.renders.length, 0); assert.equal(h.calls.commits.length, 0);
+});
+
+test('connected native summaries do not reread full document carriers until the refresh interval even without a header revision', async t => {
+  let native; const reads = [], h = fixture(t, { stored: null, connections: async (_id, _links, options) => {
+    reads.push(options.includeDocuments);
+    const { documentText, revision, ...summary } = native.entry;
+    return connectionSnapshot(h.info, [], { nativeSequenceId: native.entry.locator.sequenceId, selectedClipNodeIds: ['native-layer'], native: [options.includeDocuments ? clone(native.entry) : summary] });
+  } });
+  h.info.id = 'f18a14ea-2be5-4393-a113-c1b43bfcab1e'; native = nativeConnection(h.info);
+  await h.start(); assert.deepEqual(reads, [true]);
+  await h.main.inspectConnections(); await h.main.inspectConnections();
+  assert.deepEqual(reads, [true, false, false]);
+  await h.advance(29999); assert.equal(reads.filter(Boolean).length, 1);
+  await h.advance(1); await h.main.inspectConnections();
+  assert.equal(reads.filter(Boolean).length, 2); assert.equal(h.calls.saves.length, 0); assert.equal(h.calls.apply.length, 0);
+});
+
+test('style-only project preferences survive another project edit and restore without a caption sidecar', async t => {
+  const h = fixture(t, { stored: null }), originalPath = h.info.projectPath, firstKey = connectionKey(h.info);
+  await h.start(); assert.equal(h.manager.current.captions.length, 0);
+  h.main.updateStyle({ fontSize: 79, activeWord: { bubbleColor: '#123456' } }); await h.main.flushSave();
+  let cached = JSON.parse(h.storage.get('better-captions-sessions'));
+  assert.equal(cached[firstKey].style.fontSize, 79); assert.equal(cached[firstKey].style.activeWord.bubbleColor, '#123456');
+  h.info.projectPath = '/project/style-only-copy.prproj'; await h.main.refreshSequence(); h.sync();
+  const secondKey = connectionKey(h.info);
+  h.main.updateStyle({ fontSize: 92 }); await h.main.flushSave();
+  cached = JSON.parse(h.storage.get('better-captions-sessions'));
+  assert.equal(cached[firstKey].style.fontSize, 79, 'Saving project B must not delete project A’s cached style');
+  assert.equal(cached[secondKey].style.fontSize, 92);
+  h.info.projectPath = originalPath; await h.main.refreshSequence(); h.sync();
+  assert.equal(h.manager.current.captions.length, 0, 'No sidecar transcript was used to restore the style');
+  assert.equal(h.manager.current.style.fontSize, 79); assert.equal(h.manager.current.style.activeWord.bubbleColor, '#123456');
+  assert.equal(h.calls.apply.length, 0); assert.equal(h.calls.renders.length, 0);
+});
+
+test('native adoption and supported style edits never overwrite the sequence’s cached legacy style preferences', async t => {
+  const h = fixture(t, { stored: null }); h.info.id = 'f18a14ea-2be5-4393-a113-c1b43bfcab1e';
+  await h.start(); h.main.updateStyle({ fontSize: 79 }); await h.main.flushSave();
+  const cacheBefore = h.storage.get('better-captions-sessions'), savesBefore = h.calls.saves.length;
+  const native = nativeConnection(h.info);
+  native.document.style.upcoming.fontSize = 96; native.entry.documentText = encodeNativeTransportText(native.document); native.entry.revision = native.revision();
+  h.api.readCaptionConnections = async (_id, _links, options) => {
+    const { documentText, revision, ...summary } = native.entry;
+    return connectionSnapshot(h.info, [], { nativeSequenceId: native.entry.locator.sequenceId, selectedClipNodeIds: ['native-layer'], native: [options.includeDocuments ? clone(native.entry) : summary] });
+  };
+  await h.main.inspectConnections(); h.sync();
+  assert.equal(h.manager.current.nativeClipId, 'native-layer'); assert.equal(h.manager.current.style.fontSize, 96);
+  h.main.updateStyle({ activeWord: { color: '#00FF00' } }); h.sync(); await h.main.flushSave();
+  assert.equal(h.storage.get('better-captions-sessions'), cacheBefore, 'Native display styles must not replace the legacy cache entry');
+  assert.equal(JSON.parse(cacheBefore)[connectionKey(h.info)].style.fontSize, 79);
+  assert.equal(h.calls.saves.length, savesBefore, 'Native edits also bypass the legacy caption sidecar');
+  assert.equal(h.calls.apply.length, 0); assert.equal(h.calls.renders.length, 0);
 });

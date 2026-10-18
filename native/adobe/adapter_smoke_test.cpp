@@ -3,6 +3,7 @@
 #include "AE_Effect.h"
 #include "AE_EffectCB.h"
 #include "caption_arbitrary.hpp"
+#include "parameters.hpp"
 #include <dlfcn.h>
 #include <array>
 #include <iostream>
@@ -40,7 +41,13 @@ int main(int argc,char** argv){try{
  |PF_OutFlag_CUSTOM_UI
 #endif
  ),"unexpected flags");check(out.my_version==PF_VERSION(0,1,0,PF_Stage_DEVELOP,1),"version mismatch");
- std::array<PF_ParamDef,8> values{};std::array<PF_ParamDef*,8> params{};for(int i=0;i<8;++i)params[i]=&values[i];
+ using namespace better_captions::adobe::parameters;
+ std::array<PF_ParamDef,Count> values{};std::array<PF_ParamDef*,Count> params{};for(int i=0;i<Count;++i)params[i]=&values[i];
+ for(int first:{CurrentSize,SpokenSize,UpcomingSize}){
+  values[first].u.fs_d.value=100;values[first+1].u.cd.value={255,255,255,255};values[first+2].u.fs_d.value=100;
+  values[first+3].u.pd.value=1;values[first+4].u.cd.value={255,255,255,255};
+  for(int offset:{5,6,7})values[first+offset].u.fs_d.value=100;
+ }
  const int width=640,height=360;std::vector<PF_Pixel8> source(width*height),pixels(width*height);
  for(auto& p:source){p.alpha=255;p.red=10;p.green=20;p.blue=30;}
  values[0].u.ld.data=source.data();values[0].u.ld.width=width;values[0].u.ld.height=height;values[0].u.ld.rowbytes=width*4;
@@ -53,6 +60,10 @@ int main(int argc,char** argv){try{
  check(changed>100,"caption not visible");auto first=pixels;
  check(main(PF_Cmd_RENDER,&in,&out,params.data(),&output,nullptr)==0,"repeat render failed");
  check(std::equal(pixels.begin(),pixels.end(),first.begin(),[](auto a,auto b){return a.alpha==b.alpha&&a.red==b.red&&a.green==b.green&&a.blue==b.blue;}),"render not deterministic");
+ values[CurrentOpacity].u.fs_d.value=0;
+ check(main(PF_Cmd_RENDER,&in,&out,params.data(),&output,nullptr)==0,"current-word opacity render failed");
+ check(!std::equal(pixels.begin(),pixels.end(),first.begin(),[](auto a,auto b){return a.red==b.red&&a.green==b.green&&a.blue==b.blue;}),"current-word native opacity failed to affect pixels");
+ values[CurrentOpacity].u.fs_d.value=100;
  values[2].u.fs_d.value=220;check(main(PF_Cmd_RENDER,&in,&out,params.data(),&output,nullptr)==0,"width render failed");
  check(!std::equal(pixels.begin(),pixels.end(),first.begin(),[](auto a,auto b){return a.red==b.red&&a.green==b.green&&a.blue==b.blue;}),"width failed to change rendered layout");
  auto center=[](const std::vector<PF_Pixel8>& frame,int w,int h){double x=0,y=0,n=0;for(int row=0;row<h;++row)for(int col=0;col<w;++col){auto p=frame[row*w+col];if(p.red!=10||p.green!=20||p.blue!=30){x+=col;y+=row;++n;}}check(n>100,"No caption pixels for downsample probe");return std::array<double,2>{x/n,y/n};};

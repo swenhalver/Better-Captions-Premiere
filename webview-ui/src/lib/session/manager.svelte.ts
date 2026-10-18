@@ -11,6 +11,7 @@ import {
 } from "../types";
 import { parseTranscript } from "../transcript/parser";
 import { restoreSessionStyle } from './style';
+import { connectionKey } from '../clip-connections';
 
 const STORAGE_KEY = "better-captions-sessions";
 
@@ -22,6 +23,7 @@ function reactiveSession(value: SessionState): SessionState {
 function createDefaultSession(info: SequenceInfo): SessionState {
   return reactiveSession({
     sequenceId: info.id,
+    projectPath: info.projectPath,
     sequenceName: info.name,
     transcriptJson: null,
     captions: [],
@@ -49,9 +51,12 @@ function loadPersistedSessions(): Map<string, { style: StyleConfig; animation: A
 }
 
 function persistSessions(sessions: Map<string, SessionState>) {
-  const serializable: Record<string, { style: StyleConfig; animation: AnimationConfig }> = {};
+  // A different project's sessions are intentionally absent from the live map.
+  // Keep their preferences when saving this project's current sessions.
+  const serializable: Record<string, { style: StyleConfig; animation: AnimationConfig }> = Object.fromEntries(loadPersistedSessions());
   for (const [id, session] of sessions) {
-    serializable[id] = {
+    if (session.nativeClipId) continue;
+    serializable[connectionKey({ id, projectPath: session.projectPath })] = {
       style: session.style,
       animation: session.animation,
     };
@@ -66,6 +71,7 @@ function persistSessions(sessions: Map<string, SessionState>) {
 class SessionManager {
   sessions = new SvelteMap<string, SessionState>();
   activeSequenceId = $state<string | null>(null);
+  private projectPath: string | null = null;
   saveHandler: ((session:SessionState)=>void) | null = null;
   persist() { persistSessions(this.sessions);const current=this.current;if(current)this.saveHandler?.(current); }
   restore(session:SessionState) { this.sessions.set(session.sequenceId,reactiveSession({...session,style:restoreSessionStyle(session.style),animation:{...DEFAULT_ANIMATION,...session.animation},isLoading:false}));this.activeSequenceId=session.sequenceId; }
@@ -81,10 +87,18 @@ class SessionManager {
   }
 
   activateSequence(info: SequenceInfo) {
+    // Sequence GUIDs can survive Save As or project copies. Do not carry the
+    // previous project's clip identities or edits into that new context.
+    const projectPath = info.projectPath ?? '';
+    if (this.projectPath !== null && this.projectPath !== projectPath) {
+      this.sessions.clear();
+      this.activeSequenceId = null;
+    }
+    this.projectPath = projectPath;
     if (!this.sessions.has(info.id)) {
       const session = createDefaultSession(info);
       const persisted = loadPersistedSessions();
-      const saved = persisted.get(info.id);
+      const saved = persisted.get(connectionKey(info)) ?? (!info.projectPath ? persisted.get(info.id) : undefined);
       if (saved) {
         session.style = restoreSessionStyle(saved.style);
         session.animation = { ...DEFAULT_ANIMATION, ...saved.animation };
@@ -93,6 +107,7 @@ class SessionManager {
     } else {
       const session = this.sessions.get(info.id)!;
       session.sequenceName = info.name;
+      session.projectPath = info.projectPath;
       session.duration = info.duration;
       session.frameRate = info.frameRate;
       session.frameWidth = info.frameWidth;

@@ -5,10 +5,19 @@ const { ensureFolder, privateRoot, readJSON, writeJSON, randomId } = require('./
 const native = require('./transcript.js');
 const { localPath, parentPath } = require('./paths.js');
 const key = id => String(id).replace(/[{}]/g, '').toLowerCase();
+const guid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
+function sameSavedSequence(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const canonical = value => {
+    const plain = value.startsWith('{') && value.endsWith('}') ? value.slice(1, -1) : value;
+    return guid.test(plain) ? plain.toLowerCase() : value;
+  };
+  return canonical(a) === canonical(b);
+}
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
-const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation']);
-const SERVICE_READS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
+const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionArea', 'readCaptionConsolidation']);
+const SERVICE_READS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 
 function createHostAPI(options = {}) {
   const contexts = new Map();
@@ -46,13 +55,13 @@ function createHostAPI(options = {}) {
       drain();
     });
   }
-  function serial(method, run) {
+  function serial(method, run, context) {
     if (disposed) return Promise.reject(transportError('The Better Captions plugin is closed.', 'BC_NATIVE_CLOSED', method, false, false));
     if (unresolved) return Promise.reject(waitingError(method));
     if (waiting.length >= 8) return Promise.reject(transportError('Better Captions is busy. Wait for the current operation before requesting more native work.', 'BC_NATIVE_BUSY', method, true, false));
     const timeout = READ_METHODS.has(method) ? readTimeout : method === 'transcribeSequence' ? 60 * 60 * 1000 : ['finishCaption','applyCaptionClips','applyConsolidatedCaption'].includes(method) ? 30 * 60 * 1000 : 60000;
     return new Promise((resolve, reject) => {
-      const job = { method, run, resolve, reject, timer: null, deadline: Date.now() + timeout };
+      const job = { method, run, context, resolve, reject, timer: null, deadline: Date.now() + timeout };
       job.timer = setTimeout(() => {
         if (active === job) {
           unresolved = job;
@@ -72,12 +81,12 @@ function createHostAPI(options = {}) {
     if (!project) throw new Error('Open a Premiere project first.');
     const sequence = id ? (await project.getSequences()).find(item => key(item.guid.toString()) === key(id)) : await project.getActiveSequence();
     if (!sequence) throw new Error('The requested sequence is no longer open. Refresh Better Captions.');
-    const captured = contexts.get(key(sequence.guid.toString()));
-    if (captured && captured.projectPath !== project.path) throw new Error('The Premiere project location changed. Reopen Better Captions.');
+    const idKey=key(sequence.guid.toString()),expected=active?.context&&key(active.context.id)===idKey?active.context:contexts.get(idKey);
+    if (expected && expected.projectPath !== project.path) throw new Error('The Premiere project location changed before this request completed. Refresh Better Captions.');
     return { project, sequence };
   }
   function captured(id = currentId) {
-    const context = contexts.get(key(id));
+    const context = active?.context&&key(active.context.id)===key(id)?active.context:contexts.get(key(id));
     if (!context) throw new Error('Refresh the sequence in Better Captions first.');
     return context;
   }
@@ -139,7 +148,11 @@ function createHostAPI(options = {}) {
         if (output) {
           const response = await readJSON(output, 30 * 1024 * 1024);
           if (!record(response) || response.version !== 1 || response.id !== id || response.sequenceId !== context.id || response.projectPath !== context.projectPath) throw new Error('The caption render service returned a mismatched response.');
-          if (typeof response.error === 'string') throw new Error(response.error);
+          if (typeof response.error === 'string') {
+            const failure = new Error(response.error);
+            if (response.code === 'BC_OUTPUT_UNCONFIRMED' && response.recoverable === false && typeof response.outputApplied === 'boolean') Object.assign(failure, {code:response.code,method:active?.method,recoverable:false,operationPending:false,outputApplied:response.outputApplied});
+            throw failure;
+          }
           if (!SERVICE_READS.has(action)) await sequenceContext(context.id);
           return response.result;
         }
@@ -171,8 +184,6 @@ function createHostAPI(options = {}) {
       const rect = await settings.getVideoFrameRect();
       const timebase = Number(await sequence.getTimebase()), duration = (await sequence.getEndTime()).seconds;
       const playhead = (await sequence.getPlayerPosition()).seconds;
-      const previous = contexts.get(id);
-      if (previous && previous.projectPath !== project.path) throw new Error('The project location changed. Reopen Better Captions.');
       const tracks = [];
       const trackCount = await sequence.getVideoTrackCount();
       for (let index = 0; index < trackCount; index++) {
@@ -193,11 +204,12 @@ function createHostAPI(options = {}) {
       const folder = await sessionFolder(id);
       let file; try { file = await folder.getEntry('captions.better-captions.json'); } catch { return null; }
       const saved = await readJSON(file);
-      if (saved.sequenceId !== context.id) throw new Error('The saved captions belong to another sequence.');
-      return saved;
+      if (!record(saved) || !sameSavedSequence(saved.sequenceId, context.id)) throw new Error('The saved captions belong to another sequence.');
+      return { ...saved, sequenceId: context.id };
     },
     async saveSession(session) {
       if (!record(session) || typeof session.sequenceId !== 'string') throw new Error('Invalid caption session.');
+      if(session.projectPath!==undefined&&session.projectPath!==captured(session.sequenceId).projectPath)throw new Error('The saved caption session belongs to another project path.');
       await sequenceContext(session.sequenceId);
       const folder = await sessionFolder(session.sequenceId);
       await writeJSON(folder, 'captions.better-captions.json', session);
@@ -246,6 +258,14 @@ function createHostAPI(options = {}) {
       return result;
     },
     async readTimeline(captions, id = currentId) { return backend('readTimeline', [captions], id); },
+    async readCaptionConnections(id=currentId,knownLinks=[],options={}) {
+      if(!Array.isArray(knownLinks)||knownLinks.length>10000||!record(options)||Object.keys(options).some(name=>name!=='includeDocuments')||options.includeDocuments!==undefined&&typeof options.includeDocuments!=='boolean')throw new Error('Invalid caption discovery arguments.');
+      return backend('readCaptionConnections',[knownLinks,{includeDocuments:options.includeDocuments!==false}],id);
+    },
+    async writeNativeCaptionDocument(snapshot,documentText,id=currentId) {
+      if(!record(snapshot)||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024||typeof documentText!=='string'||(documentText.length+1)*2>16*1024*1024)throw new Error('Invalid bounded native caption update.');
+      return backend('writeNativeCaptionDocument',[snapshot,documentText],id);
+    },
     async selectCaptionClip(caption, id = currentId) { return backend('selectCaptionClip', [caption], id); },
     async readCaptionMotion(captions, id = currentId, options) { return backend('readCaptionMotion', options?.includeDiagnostics === true ? [captions, { includeDiagnostics: true }] : [captions], id); },
     async readCaptionGeometry(captions, id = currentId) { return backend('readCaptionGeometry', [captions], id); },
@@ -274,9 +294,19 @@ function createHostAPI(options = {}) {
     api[method] = (...args) => {
       // Resolve implicit identities when requested, before a queued refresh
       // can change currentId. File saves already carry their own identity.
-      if (['fetchTranscriptJSON', 'transcribeSequence', 'loadSession'].includes(method) && args[0] === undefined) args[0] = currentId;
+      if (['fetchTranscriptJSON', 'transcribeSequence', 'loadSession', 'readCaptionConnections'].includes(method) && args[0] === undefined) args[0] = currentId;
+      if (method==='readCaptionConnections') { args[1]=JSON.parse(JSON.stringify(args[1]??[]));args[2]=JSON.parse(JSON.stringify(args[2]??{})); }
+      if (method==='writeNativeCaptionDocument') { if(args[2]===undefined)args[2]=currentId;args[0]=JSON.parse(JSON.stringify(args[0]??null)); }
+      if (method==='saveSession')args[0]=JSON.parse(JSON.stringify(args[0]??null));
       if (['showInPremiere', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'selectCaptionClip', 'readCaptionArea', 'editCaptionArea'].includes(method) && args[1] === undefined) args[1] = currentId;
-      return serial(method, () => nativeAPI[method](...args));
+      let id=currentId;
+      if(['fetchTranscriptJSON','transcribeSequence','loadSession','readCaptionConnections'].includes(method))id=args[0];
+      else if(method==='saveSession')id=args[0]?.sequenceId;
+      else if(['showInPremiere','readTimeline','readCaptionMotion','readCaptionGeometry','readCaptionSelection','selectCaptionClip','readCaptionArea','editCaptionArea','beginCaption','readCaptionConsolidation'].includes(method))id=args[1];
+      else if(['preflightCaptionClips','applyCaptionClips','writeNativeCaptionDocument'].includes(method))id=args[2];
+      else if(['saveCaptionFrames','finishCaption','applyConsolidatedCaption'].includes(method))id=args[3];
+      const context=['getActiveSequenceInfo','loadStylePresets','saveStylePresets'].includes(method)?null:contexts.get(key(id??currentId));
+      return serial(method, () => nativeAPI[method](...args),context);
     };
   }
   // These observers inspect only this instance's lane; they never issue native

@@ -8,6 +8,7 @@
 #include "../macos/caption_rasterizer.hpp"
 #include "caption_arbitrary.hpp"
 #include "render_style.hpp"
+#include "parameters.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -21,10 +22,22 @@
 #endif
 
 namespace {
-// Disk IDs are permanent even if UI ordering changes. This prototype is demo-only.
-enum Param { Input, Position, Width, Height, MaxChars, Size, TextColor, Transcript, Count };
-enum DiskId { PositionId=1, WidthId=2, HeightId=3, MaxCharsId=4, SizeId=5, ColorId=6, TranscriptId=7 };
+using namespace better_captions::adobe::parameters;
 better_captions::Document demo();
+PF_Err wordParameters(PF_InData* in_data,const char* name,int firstId,int groupId,int endId) {
+ PF_ParamDef def{};
+ PF_ADD_TOPICX(name,0,groupId);
+ PF_ADD_FLOAT_SLIDERX("Size, %",1,400,25,200,100,PF_Precision_TENTHS,0,0,firstId);
+ std::memset(&def,0,sizeof(def));PF_ADD_COLOR("Text tint",255,255,255,firstId+1);
+ PF_ADD_FLOAT_SLIDERX("Opacity, %",0,100,0,100,100,PF_Precision_TENTHS,0,0,firstId+2);
+ PF_ADD_POPUPX("Word bubble",3,1,"Document|On|Off",0,firstId+3);
+ std::memset(&def,0,sizeof(def));PF_ADD_COLOR("Bubble tint",255,255,255,firstId+4);
+ PF_ADD_FLOAT_SLIDERX("Bubble opacity, %",0,100,0,100,100,PF_Precision_TENTHS,0,0,firstId+5);
+ PF_ADD_FLOAT_SLIDERX("Bubble padding, %",0,400,0,200,100,PF_Precision_TENTHS,0,0,firstId+6);
+ PF_ADD_FLOAT_SLIDERX("Bubble corners, %",0,400,0,200,100,PF_Precision_TENTHS,0,0,firstId+7);
+ std::memset(&def,0,sizeof(def));PF_END_TOPIC(endId);
+ return PF_Err_NONE;
+}
 PF_Err parameters(PF_InData* in_data, PF_OutData* out_data) {
  PF_ParamDef def{};
  PF_ADD_POINT("Position",50,90,FALSE,PositionId);
@@ -36,12 +49,28 @@ PF_Err parameters(PF_InData* in_data, PF_OutData* out_data) {
  std::memset(&def,0,sizeof(def));
  auto defaultDocument=better_captions::adobe::make(in_data,better_captions::encode(demo()));
  PF_ADD_ARBITRARY2("Caption document (experimental)",0,0,PF_ParamFlag_CANNOT_TIME_VARY,PF_PUI_NO_ECW_UI,defaultDocument,TranscriptId,nullptr);
+ PF_Err err=wordParameters(in_data,"Current word",CurrentSizeId,CurrentGroupId,CurrentEndId);if(err)return err;
+ err=wordParameters(in_data,"Previously spoken words",SpokenSizeId,SpokenGroupId,SpokenEndId);if(err)return err;
+ err=wordParameters(in_data,"Upcoming words",UpcomingSizeId,UpcomingGroupId,UpcomingEndId);if(err)return err;
  out_data->num_params=Count;
 #if BC_ENABLE_CUSTOM_UI_PROBE
  return better_captions::adobe::ui_probe::registerUI(in_data);
 #else
  return PF_Err_NONE;
 #endif
+}
+better_captions::adobe::NativeWordControls wordControls(PF_ParamDef* params[],int first) {
+ auto color=[](const PF_Pixel& value){return better_captions::Color{value.red/255.0,value.green/255.0,value.blue/255.0,1};};
+ better_captions::adobe::NativeWordControls result;
+ result.sizePercent=params[first]->u.fs_d.value;
+ result.textTint=color(params[first+1]->u.cd.value);
+ result.opacityPercent=params[first+2]->u.fs_d.value;
+ result.bubbleMode=params[first+3]->u.pd.value;
+ result.bubbleTint=color(params[first+4]->u.cd.value);
+ result.bubbleOpacityPercent=params[first+5]->u.fs_d.value;
+ result.paddingPercent=params[first+6]->u.fs_d.value;
+ result.radiusPercent=params[first+7]->u.fs_d.value;
+ return result;
 }
 better_captions::Document demo() {
  using namespace better_captions;
@@ -69,8 +98,12 @@ PF_Err render(PF_InData* in_data, PF_ParamDef* params[], PF_LayerDef* output) {
  // its ID alone is insufficient; edited/custom documents must use their origin.
  const bool demoMode=missingDocument||encode(document)==encode(demo());
  const auto color=params[TextColor]->u.cd.value;
- adobe::applyNativeStyle(document,params[Size]->u.fs_d.value,
-                        {color.red/255.0,color.green/255.0,color.blue/255.0,1},sx,sy);
+ adobe::NativeAppearanceControls appearances;
+ appearances.current=wordControls(params,CurrentSize);
+ appearances.spoken=wordControls(params,SpokenSize);
+ appearances.upcoming=wordControls(params,UpcomingSize);
+ adobe::applyNativeStyle(document,params[adobe::parameters::Size]->u.fs_d.value,
+                        {color.red/255.0,color.green/255.0,color.blue/255.0,1},sx,sy,appearances);
  double time=in_data->time_scale?double(in_data->current_time)/in_data->time_scale:0;
 #if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
  adobe::source_time_probe::OwnLayerClock timeTrace;
