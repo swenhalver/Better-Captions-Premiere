@@ -1,0 +1,37 @@
+name: Native caption core
+on:
+  push:
+    branches: [swen/native-caption-effect]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  portable:
+    name: Native core / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S native -B artifacts/native -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build artifacts/native --config Release --parallel
+      - name: Test
+        run: ctest --test-dir artifacts/native -C Release --output-on-failure
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Panel/native document contract
+        run: node --test tests/native-effect-contract.test.mjs
+  sanitized:
+    name: Native sanitizer checks / macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S native -B artifacts/native -DBC_ENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build artifacts/native --parallel
+      - run: ctest --test-dir artifacts/native --output-on-failure

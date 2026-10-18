@@ -1,0 +1,60 @@
+#ifdef NDEBUG
+#undef NDEBUG // Test checks remain active in Release builds.
+#endif
+#include "../core/caption_core.hpp"
+#include <cassert>
+#include <cmath>
+#include <iostream>
+#include <fstream>
+#include <iterator>
+#include <limits>
+#include <stdexcept>
+using namespace better_captions;
+template<class F> void rejects(F f){bool rejected=false;try{f();}catch(const std::invalid_argument&){rejected=true;}assert(rejected);}
+Document sample(){Document d;d.containers.push_back({"original",false,{{"HELLO",0,0.4,false},{"world",0.4,0.8,false},{"again.",0.8,1.2,true},{"later",2,3,false}}});d.style.current.color={1,0,0,1};d.style.spoken.opacity=0.5;return d;}
+Metrics measure(const std::string& text,const WordStyle& s){double px=s.fontSize*s.sizeScale;return {text.size()*px*0.5,px*0.8,px*0.2};}
+int main(int argc,char** argv){
+ if(argc==4&&std::string(argv[1])=="--roundtrip"){
+  std::ifstream input(argv[2],std::ios::binary);assert(input.good());
+  std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(input)),std::istreambuf_iterator<char>());
+  auto out=encode(decode(bytes));std::ofstream output(argv[3],std::ios::binary);output.write(reinterpret_cast<const char*>(out.data()),static_cast<std::streamsize>(out.size()));assert(output.good());return 0;
+ }
+
+ auto d=sample();
+ for(const auto& badText:std::vector<std::string>{std::string("\xff"),std::string("\xc0\xaf"),std::string("\xed\xa0\x80"),std::string("\xf4\x90\x80\x80"),std::string("\xe2\x82"),std::string("bad\ntext"),std::string("a\0b",3),std::string("\xc2\x85")}) {
+  auto malformed=d;malformed.containers[0].words[0].text=badText;rejects([&]{validate(malformed);});
+  malformed=d;malformed.style.current.fontFamily=badText;rejects([&]{validate(malformed);});
+ }
+ auto unicode=d;unicode.containers[0].words[0].text="café 😀";assert(encode(decode(encode(unicode)))==encode(unicode));
+ Document punct;punct.containers.push_back({"punct",false,{{"Hello",0,1,false},{",",1,1,false},{"there",1,2,false}}});
+ auto grouped=regroup(punct,5);assert(grouped.size()==2&&grouped[0].wordCount==2);
+ auto punctuationFrame=layoutFrame(punct,0.5,{0,0,1000,100},measure);assert(punctuationFrame.words.size()==3);assert(punctuationFrame.words[1].x==punctuationFrame.words[0].x+punctuationFrame.words[0].width);
+ rejects([&]{layoutFrame(d,0.4,{1e308,0,1e308,300},measure);});
+auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
+ p=regroup(d,8);assert(p.size()==4);assert(d.containers[0].id=="original"&&d.containers[0].words[0].text=="HELLO");
+ d.containers.push_back({"razor-right",true,{{"separate",3,4,false}}});assert(regroup(d,500).size()==3);assert(d.containers[1].manualSplit);
+ auto encoded=encode(d);auto copy=decode(encoded);assert(encode(copy)==encoded&&copy.containers[1].manualSplit&&copy.style.spoken.opacity==0.5);
+ auto bad=encoded;bad[4]=99;rejects([&]{decode(bad);});bad=encoded;bad.pop_back();rejects([&]{decode(bad);});bad=encoded;bad.push_back(0);rejects([&]{decode(bad);});rejects([&]{decode({});});
+ bad=encoded;bad[8]=255;bad[9]=255;rejects([&]{decode(bad);});
+ auto invalid=d;invalid.containers[1].id="original";rejects([&]{validate(invalid);});invalid=d;invalid.containers[0].words[0].start=std::numeric_limits<double>::quiet_NaN();rejects([&]{validate(invalid);});invalid=d;invalid.style.current.opacity=2;rejects([&]{validate(invalid);});rejects([&]{regroup(d,0);});
+ d.style.titleCase=true;auto frame=layoutFrame(d,0.4,{0,0,1200,300},measure);assert(frame.words.size()==3);assert(frame.words[0].state==WordState::Spoken&&frame.words[1].state==WordState::Current&&frame.words[2].state==WordState::Upcoming);assert(frame.words[0].text=="Hello"&&d.containers[0].words[0].text=="HELLO");
+ assert(frame.words[0].style.opacity==0.5&&frame.words[1].style.color.r==1&&frame.words[1].style.color.g==0);
+ auto narrow=layoutFrame(d,0.4,{0,0,200,1000},measure);assert(narrow.words.size()==3&&narrow.words[1].baseline>narrow.words[0].baseline);assert(narrow.words[1].style.fontSize==frame.words[1].style.fontSize&&narrow.words[1].width==frame.words[1].width);
+ auto shortBox=layoutFrame(d,0.4,{0,0,1200,10},measure);assert(shortBox.overflow&&shortBox.words[0].x==frame.words[0].x&&shortBox.words[0].width==frame.words[0].width);
+ assert(layoutFrame(d,1.2,{0,0,1200,300},measure).words.empty());assert(layoutFrame(d,2,{0,0,1200,300},measure).words.size()==1);
+ assert(displayText("don't STOP naïve café",true)=="Don't Stop Naïve Café");
+ rejects([&]{layoutFrame(d,0.4,{0,0,1200,300},[](const std::string&,const WordStyle&){return Metrics{-1,0,0};});});
+ // Every truncation boundary is rejected; malformed data cannot partially load.
+ for(std::size_t i=0;i<encoded.size();++i){std::vector<std::uint8_t> part(encoded.begin(),encoded.begin()+i);rejects([&]{decode(part);});}
+ // Bubble adds padding around real metrics without changing the source font size.
+ auto bubbles=sample();bubbles.style.current.bubble=true;bubbles.style.current.padding=10;
+ auto bubbleFrame=layoutFrame(bubbles,0.1,{0,0,1200,300},measure);
+ auto glyph=measure("HELLO",bubbles.style.current);
+ assert(bubbleFrame.words[0].width==glyph.width+20&&bubbleFrame.words[0].height==glyph.ascent+glyph.descent+20);
+ auto again=layoutFrame(bubbles,0.1,{0,0,1200,300},measure);
+ assert(again.words.size()==bubbleFrame.words.size());for(std::size_t i=0;i<again.words.size();++i)assert(again.words[i].x==bubbleFrame.words[i].x&&again.words[i].baseline==bubbleFrame.words[i].baseline&&again.words[i].text==bubbleFrame.words[i].text);
+ auto overlap=sample();overlap.containers[0].words={ {"long",0,2,false},{"short",0.5,1,false} };assert(layoutFrame(overlap,1.5,{0,0,1200,300},measure).words.size()==2);
+ // Deterministic malformed-buffer stress: decode can reject or return a valid bounded document.
+ std::uint32_t seed=17;for(unsigned trial=0;trial<1000;++trial){auto mutated=encoded;seed=1664525*seed+1013904223;auto index=seed%mutated.size();seed=1664525*seed+1013904223;mutated[index]^=static_cast<std::uint8_t>(seed>>24);try{validate(decode(mutated));}catch(const std::invalid_argument&){} }
+ std::cout<<"caption_core: grouping, layout, styling, timing, codec and malformed-data checks passed\n";
+}
