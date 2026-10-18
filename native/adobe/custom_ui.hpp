@@ -13,14 +13,14 @@
 #include <unistd.h>
 
 namespace better_captions::adobe::ui_probe {
-inline void log(const char* action,long event,long window,long error=0) {
+inline void log(const char* action,long event,long window,long error=0,long x=0,long y=0,long continuation=0,long sendDrag=0,long lastTime=0) {
 #ifdef BC_UI_PROBE_TEST_NO_LOG
- (void)action;(void)event;(void)window;(void)error;return;
+ (void)action;(void)event;(void)window;(void)error;(void)x;(void)y;(void)continuation;(void)sendDrag;(void)lastTime;return;
 #else
  const int file=::open("/tmp/better-captions-native-ui-probe.log",O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW,0600);
  if(file<0)return;struct stat status{};
  if(::fstat(file,&status)==0&&S_ISREG(status.st_mode)&&status.st_uid==::getuid()&&status.st_size<1024*1024){
-  char line[180];const int n=std::snprintf(line,sizeof(line),"%s event=%ld window=%ld error=%ld\n",action,event,window,error);if(n>0)::write(file,line,std::min<int>(n,sizeof(line)-1));
+  char line[280];const int n=std::snprintf(line,sizeof(line),"%s event=%ld window=%ld error=%ld x=%ld y=%ld continuation=%ld sendDrag=%ld lastTime=%ld\n",action,event,window,error,x,y,continuation,sendDrag,lastTime);if(n>0)::write(file,line,std::min<int>(n,sizeof(line)-1));
  }
  ::close(file);
 #endif
@@ -69,11 +69,17 @@ inline PF_Err event(PF_InData* in,PF_ParamDef* p[],PF_EventExtra* e) {
  const auto window=(*e->contextH)->w_type;
  if(e->e_type!=PF_Event_IDLE)log("event",e->e_type,window);
  if(window!=PF_Window_COMP)return PF_Err_NONE;
- if(e->e_type==PF_Event_DRAW){draw(in,p,e);return PF_Err_NONE;}
+ if(e->e_type==PF_Event_DO_CLICK||e->e_type==PF_Event_DRAG){
+  const auto& click=e->u.do_click;log("pointer",e->e_type,window,0,click.screen_point.h,click.screen_point.v,static_cast<long>(click.continue_refcon[0]),click.send_drag,click.last_time);
+ }
+ // Match the official CCU sample: some continuation callbacks retain DO_CLICK.
+ if(e->e_type==PF_Event_DO_CLICK&&e->u.do_click.send_drag)e->e_type=PF_Event_DRAG;
+ if(e->e_type==PF_Event_DRAW){draw(in,p,e);e->evt_out_flags|=PF_EO_HANDLED_EVENT;return PF_Err_NONE;}
  if(e->e_type==PF_Event_DO_CLICK){
   auto points=handles(p);const auto mouse=e->u.do_click.screen_point;
   for(std::size_t i=0;i<points.size();++i){auto point=points[i];if(!transform(in,e,point,true))continue;
-   if(std::hypot(point.x/65536.0-mouse.h,point.y/65536.0-mouse.v)<=10){e->u.do_click.continue_refcon[0]=i+1;e->u.do_click.send_drag=TRUE;e->evt_out_flags|=PF_EO_HANDLED_EVENT;log("handle-click",e->e_type,window,i+1);return PF_Err_NONE;}}
+   if(std::hypot(point.x/65536.0-mouse.h,point.y/65536.0-mouse.v)<=10){e->u.do_click.continue_refcon[0]=i+1;e->u.do_click.send_drag=TRUE;e->evt_out_flags|=PF_EO_HANDLED_EVENT;log("handle-click",e->e_type,window,i+1,mouse.h,mouse.v,i+1,TRUE,e->u.do_click.last_time);return PF_Err_NONE;}}
+  log("handle-miss",e->e_type,window,0,mouse.h,mouse.v);
  }
  if(e->e_type==PF_Event_DRAG){
   auto& click=e->u.do_click;const auto mode=click.continue_refcon[0];if(mode<1||mode>4)return PF_Err_NONE;
