@@ -12,6 +12,14 @@ const sourceRoot = fileURLToPath(new URL('../webview-ui/src/', import.meta.url))
 const clone = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; };
 const script = file => readFileSync(file, 'utf8').match(/<script lang="ts">([\s\S]*?)<\/script>/)[1];
+const routedPaths = {
+  session: 'lib/session/manager.svelte.ts', watcher: 'lib/program-monitor.ts',
+  live: 'lib/live-output.ts', renderer: 'lib/export/exporter.ts',
+};
+function moduleRoute(filename) {
+  const normalized = filename.replace(/\\/g, '/');
+  return Object.entries(routedPaths).find(([, suffix]) => normalized.endsWith('/' + suffix))?.[0] ?? null;
+}
 
 // Run the actual component controller. Rune state is plain storage and effects
 // are explicitly flushed; lazy $derived expressions retain their real guards.
@@ -70,7 +78,7 @@ function fixture(t, options = {}) {
   function load(filename) {
     if (modules.has(filename)) return modules.get(filename);
     const result = execute(readFileSync(filename, 'utf8'), filename);
-    if (filename.endsWith('/manager.svelte.ts')) {
+    if (moduleRoute(filename) === 'session') {
       const manager = result.sessionManager;
       result.sessionManager = new Proxy(manager, { get(target, key, receiver) { return key === 'current' ? target.current() : Reflect.get(target, key, receiver); } });
     }
@@ -85,9 +93,9 @@ function fixture(t, options = {}) {
     const base = resolve(dirname(from), name), filename = [base, base + '.ts'].find(existsSync);
     if (!filename) throw new Error('Unexpected controller dependency: ' + name);
     const result = load(filename);
-    if (filename.endsWith('/program-monitor.ts')) return { ...result, startProgramMonitorWatcher: () => watcher };
-    if (filename.endsWith('/live-output.ts')) return { ...result, createLiveOutput: value => { liveOptions = value; return result.createLiveOutput(value); } };
-    if (filename.endsWith('/export/exporter.ts')) return { ...result, exportFrames: async (captions, style, ...args) => {
+    if (moduleRoute(filename) === 'watcher') return { ...result, startProgramMonitorWatcher: () => watcher };
+    if (moduleRoute(filename) === 'live') return { ...result, createLiveOutput: value => { liveOptions = value; return result.createLiveOutput(value); } };
+    if (moduleRoute(filename) === 'renderer') return { ...result, exportFrames: async (captions, style, ...args) => {
       const signal = args.at(-1), index = calls.renders.length + 1;
       calls.renders.push({ style: clone(style), captions: clone(captions), signal });
       await options.render?.(index, signal);
@@ -140,6 +148,15 @@ function fixture(t, options = {}) {
     async start() { cleanup = mounted(); await settle(); sync(); return this; },
   };
 }
+
+test('harness module routes match native Windows and POSIX paths without matching unrelated basenames', () => {
+  for (const [route, suffix] of Object.entries(routedPaths)) {
+    assert.equal(moduleRoute('/project/webview-ui/src/' + suffix), route);
+    assert.equal(moduleRoute('D:\\a\\Better Captions\\webview-ui\\src\\' + suffix.replace(/\//g, '\\')), route);
+  }
+  assert.equal(moduleRoute('D:\\project\\other\\manager.svelte.ts'), null);
+  assert.equal(moduleRoute('/project/other/program-monitor.ts'), null);
+});
 
 test('loading a fully linked saved session establishes its existing output without rendering or saving it', async t => {
   const h = fixture(t); await h.start(); await h.advance(5000);
