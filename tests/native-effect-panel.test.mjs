@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
 import { defaultNativeStyle, NATIVE_EFFECT_MATCH_NAME } from '../webview-ui/src/lib/native-effect/contract.ts';
 import { encodeNativeDocument, encodeNativeTransportText } from '../webview-ui/src/lib/native-effect/encode.ts';
 import { nativePanelSequenceId, decodeNativePanelDocument, rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate, NATIVE_PANEL_CAPABILITIES } from '../webview-ui/src/lib/native-effect/panel.ts';
 import { registerFontCatalog } from '../webview-ui/src/lib/font-catalog.ts';
+import { moveWord, moveWordEdge } from '../webview-ui/src/lib/transcript/timing.ts';
 
 const id = '12345678-1234-5678-abcd-123456789abc';
 const ticks = seconds => String(BigInt(Math.round(seconds * 254016000000)));
@@ -32,6 +35,54 @@ function entry(doc = document(), patch = {}) {
 }
 const sequence = () => ({ id, name: 'Native captions', duration: 20, frameWidth: 720, frameHeight: 1280, frameRate: 29.97002997002997, playhead: 2.6 });
 const binding = () => rehydrateNativePanel(entry(), sequence());
+
+function framedDocument(fps) {
+  const result = document();
+  result.captions = [{ id: 'timed', start: 60 / fps, end: 180 / fps, manualSplit: true, words: [
+    { text: 'First', start: 60 / fps, end: 90 / fps, endOfSentence: false },
+    { text: 'middle', start: 100 / fps, end: 130 / fps, endOfSentence: false },
+    { text: 'last.', start: 140 / fps, end: 180 / fps, endOfSentence: true },
+  ] }];
+  return result;
+}
+
+/** Exercise the production fixed writer in a VM; no Adobe/app APIs are invoked. */
+function nativeWriter(source) {
+  const collection = (values, key = 'numItems') => Object.defineProperty(values, key, { get: () => values.length });
+  const files = new Map(), writes = [], unexpected = [];
+  let carrier = source.documentText;
+  const forbid = name => () => { unexpected.push(name); assert.fail(`Word timing must not change native ${name}`); };
+  const parameter = (displayName, value, keys = []) => ({ displayName, value, keys, setValue: forbid(displayName), setValueAtKey: forbid(displayName + ' key'), addKey: forbid(displayName + ' key insertion'), removeKey: forbid(displayName + ' key removal') });
+  const motion = collection([
+    parameter('Position', [.5, .85], [{ ticks: ticks(3601), value: [.3, .8], interpolation: 'native-bezier', tangent: [.1, -.2] }]),
+    parameter('Scale Height', 112, [{ ticks: ticks(3601), value: 98, interpolation: 'hold' }]),
+    parameter('Scale Width', 88, [{ ticks: ticks(3602), value: 105, interpolation: 'bezier', tangent: 17 }]),
+    parameter('Uniform Scale', false), parameter('Rotation', 13), parameter('Anchor Point', [.5, .5]),
+  ]);
+  const controls = collection(['Position', 'Width', 'Height', 'Character limit', 'Upcoming opacity', 'Current opacity'].map((name, index) => parameter(name, index + .25, [{ ticks: ticks(3602), value: index + .5, interpolation: 'native' }])));
+  const documentParam = { displayName: 'Caption document (experimental)', isTimeVarying: () => false, getValue: () => carrier,
+    setValue(value, refresh) { writes.push({ value, refresh }); carrier = value; return 0; } };
+  controls.push(documentParam);
+  const clip = { nodeId: source.clipNodeId, projectItem: { nodeId: source.projectItemId },
+    isAdjustmentLayer: () => true, isSelected: () => source.selected,
+    setSelected: forbid('selection'), remove: forbid('clip removal'),
+    components: collection([{ matchName: 'AE.ADBE Motion', properties: motion }, { matchName: source.matchName, properties: controls }]) };
+  for (const [field, value] of [['start', source.startTicks], ['end', source.endTicks], ['inPoint', source.inTicks], ['outPoint', source.outTicks]]) {
+    Object.defineProperty(clip, field, { enumerable: true, get: () => ({ ticks: value }), set: forbid(field) });
+  }
+  const tracks = collection([0, 1, 2].map(index => ({ clips: collection(index === 2 ? [clip] : []), isLocked: () => false, overwriteClip: forbid('clip insertion') })), 'numTracks');
+  const activeSequence = { sequenceID: source.locator.sequenceId, videoTracks: tracks, setPlayerPosition: forbid('playhead') };
+  const context = { app: { project: { path: source.locator.projectPath, activeSequence, importFiles: forbid('import') } }, JSON: undefined,
+    File: function (path) { this.length = (files.get(path) ?? '').length; this.open = mode => mode === 'r' && files.has(path); this.read = () => files.get(path); this.close = () => {}; } };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(new URL('../cep/host/bridge.jsx', import.meta.url), 'utf8'), context);
+  const physicalState = () => JSON.stringify({ clipNodeId: clip.nodeId, projectItemId: clip.projectItem.nodeId, start: clip.start, end: clip.end, inPoint: clip.inPoint, outPoint: clip.outPoint,
+    motion, controls: controls.slice(0, -1), tracks: tracks.map(track => track.clips.map(item => item.nodeId)) });
+  return { writes, unexpected, physicalState, get carrier() { return carrier; }, write(snapshot, documentText) {
+    files.set('/native-word-timing.json', JSON.stringify({ sequenceId: source.locator.sequenceId, projectPath: source.locator.projectPath, snapshot, documentText }));
+    return JSON.parse(context.BetterCaptionsHost.writeNativeCaptionDocument('/native-word-timing.json'));
+  } };
+}
 
 test('the bounded native reader restores source Unicode, manual splits, styles and origin', () => {
   assert.deepEqual(decodeNativePanelDocument(encodeNativeTransportText(document()), `{${id.toUpperCase()}}`), document());
@@ -226,6 +277,97 @@ test('caption boundary-only changes and fabricated movie identities cannot be wr
   assert.throws(() => prepareNativePanelUpdate(connected, edited), /word boundaries/);
   const movie = clone(session); movie.captions[0].mediaPath = '/caption.mov';
   assert.throws(() => prepareNativePanelUpdate(connected, movie), /caption mediaPath/);
+});
+
+test('first/last word moves and edge trims save through the fixed native writer without moving its clip or curves', () => {
+  for (const fps of [30, 30000 / 1001]) {
+    const edits = [
+      ['first move', caption => moveWord(caption, 0, 70 / fps, fps)],
+      ['last move', caption => moveWord(caption, 2, 135 / fps, fps)],
+      ['first start trim', caption => moveWordEdge(caption, 0, 'startTime', 75 / fps, fps)],
+      ['last end trim', caption => moveWordEdge(caption, 2, 'endTime', 165 / fps, fps)],
+      ['first collision to three frames', caption => moveWord(caption, 0, 120 / fps, fps)],
+      ['last collision to three frames', caption => moveWord(caption, 2, 90 / fps, fps)],
+    ];
+    for (const [name, edit] of edits) {
+      const source = entry(framedDocument(fps)), { session, binding: connected } = rehydrateNativePanel(source, { ...sequence(), frameRate: fps });
+      const original = clone(session), edited = clone(session), host = nativeWriter(source), physical = host.physicalState();
+      edited.captions[0] = edit(session.captions[0]);
+      assert.deepEqual(session, original, `${name}: timing helper is immutable`);
+      assert.equal(edited.captions[0].startTime, original.captions[0].startTime, `${name}: editable container start stays fixed`);
+      assert.equal(edited.captions[0].endTime, original.captions[0].endTime, `${name}: editable container end stays fixed`);
+      const prepared = prepareNativePanelUpdate(connected, edited);
+      assert.equal(prepared.captions[0].start, edited.captions[0].words[0].startTime, name);
+      assert.equal(prepared.captions[0].end, edited.captions[0].words.at(-1).endTime, name);
+      assert.deepEqual(prepared.captions[0].words.map(word => [word.start, word.end]), edited.captions[0].words.map(word => [word.startTime, word.endTime]), name);
+      assert.equal(prepared.captions[0].manualSplit, true);
+      assert.equal(prepared.timeOriginSeconds, 3600);
+      assert.deepEqual(prepared.style, connected.document.style, `${name}: timing leaves native styles intact`);
+      const response = host.write(connected.snapshot, encodeNativeTransportText(prepared));
+      assert.equal(response.ok, true, `${name}: ${response.error ?? 'native readback confirmed'}`);
+      assert.equal(response.readbackVerified, true);
+      const next = confirmNativePanelUpdate(connected, prepared, edited, response);
+      assert.deepEqual(decodeNativePanelDocument(host.carrier, id).captions, prepared.captions, `${name}: actual carrier contains the edited words`);
+      assert.equal(next.baseline.captions[0].startTime, original.captions[0].startTime);
+      assert.equal(next.baseline.captions[0].endTime, original.captions[0].endTime);
+      const styleEdit = clone(edited); styleEdit.style.activeWord.opacity = .42;
+      const styled = prepareNativePanelUpdate(next, styleEdit);
+      assert.deepEqual(styled.captions, prepared.captions, `${name}: a follow-up style save retains exact word times`);
+      const styleResponse = host.write(next.snapshot, encodeNativeTransportText(styled));
+      assert.equal(styleResponse.ok, true, styleResponse.error);
+      confirmNativePanelUpdate(next, styled, styleEdit, styleResponse);
+      assert.equal(host.writes.length, 2, `${name}: exactly one document setter per edit`);
+      assert.equal(host.physicalState(), physical, `${name}: physical clip timing, identity, scalar controls and all native curves are unchanged`);
+      assert.deepEqual(host.unexpected, []);
+    }
+  }
+});
+
+test('outer word edits on a moved/trimmed native layer preserve its source clock and untouched words exactly', () => {
+  const fps = 30000 / 1001, source = entry(framedDocument(fps), { startTicks: ticks(10.2), endTicks: ticks(16.2), inTicks: ticks(3604.1), outTicks: ticks(3610.1) });
+  const { session, binding: connected } = rehydrateNativePanel(source, { ...sequence(), frameRate: fps });
+  const edited = clone(session), before = clone(connected);
+  edited.captions[0] = moveWordEdge(edited.captions[0], 0, 'startTime', edited.captions[0].words[0].startTime + 6 / fps, fps);
+  edited.captions[0] = moveWordEdge(edited.captions[0], 2, 'endTime', edited.captions[0].words[2].endTime - 9 / fps, fps);
+  const prepared = prepareNativePanelUpdate(connected, edited), host = nativeWriter(source), physical = host.physicalState();
+  assert.equal(prepared.captions[0].start, edited.captions[0].words[0].startTime - connected.timelineOffsetSeconds);
+  assert.equal(prepared.captions[0].end, edited.captions[0].words[2].endTime - connected.timelineOffsetSeconds);
+  assert.deepEqual(prepared.captions[0].words[1], before.document.captions[0].words[1], 'Untouched source floats are not offset and rounded');
+  assert.equal(prepared.timeOriginSeconds, before.document.timeOriginSeconds);
+  const response = host.write(connected.snapshot, encodeNativeTransportText(prepared));
+  assert.equal(response.ok, true, response.error);
+  const next = confirmNativePanelUpdate(connected, prepared, edited, response);
+  assert.equal(next.timelineOffsetSeconds, connected.timelineOffsetSeconds);
+  assert.equal(host.physicalState(), physical);
+  assert.deepEqual(connected, before, 'Preparation/readback do not mutate the captured binding');
+});
+
+test('retained native caption envelopes require an existing capture and finite contained edited words', () => {
+  const { session, binding: connected } = rehydrateNativePanel(entry(framedDocument(30)), { ...sequence(), frameRate: 30 });
+  const inset = clone(session); inset.captions[0] = moveWordEdge(inset.captions[0], 0, 'startTime', 75 / 30, 30);
+  for (const [name, change] of [
+    ['fabricated ID with a retained envelope', state => state.captions[0].id = 'new-caption'],
+    ['changed mismatched start', state => state.captions[0].startTime -= .1],
+    ['changed mismatched end', state => state.captions[0].endTime += .1],
+    ['word before container', state => state.captions[0].words[0].startTime = state.captions[0].startTime - .1],
+    ['word after container', state => state.captions[0].words[2].endTime = state.captions[0].endTime + .1],
+    ['nonfinite start', state => state.captions[0].startTime = NaN],
+    ['nonfinite end', state => state.captions[0].endTime = Infinity],
+    ['string start', state => state.captions[0].startTime = '2'],
+    ['reversed container', state => state.captions[0].endTime = state.captions[0].startTime - .1],
+    ['nonfinite word', state => state.captions[0].words[0].startTime = NaN],
+    ['reversed word', state => state.captions[0].words[0].endTime = state.captions[0].words[0].startTime - .1],
+  ]) {
+    const invalid = clone(inset); change(invalid);
+    assert.throws(() => prepareNativePanelUpdate(connected, invalid), /word boundaries/, name);
+  }
+  const newCaption = clone(inset); newCaption.captions[0].id = 'new-caption';
+  newCaption.captions[0].startTime = newCaption.captions[0].words[0].startTime;
+  assert.equal(prepareNativePanelUpdate(connected, newCaption).captions[0].id, 'new-caption', 'A new caption with exact word bounds remains valid');
+  const missingCapture = clone(connected); missingCapture.document.captions = [];
+  assert.throws(() => prepareNativePanelUpdate(missingCapture, inset), /word boundaries/, 'A panel-only ID does not prove a native capture');
+  const invalidCapture = clone(connected); invalidCapture.baseline.captions[0].endTime = Infinity;
+  assert.throws(() => prepareNativePanelUpdate(invalidCapture, inset), /word boundaries/, 'An invalid captured envelope cannot authorize retained bounds');
 });
 
 test('confirmed exact readback advances binding only and rejects differing or stale revisions', () => {

@@ -170,7 +170,7 @@
   .word-timing__word--selected .word-timing__edge{opacity:1}
   .word-timing__block{position:absolute;inset:0;inline-size:100%;block-size:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;background:var(--color-surface-raised);border:1px solid var(--color-panel-border);color:var(--color-panel-text);padding:.3rem;font:inherit;cursor:grab;touch-action:none;&[aria-pressed=true]{background:var(--color-selection);border-color:var(--color-accent)}&:hover{filter:brightness(1.15)}&:active{cursor:grabbing}}
   .word-timing__playhead{position:absolute;inset-block:1.5rem .25rem;inline-size:1px;background:var(--color-panel-text);pointer-events:none;z-index:1}
-  .word-timing__edge{position:absolute;inset-block:-.25rem;inline-size:min(.8rem,50%);cursor:ew-resize;touch-action:none;opacity:0;z-index:2;&::after{content:"";position:absolute;inset-block:0;inline-size:min(3px,100%);background:var(--color-accent)}&:focus-visible{opacity:1}}
+  .word-timing__edge{position:absolute;inset-block:-.25rem;inline-size:min(.8rem,25%);cursor:ew-resize;touch-action:none;opacity:0;z-index:2;&::after{content:"";position:absolute;inset-block:0;inline-size:min(3px,100%);background:var(--color-accent)}&:focus-visible{opacity:1}}
   .word-timing__edge--start{inset-inline-start:0;&::after{inset-inline-start:0}}
   .word-timing__edge--end{inset-inline-end:0;&::after{inset-inline-end:0}}
   .word-timing__times{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--caption-space-s);min-inline-size:0}

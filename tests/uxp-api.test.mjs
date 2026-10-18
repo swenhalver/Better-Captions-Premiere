@@ -13,8 +13,9 @@ function harness(t, options = {}) {
   const nativeReads={activeSequence:0,sequences:0,settings:0,frameRect:0,timebase:0,duration:0,playhead:0,tracks:0};
   const writes=[],requests=[];
   const timers=new Map();
-  const schedule=(callback,ms)=>{const timer=setTimeout(()=>{timers.delete(timer);callback();},ms);timers.set(timer,{callback,ms});return timer;};
-  const cancel=timer=>{timers.delete(timer);clearTimeout(timer);};
+  const now=()=> (options.manualTimers ? options.fixedNow??1700000000000 : Date.now())+clockOffset;
+  const schedule=(callback,ms)=>{const timer=options.manualTimers?{}:setTimeout(()=>{timers.delete(timer);callback();},ms);timers.set(timer,{callback,ms});return timer;};
+  const cancel=timer=>{timers.delete(timer);if(!options.manualTimers)clearTimeout(timer);};
   const sequences=['one','two'].map(id=>({guid:{toString:()=>options.guids?.[id]??id},name:id,
     getSettings:async()=>{nativeReads.settings++;return{getVideoFrameRect:async()=>{nativeReads.frameRect++;return{width:720,height:1280};}};},
     getTimebase:async()=>{nativeReads.timebase++;return 10584000000;},getEndTime:async()=>{nativeReads.duration++;return{seconds:10};},
@@ -27,7 +28,7 @@ function harness(t, options = {}) {
     const entries=new Map(),value={nativePath:path,getEntries:async()=>[...entries].map(([name,file])=>({...file,name})),getEntry:async name=>{if(path==='/private/service'&&name==='service.json')serviceReads++;if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
     folders.set(path,value);return value;
   }
-  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','getFontCatalog','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues','prepareCaptionTrack','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation']});
+  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:now(),busy:false,actions:['getFonts','getFontCatalog','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues','prepareCaptionTrack','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation']});
   function setService(status) {
     const entries=folder('/private/service').entries;
     if(status===null)entries.delete('service.json');else entries.set('service.json',{data:status});
@@ -53,7 +54,7 @@ function harness(t, options = {}) {
   }
   const native={fetchTranscript:async sequence=>sequence.name,transcribe:async sequence=>options.transcribe?options.transcribe(sequence):sequence.name};
   const module={exports:{}};
-  const context={module,exports:module.exports,setTimeout:schedule,clearTimeout:cancel,Date:{now:()=>Date.now()+clockOffset},Map,Set,require:name=>{
+  const context={module,exports:module.exports,setTimeout:schedule,clearTimeout:cancel,Date:{now},Map,Set,require:name=>{
     if(name==='premierepro')return {Project:{getActiveProject:async()=>{projectReads++;return options.noProject?null:project;}},Constants:{TrackItemType:{CLIP:1}}};
     if(name==='uxp')return {storage:{localFileSystem:{getDataFolder:async()=>folder('/plugin-data')}}};
     if(name==='./style-presets.js')return require('../uxp/style-presets.js');
@@ -66,7 +67,7 @@ function harness(t, options = {}) {
   }};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/api.js',import.meta.url),'utf8'),context);
   const api=module.exports.createHostAPI({readTimeoutMs:options.readTimeoutMs??12000,serviceStartupGraceMs:options.serviceStartupGraceMs??0,serviceStartupPollMs:options.serviceStartupPollMs??5});t.after(()=>api.dispose());
-  return {api,writes,requests,respond,setService,healthyService,fireTimeout(ms){const entry=[...timers].find(([,value])=>value.ms===ms);assert.ok(entry,'Expected timer '+ms);cancel(entry[0]);entry[1].callback();},advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},nativeReads:()=>({...nativeReads}),get projectReads(){return projectReads;},get serviceReads(){return serviceReads;}};
+  return {api,writes,requests,respond,setService,healthyService,now,fireTimeout(ms){const entry=[...timers].find(([,value])=>value.ms===ms);assert.ok(entry,'Expected timer '+ms);cancel(entry[0]);entry[1].callback();},advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},nativeReads:()=>({...nativeReads}),get projectReads(){return projectReads;},get serviceReads(){return serviceReads;}};
 }
 
 test('idle playhead sampling reads only the active project, sequence and time without creating a session context',async t=>{
@@ -355,17 +356,23 @@ test('a renderer outage is safe to retry only before any mutation in the seriali
   assert.deepEqual(second.requests.map(request=>request.action),['prepareCaptionTrack'],'a partial job must not replay its completed preparation or start final Apply');
 });
 test('startup grace waits only for the private heartbeat and sends one request once the renderer is ready',async t=>{
-  const h=harness(t,{service:null,serviceStartupGraceMs:100});
+  const h=harness(t,{service:null,serviceStartupGraceMs:100,manualTimers:true});
   const pending=h.api.getFonts();await tick();const nativeReads=h.projectReads;
-  await delay(15);assert.equal(h.projectReads,nativeReads,'heartbeat polling must not repeat native context calls');
-  assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);assert.ok(h.serviceReads>=2);
-  h.setService(h.healthyService());assert.deepEqual(Array.from(await pending),['Arial','Georgia']);
+  assert.equal(h.now(),1700000000000);assert.equal(h.serviceReads,1);
+  for(let i=0;i<3;i++){h.advanceTime(5);h.fireTimeout(5);await tick();}
+  assert.equal(h.now(),1700000000015);assert.equal(h.projectReads,nativeReads,'heartbeat polling must not repeat native context calls');
+  assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);assert.equal(h.serviceReads,4);
+  h.setService(h.healthyService());h.advanceTime(5);h.fireTimeout(5);assert.deepEqual(Array.from(await pending),['Arial','Georgia']);
+  assert.equal(h.serviceReads,5);
   assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,'getFonts');
 });
 test('a stale startup heartbeat can be replaced by a ready renderer within the grace period',async t=>{
-  const h=harness(t,{serviceStartupGraceMs:100}),old=h.healthyService();old.updatedAt-=20000;old.version=0;h.setService(old);
-  const pending=h.api.getFonts();await delay(15);assert.equal(h.requests.length,0);
-  h.setService(h.healthyService());assert.deepEqual(Array.from(await pending),['Arial','Georgia']);assert.equal(h.requests.length,1);
+  const h=harness(t,{serviceStartupGraceMs:100,manualTimers:true}),old=h.healthyService();old.updatedAt-=20000;old.version=0;h.setService(old);
+  const pending=h.api.getFonts();await tick();const nativeReads=h.projectReads;
+  for(let i=0;i<3;i++){h.advanceTime(5);h.fireTimeout(5);await tick();}
+  assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);assert.equal(h.serviceReads,4);assert.equal(h.projectReads,nativeReads);
+  h.setService(h.healthyService());h.advanceTime(5);h.fireTimeout(5);assert.deepEqual(Array.from(await pending),['Arial','Georgia']);
+  assert.equal(h.serviceReads,5);assert.equal(h.requests.length,1);
 });
 for(const incompatible of ['version','action'])test(`a fresh incompatible renderer ${incompatible} fails immediately without heartbeat retries`,async t=>{
   const h=harness(t,{serviceStartupGraceMs:1000}),status=h.healthyService();

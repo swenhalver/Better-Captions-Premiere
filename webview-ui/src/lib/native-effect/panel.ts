@@ -187,8 +187,17 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
   document.captions = edited.captions.map(caption => {
     const original = before.captions.find(item => item.id === caption.id);
     for (const field of ['speaker', 'position', 'renderSegments', 'clipNodeId', 'projectItemId', 'mediaPath', 'renderBounds', 'motionProfile'] as const) if (!same(caption[field], original?.[field])) unsupported(`caption ${field}`);
-    if (!caption.words.length || caption.text !== caption.words.map(word => word.text).join(' ') || Math.abs(caption.startTime - Math.min(...caption.words.map(word => word.startTime))) > 1e-7 || Math.abs(caption.endTime - Math.max(...caption.words.map(word => word.endTime))) > 1e-7) throw new Error('Native caption timing follows its word boundaries. Edit the timed words; the native document was preserved.');
     const originalNative = binding.document.captions.find(item => item.id === caption.id);
+    const orderedEnvelope = Number.isFinite(caption.startTime) && Number.isFinite(caption.endTime) && caption.endTime > caption.startTime;
+    const capturedEnvelope = original && originalNative && Number.isFinite(original.startTime) && Number.isFinite(original.endTime) && original.endTime > original.startTime;
+    const containedWords = caption.words.length > 0 && caption.words.every(word => Number.isFinite(word.startTime) && Number.isFinite(word.endTime) && word.endTime > word.startTime && word.startTime >= caption.startTime - 1e-7 && word.endTime <= caption.endTime + 1e-7);
+    const wordStart = Math.min(...caption.words.map(word => word.startTime)), wordEnd = Math.max(...caption.words.map(word => word.endTime));
+    // Timing tools keep the existing editable container while its first/last
+    // word moves inward. Only a captured boundary may remain wider than words;
+    // the native document itself always follows the actual source word times.
+    const validStart = Math.abs(caption.startTime - wordStart) <= 1e-7 || capturedEnvelope && caption.startTime === original.startTime;
+    const validEnd = Math.abs(caption.endTime - wordEnd) <= 1e-7 || capturedEnvelope && caption.endTime === original.endTime;
+    if (!orderedEnvelope || !containedWords || caption.text !== caption.words.map(word => word.text).join(' ') || !validStart || !validEnd) throw new Error('Native caption timing follows its word boundaries. Edit the timed words; the native document was preserved.');
     const words = caption.words.map((word, index) => {
       const old = original?.words[index], stored = originalNative?.words[index];
       // Avoid adding/subtracting a floating placement offset to untouched source

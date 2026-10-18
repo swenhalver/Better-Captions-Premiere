@@ -36,7 +36,9 @@ shortens the dragged word when it reaches a neighbour or caption boundary. Word
 edits have a three-frame minimum and never move neighbours. Edges are
 independent even when words touch, allowing gaps without moving neighbours;
 all gestures stop before overlap. Fit content is the default zoom and adapts
-to the panel width; larger precision zooms remain available.
+to the panel width; larger precision zooms remain available. Scrolling vertically
+over the word lane changes zoom around the pointer. Horizontal scrolling and
+Shift-scroll remain available for panning.
 Split-before-selected-word and Merge-next are
 compact actions in the lane toolbar, preserving existing linked-clip guards.
 

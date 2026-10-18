@@ -180,7 +180,7 @@ Transcript list and editor stack below the container breakpoint (48rem, or 624px
 
 The current panel has two workspaces: Transcript and Styling. Transcript puts search and sentence grouping above the caption list, then anchors the selected sentence’s word lane and timing controls in its editor. Sentence text and caption timestamps are edited directly in the list; compact Split/Merge actions belong in the lane toolbar. Styling remains a single column at all panel widths, with appearance selection, a type sample, selected-caption geometry, and disclosed appearance/layout controls. Selection persists when switching workspaces.
 
-The word lane scrolls horizontally inside its own bordered region. Fit content is the default and uses the available width without horizontal scrolling. Numeric precision zooms follow sentence length with a minimum of (320px) before zoom and at least the available container width. It never wraps into multiple timing lanes. Narrow panels retain the same controls; toolbar buttons may wrap, text wraps, and X/Y fields stay in two columns.
+The word lane scrolls horizontally inside its own bordered region. Fit content is the default and uses the available width without horizontal scrolling. Numeric precision zooms enlarge that fitted width. Vertical wheel gestures over the lane change zoom around the pointer; horizontal and Shift-scroll gestures pan. It never wraps into multiple timing lanes. Narrow panels retain the same controls; toolbar buttons may wrap, text wraps, and X/Y fields stay in two columns.
 
 ## Elevation & Depth
 

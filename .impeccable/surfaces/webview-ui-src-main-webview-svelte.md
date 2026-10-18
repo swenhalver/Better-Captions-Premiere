@@ -61,7 +61,9 @@ panel. Input arrows adjust one frame and apply immediately. Premiere's CTI drive
 the lane marker; a separate plugin playhead slider and persistent gesture-help
 paragraph do not belong here. Compact Split-before-selected-word and Merge-next
 actions belong in the lane toolbar, replacing the old disclosure. Fit content
-is the default zoom; numeric zooms preserve precise scrolling. Word edits enforce
+is the default zoom; numeric zooms preserve precise scrolling. Vertical wheel
+gestures over the lane zoom around the pointer, while horizontal and Shift-scroll
+gestures pan. Word edits enforce
 a three-frame minimum and shorten on collision while keeping neighbours fixed.
 Preserve native
 palette, focus, Undo and timing

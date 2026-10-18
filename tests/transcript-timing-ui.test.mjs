@@ -170,7 +170,7 @@ test('real lane SSR keeps a Premiere-driven marker, native frame spinners and tw
   assert.match(html, /<option[^>]*value="fit"[^>]*selected[^>]*>Fit content<\/option>/);
   assert.doesNotMatch(render(WordTimeline, { props: { ...wordProps(caption, fps), currentTime: -1 } }).body, /word-timing__playhead/);
   assert.match(compiled.WordTimeline.css.code, /grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
-  assert.match(compiled.WordTimeline.css.code, /inline-size:min\(\.8rem,50%\)/, 'Each edge target occupies at most its own half-word');
+  assert.match(compiled.WordTimeline.css.code, /inline-size:min\(\.8rem,25%\)/, 'Edge targets leave the middle of short words available for whole-word dragging');
   assert.match(compiled.WordTimeline.css.code, /word-timing__time[^{}]*\{min-inline-size:0;input[^{}]*\{inline-size:100%;min-inline-size:0/);
 });
 
