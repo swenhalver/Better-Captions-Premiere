@@ -14,7 +14,7 @@ identified native adjustment-layer effect. It never creates a layer, inserts an
 effect, converts a generated movie, imports media or executes a host command.
 
 - `rehydrateNativePanel(entry, sequenceInfo)` returns `{session, binding,
-  warnings, capabilities}`. Its bounded reader accepts BCAP v1/v2 inside the
+  warnings, capabilities}`. Its bounded reader accepts BCAP v1/v2/v3 inside the
   existing `BCDOC1:` carrier, restores timed source words/manual container splits
   and maps supported appearance values into the existing panel session.
 - `prepareNativePanelUpdate(binding, editedSession)` returns a validated native
@@ -52,15 +52,16 @@ not proof that the unresolved host Razor clock is corrected.
 
 ## Supported panel styles and explicit limits
 
-The panel can change each state's font family, rendered pixel size, text RGB,
+The panel can change each state's font family, numeric weight, relative B mode,
+italic, rendered pixel size, text RGB,
 opacity, bubble enable/RGB/opacity/padding/radius, and existing outline/shadow
 numeric/color values. Shared line height and shared As typed/ASCII Title Case are
 supported. Source transcript characters are never rewritten by display case.
 Unchanged fractional RGB and separate native text alpha are preserved exactly;
 choosing a new RGB color intentionally changes only those RGB channels.
 
-The current BCAP schema has no font weight/relative B, italic, letter spacing,
-text alignment, whole-caption background, per-state case, general upper/lowercase,
+The current BCAP schema has no letter spacing, text alignment, whole-caption
+background, per-state case, general upper/lowercase,
 or independent outline/shadow enable flags. The adapter returns these capability
 limits and refuses edits to them instead of dropping or pretending to render them.
 Panel animation presets and geometry/grouping fields cannot be substituted for
@@ -74,7 +75,7 @@ edits. It does not guess font metrics or reinterpret the number. Native line hei
 must satisfy the native renderer's 1–10 range. Fields outside panel ranges remain
 preserved until an explicit supported edit validates successfully.
 
-Base values hidden by explicit word-state overrides cannot be stored independently
+Other base values hidden by explicit word-state overrides cannot be stored independently
 in this native schema. Such a base-only edit is refused; choosing All words through
 the toolbar updates the actual word-state values. A supported change never silently
 removes unrelated unsupported style information from an existing native document.
@@ -82,8 +83,8 @@ removes unrelated unsupported style information from an existing native document
 ## Appended native Effect Controls
 
 Existing parameter positions 0–7 and serialization disk IDs 1–7 remain unchanged,
-including the hidden static caption document. BCAP schema v2 and `BCDOC1:` are
-unchanged. `native/adobe/parameters.hpp` records the new compiled parameter order;
+including the hidden static caption document. `BCDOC1:` is unchanged; typography
+edits use the backwards-compatible BCAP3 footer described below. `native/adobe/parameters.hpp` records the new compiled parameter order;
 CEP/UXP component indexes must still be discovered from actual host metadata.
 
 | State group | Control disk IDs | Group/end disk IDs |
@@ -111,7 +112,7 @@ the existing explicit render-resolution scaling and validation.
 
 ## Source/build verification
 
-- Twelve focused panel-adapter tests cover bounded decoding, legacy v1, Unicode,
+- Fifteen focused panel-adapter tests cover bounded decoding, legacy v1, Unicode,
   manual splits, exact identity, no-op byte equality, hidden native alpha/floats,
   moved-layer timing without source rounding, scoped edits, unsupported refusals
   and exact readback binding updates.
@@ -129,3 +130,33 @@ changes, and native Current-word Size editing/restoration. Full new-control
 keyframing/reset, Undo/Redo, copy/paste, and complete save/reopen pixel persistence
 remain open acceptance items; the original geometry/interpolation evidence is
 recorded in the [native acceptance record](native-effect-acceptance.md).
+
+## Typography candidate (0.7.10 source/build)
+
+BCAP3 appends optional numeric weight, italic and relative B mode for each state,
+plus the shared All words baseline. The JSON protocol remains version 1. Exact
+no-op v1/v2 carriers retain their original bytes. Editing typography upgrades the
+payload to v3 while preserving origin, transcript, hidden color alpha and unrelated
+styles. `fontWeightOffset:100` remains a mode: select the next actual heavier weight
+above the shared baseline, such as Arial 400 → 700. Off follows the baseline; an
+explicit numeric state weight leaves relative mode. Font-catalog metadata is never
+embedded in the document.
+
+The macOS renderer reads actual OpenType weights, supports real variable `wght`
+ranges, and prefers the available native italic face for the selected weight. A
+regular-only font receives a 12-degree synthetic italic, including its ink overhang
+in the measurements used for reflow and bubbles. The legacy unset state keeps the
+original named face. Per-frame selection reuse avoids enumerating faces for every
+word and has no stale global font cache. Native family names still have an explicit
+256 UTF-8-byte limit; all currently inventoried Mac families fit.
+
+Focused source tests cover v3 TS/C++ byte equality, malformed typography flags,
+1–1000 and fractional weights, original v1/v2 byte equality, relative mode/base
+restoration and independent state edits. Sanitizer CoreText tests exercise actual
+Arial regular/bold/italic, synthetic Impact italic and the installed variable Arimo
+font at weight 511.3. The compiled effect smoke test consumes a BCAP3 carrier and
+checks that B, native italic and synthetic italic change real frame pixels.
+
+These checks are isolated native/source acceptance. Installed Premiere typography
+editing and save/reopen still require the parent task's Mac verification; earlier
+0.7.9 host evidence at the top of this file does not establish those new behaviors.

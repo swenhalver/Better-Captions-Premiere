@@ -22,7 +22,7 @@ function harness(t, options = {}) {
     const entries=new Map(),value={nativePath:path,getEntries:async()=>[...entries].map(([name,file])=>({...file,name})),getEntry:async name=>{if(path==='/private/service'&&name==='service.json')serviceReads++;if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
     folders.set(path,value);return value;
   }
-  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues','prepareCaptionTrack','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation']});
+  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','getFontCatalog','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues','prepareCaptionTrack','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation']});
   function setService(status) {
     const entries=folder('/private/service').entries;
     if(status===null)entries.delete('service.json');else entries.set('service.json',{data:status});
@@ -164,6 +164,21 @@ test('font loading initializes native context and accepts a renderer that claims
   assert.equal(h.requests[0].sequenceId,'one');assert.equal(h.requests[0].action,'getFonts');
   assert.equal(h.requests[0].projectPath,'/projects/edit.prproj');
   assert.equal(h.requests[0].expiresAt-h.requests[0].createdAt,10000);
+});
+test('font catalog metadata crosses the captured read lane without changing installed weights or pretending it is a mutation',async t=>{
+  const catalog=[{family:'Café Display',weights:[350,380,617],italic:false,variable:{min:350,max:617}}];
+  const h=harness(t,{serviceResult:input=>{assert.equal(input.action,'getFontCatalog');return catalog;}});
+  assert.deepEqual(JSON.parse(JSON.stringify(await h.api.getFontCatalog())),catalog);
+  assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,'getFontCatalog');assert.deepEqual(Array.from(h.requests[0].args),[]);
+  assert.equal(h.requests[0].sequenceId,'one');assert.equal(h.requests[0].projectPath,'/projects/edit.prproj');assert.equal(h.requests[0].expiresAt-h.requests[0].createdAt,10000);
+});
+test('a timed-out catalog read holds the lane until its real reply and never retries itself',async t=>{
+  const h=harness(t,{autoRespond:false,readTimeoutMs:50});await h.api.getActiveSequenceInfo();
+  const catalog=h.api.getFontCatalog();await tick();h.fireTimeout(50);
+  await assert.rejects(catalog,error=>error.code==='BC_NATIVE_PENDING'&&error.method==='getFontCatalog'&&error.recoverable===true&&error.operationPending===true);
+  await assert.rejects(h.api.getActiveSequenceInfo(),{code:'BC_NATIVE_WAITING'});assert.equal(h.requests.length,1);
+  h.respond(h.requests[0],[{family:'One',weights:[400],italic:false}]);await delay(220);
+  assert.equal(h.api.getTransportAvailability().state,'ready');assert.equal(h.requests.length,1);
 });
 
 test('a changed project location cannot redirect a pending caption save or render request',async t=>{

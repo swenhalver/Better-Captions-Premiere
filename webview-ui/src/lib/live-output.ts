@@ -14,7 +14,7 @@ interface Options {
   now?: () => number;
 }
 const identity = (context: LiveOutputContext) => JSON.stringify([context.sequenceId, context.signature]);
-const nativeReadMethods = new Set(['readCaptionConnections', 'loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation']);
+const nativeReadMethods = new Set(['readCaptionConnections', 'loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation']);
 export function retryableNativeRead(problem: unknown): boolean {
   const error = problem as { code?: string; method?: string; recoverable?: boolean } | null;
   return error?.recoverable === true && ['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE'].includes(error.code ?? '') &&

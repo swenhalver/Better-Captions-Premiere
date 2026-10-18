@@ -36,15 +36,31 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  d.containers.push_back({"razor-right",true,{{"separate",3,4,false}}});assert(regroup(d,500).size()==3);assert(d.containers[1].manualSplit);
  auto encoded=encode(d);auto copy=decode(encoded);assert(encode(copy)==encoded&&copy.containers[1].manualSplit&&copy.style.spoken.opacity==0.5);
  // Schema 2 adds a persistent source/sequence origin without rewriting word times.
- auto originDoc=d;originDoc.timeOriginSeconds=3600;auto originBytes=encode(originDoc);auto originCopy=decode(originBytes);
+ auto versionTwo=d;versionTwo.schemaVersion=2;const auto versionTwoBytes=encode(versionTwo);
+ auto originDoc=versionTwo;originDoc.timeOriginSeconds=3600;auto originBytes=encode(originDoc);auto originCopy=decode(originBytes);
  assert(originCopy.schemaVersion==2&&originCopy.timeOriginSeconds==3600&&originCopy.containers[0].words[0].start==d.containers[0].words[0].start);
  originDoc.timeOriginSeconds=-864000;assert(decode(encode(originDoc)).timeOriginSeconds==-864000);originDoc.timeOriginSeconds=864000;assert(decode(encode(originDoc)).timeOriginSeconds==864000);
- auto legacy=encoded;legacy.resize(legacy.size()-8);legacy[4]=1;auto legacyCopy=decode(legacy);assert(legacyCopy.schemaVersion==2&&legacyCopy.timeOriginSeconds==0&&legacyCopy.containers[0].words[0].text=="HELLO");
- assert(encode(legacyCopy)==encoded); // v1 upgrades explicitly to the canonical v2 payload.
+ auto legacy=versionTwoBytes;legacy.resize(legacy.size()-8);legacy[4]=1;auto legacyCopy=decode(legacy);assert(legacyCopy.schemaVersion==1&&legacyCopy.timeOriginSeconds==0&&legacyCopy.containers[0].words[0].text=="HELLO");
+ assert(encode(legacyCopy)==legacy&&encode(decode(versionTwoBytes))==versionTwoBytes); // Untouched v1/v2 bytes stay exact.
+ legacyCopy.timeOriginSeconds=3600;assert(decode(encode(legacyCopy)).schemaVersion==2);
  for(double invalidOrigin:{std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN(),864000.001,-864000.001}){
   originDoc.timeOriginSeconds=invalidOrigin;rejects([&]{encode(originDoc);});
-  auto malformed=encoded;std::uint64_t bits=0;std::memcpy(&bits,&invalidOrigin,8);for(int j=0;j<8;++j)malformed[malformed.size()-8+j]=static_cast<std::uint8_t>(bits>>(8*j));rejects([&]{decode(malformed);});
+  auto malformed=versionTwoBytes;std::uint64_t bits=0;std::memcpy(&bits,&invalidOrigin,8);for(int j=0;j<8;++j)malformed[malformed.size()-8+j]=static_cast<std::uint8_t>(bits>>(8*j));rejects([&]{decode(malformed);});
  }
+ // Schema 3 appends bounded optional typography. Explicit false/relative base
+ // differ from legacy unset face selection, and next-heavier remains a mode.
+ auto typography=versionTwo;typography.style.baseFontWeight=400;
+ typography.style.upcoming.fontWeight=400;typography.style.upcoming.italic=0;
+ typography.style.current.fontWeight=700;typography.style.current.fontWeightOffset=100;typography.style.current.italic=1;
+ typography.style.spoken.fontWeight=400;typography.style.spoken.fontWeightOffset=0;
+ auto typographyBytes=encode(typography);auto typographyCopy=decode(typographyBytes);
+ assert(typographyCopy.schemaVersion==3&&typographyCopy.style.baseFontWeight==400);
+ assert(typographyCopy.style.current.fontWeight==700&&typographyCopy.style.current.fontWeightOffset==100&&typographyCopy.style.current.italic==1);
+ assert(typographyCopy.style.upcoming.italic==0&&typographyCopy.style.spoken.fontWeightOffset==0&&encode(typographyCopy)==typographyBytes);
+ assert(typographyBytes.size()==versionTwoBytes.size()+56);
+ for(double invalidWeight:{0.999,1000.001,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}){auto invalid=typography;invalid.style.current.fontWeight=invalidWeight;rejects([&]{encode(invalid);});invalid=typography;invalid.style.baseFontWeight=invalidWeight;rejects([&]{encode(invalid);});}
+ auto invalidTypography=typography;invalidTypography.style.current.italic=2;rejects([&]{encode(invalidTypography);});invalidTypography=typography;invalidTypography.style.current.fontWeightOffset=50;rejects([&]{encode(invalidTypography);});
+ for(std::size_t offset:{typographyBytes.size()-40,typographyBytes.size()-36}){auto malformed=typographyBytes;malformed[offset]=3;rejects([&]{decode(malformed);});}
  auto bad=encoded;bad[4]=99;rejects([&]{decode(bad);});bad=encoded;bad.pop_back();rejects([&]{decode(bad);});bad=encoded;bad.push_back(0);rejects([&]{decode(bad);});rejects([&]{decode({});});
  bad=encoded;bad[8]=255;bad[9]=255;rejects([&]{decode(bad);});
  auto invalid=d;invalid.containers[1].id="original";rejects([&]{validate(invalid);});invalid=d;invalid.containers[0].words[0].start=std::numeric_limits<double>::quiet_NaN();rejects([&]{validate(invalid);});invalid=d;invalid.style.current.opacity=2;rejects([&]{validate(invalid);});rejects([&]{regroup(d,0);});

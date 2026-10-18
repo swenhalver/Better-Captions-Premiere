@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { defaultNativeStyle, NATIVE_EFFECT_MATCH_NAME } from '../webview-ui/src/lib/native-effect/contract.ts';
 import { encodeNativeDocument, encodeNativeTransportText } from '../webview-ui/src/lib/native-effect/encode.ts';
 import { nativePanelSequenceId, decodeNativePanelDocument, rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate, NATIVE_PANEL_CAPABILITIES } from '../webview-ui/src/lib/native-effect/panel.ts';
+import { registerFontCatalog } from '../webview-ui/src/lib/font-catalog.ts';
 
 const id = '12345678-1234-5678-abcd-123456789abc';
 const ticks = seconds => String(BigInt(Math.round(seconds * 254016000000)));
@@ -42,7 +43,7 @@ test('the bounded native reader restores source Unicode, manual splits, styles a
 
 test('malformed, truncated, future and trailing native carriers cannot be adopted', () => {
   const text = encodeNativeTransportText(document());
-  for (const invalid of [null, 'BCDOC1:0', text.slice(0, -2), text + '00', text.replace('42434150', '00000000'), text.slice(0, 15) + '03000000' + text.slice(23)]) {
+  for (const invalid of [null, 'BCDOC1:0', text.slice(0, -2), text + '00', text.replace('42434150', '00000000'), text.slice(0, 15) + '04000000' + text.slice(23)]) {
     assert.throws(() => decodeNativePanelDocument(invalid, id));
   }
 });
@@ -74,7 +75,7 @@ test('native captions populate the editor without fabricated legacy movie identi
   assert.equal(connected.clip.clipNodeId, 'native-clip');
   assert.equal(capabilities.geometry, 'premiere-effect-controls');
   assert.equal(capabilities.animation, 'premiere-effect-controls');
-  assert.ok(warnings.some(warning => warning.includes('font weight/B')));
+  assert.ok(warnings.some(warning => warning.includes('synthetic italic')));
   assert.ok(warnings.some(warning => warning.includes('px')));
 });
 
@@ -128,9 +129,6 @@ test('supported state size, opacity, bubble and effect values map without touchi
 test('unsupported formatting, presets and geometry are refused rather than lost', () => {
   const { session, binding: connected } = binding(), original = clone(connected.document);
   for (const patch of [
-    state => state.style.fontWeight = 700,
-    state => state.style.activeWord.fontWeightOffset = 100,
-    state => state.style.activeWord.italic = true,
     state => state.style.activeWord.letterSpacing = 3,
     state => state.style.activeWord.strokeEnabled = false,
     state => state.style.activeWord.shadowEnabled = false,
@@ -145,7 +143,62 @@ test('unsupported formatting, presets and geometry are refused rather than lost'
     assert.throws(() => prepareNativePanelUpdate(connected, edited), /cannot apply/);
     assert.deepEqual(connected.document, original);
   }
-  assert.ok(NATIVE_PANEL_CAPABILITIES.unsupportedWordStyleFields.includes('fontWeightOffset'));
+  assert.ok(NATIVE_PANEL_CAPABILITIES.supportedWordStyleFields.includes('fontWeightOffset'));
+});
+
+test('native weight, relative B and italic roundtrip per state while preserving hidden colors and origin', () => {
+  registerFontCatalog([{family:'Arial',weights:[400,700],italic:true},{family:'Georgia',weights:[400,700],italic:true}]);
+  const {session,binding:connected}=binding(), edited=clone(session);
+  Object.assign(edited.style.activeWord,{fontWeightOffset:100,italic:true});
+  const prepared=prepareNativePanelUpdate(connected,edited);
+  assert.equal(prepared.style.baseFontWeight,400);
+  assert.equal(prepared.style.current.fontWeight,700,'B resolves next available Georgia face');
+  assert.equal(prepared.style.current.fontWeightOffset,100);
+  assert.equal(prepared.style.current.italic,true);
+  assert.deepEqual(prepared.style.current.color,connected.document.style.current.color);
+  assert.deepEqual(prepared.style.spoken,connected.document.style.spoken);
+  assert.deepEqual(prepared.captions,connected.document.captions);
+  assert.equal(prepared.timeOriginSeconds,3600);
+  const readback=rehydrateNativePanel(entry(prepared),sequence());
+  assert.equal(readback.session.style.fontWeight,400,'Shared base is not flattened into B weight');
+  assert.equal(readback.session.style.activeWord.fontWeightOffset,100);
+  assert.equal(readback.session.style.activeWord.italic,true);
+  assert.equal(encodeNativeTransportText(prepareNativePanelUpdate(readback.binding,readback.session)),entry(prepared).documentText);
+  const off=clone(readback.session);off.style.activeWord.fontWeightOffset=0;off.style.activeWord.italic=false;
+  const offDocument=prepareNativePanelUpdate(readback.binding,off);
+  assert.equal(offDocument.style.current.fontWeight,400);
+  assert.equal(offDocument.style.current.fontWeightOffset,0);
+  assert.equal(offDocument.style.current.italic,false);
+});
+
+test('relative B follows changed shared baseline and numeric state weights become absolute', () => {
+  const source=document();source.style.baseFontWeight=400;
+  Object.assign(source.style.current,{fontWeight:700,fontWeightOffset:100,italic:true});
+  const {session,binding:connected}=rehydrateNativePanel(entry(source),sequence());
+  const changed=clone(session);changed.style.fontWeight=700;
+  const prepared=prepareNativePanelUpdate(connected,changed);
+  assert.equal(prepared.style.baseFontWeight,700);
+  assert.equal(prepared.style.current.fontWeightOffset,100,'A base edit preserves B mode');
+  assert.equal(prepared.style.current.italic,true);
+  const absolute=clone(session);Object.assign(absolute.style.activeWord,{fontWeight:400,fontWeightOffset:null});
+  const absoluteDocument=prepareNativePanelUpdate(connected,absolute);
+  assert.equal(absoluteDocument.style.current.fontWeight,400);
+  assert.equal(absoluteDocument.style.current.fontWeightOffset,null);
+  assert.equal(absoluteDocument.style.baseFontWeight,400);
+});
+
+test('untouched binary versions 1 and 2 remain byte exact and typography edits upgrade only the carrier', () => {
+  for(const binaryVersion of [1,2]){
+    const source={...document(),timeOriginSeconds:0,binaryVersion};
+    const nativeEntry=entry(source), {session,binding:connected}=rehydrateNativePanel(nativeEntry,sequence());
+    assert.equal(encodeNativeTransportText(prepareNativePanelUpdate(connected,session)),nativeEntry.documentText);
+    const edited=clone(session);edited.style.activeWord.italic=true;
+    const prepared=prepareNativePanelUpdate(connected,edited), bytes=encodeNativeDocument(prepared);
+    assert.equal(new DataView(bytes.buffer).getUint32(4,true),3);
+    assert.deepEqual(prepared.captions,connected.document.captions);
+    assert.deepEqual(prepared.style.current.color,connected.document.style.current.color);
+    assert.equal(prepared.timeOriginSeconds,0);
+  }
 });
 
 test('an overridden base style is not silently discarded by the native projection', () => {

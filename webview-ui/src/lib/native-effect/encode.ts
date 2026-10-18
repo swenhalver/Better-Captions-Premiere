@@ -1,9 +1,12 @@
-import { validateNativeDocument, validateNativeStyle, type NativeColor, type NativeWordStyle } from './contract.ts';
-/** BCAP little-endian v2 payload matching native/core/caption_core.cpp.
+import { validateNativeDocument, validateNativeStyle, type NativeColor, type NativeWordStyle, type NativeStyle } from './contract.ts';
+/** BCAP little-endian v1/v2/v3 payload matching native/core/caption_core.cpp.
  * Sequence/clip bounds stay in the panel envelope; the renderer receives source words,
  * manual container identities and styles. No path, code, animation or host mutation. */
 export function encodeNativeDocument(input: unknown): Uint8Array {
   const doc = validateNativeDocument(input), bytes: number[] = [];
+  const states = [doc.style.upcoming, doc.style.current, doc.style.spoken];
+  const typography = doc.style.baseFontWeight !== undefined || states.some(style => style.fontWeight !== undefined || style.italic !== undefined || style.fontWeightOffset !== undefined && style.fontWeightOffset !== null);
+  const version = typography ? 3 : doc.binaryVersion === 1 && doc.timeOriginSeconds !== 0 ? 2 : doc.binaryVersion ?? 2;
   const u = (n: number) => { for (let i = 0; i < 4; i++) bytes.push((n >>> (8 * i)) & 255); };
   const d = (n: number) => { const b = new Uint8Array(8); new DataView(b.buffer).setFloat64(0, n, true); bytes.push(...b); };
   const s = (text: string) => { const b = new TextEncoder().encode(text); u(b.length); for (const n of b) bytes.push(n); };
@@ -13,13 +16,15 @@ export function encodeNativeDocument(input: unknown): Uint8Array {
     color(w.bubbleColor); d(w.padding); d(w.radius); d(w.outlineWidth); color(w.outlineColor);
     d(w.shadowBlur); d(w.shadowX); d(w.shadowY); color(w.shadowColor);
   };
-  u(0x50414342); u(2); u(doc.captions.length);
+  u(0x50414342); u(version); u(doc.captions.length);
   for (const c of doc.captions) {
     s(c.id); u(Number(c.manualSplit)); u(c.words.length);
     for (const w of c.words) { s(w.text); d(w.start); d(w.end); u(Number(w.endOfSentence)); }
   }
   style(doc.style.upcoming); style(doc.style.current); style(doc.style.spoken);
-  d(doc.style.wordSpacing); d(doc.style.lineHeight); u(Number(doc.style.titleCase)); d(doc.timeOriginSeconds);
+  d(doc.style.wordSpacing); d(doc.style.lineHeight); u(Number(doc.style.titleCase));
+  if(version>=2)d(doc.timeOriginSeconds);
+  if(version>=3){d(doc.style.baseFontWeight??0);for(const word of states){d(word.fontWeight??0);u(word.italic===undefined?0:word.italic?2:1);u(word.fontWeightOffset===100?2:word.fontWeightOffset===0?1:0);}}
   if (bytes.length > 16 * 1024 * 1024) throw new Error('Native payload exceeds 16 MiB.');
   return Uint8Array.from(bytes);
 }
@@ -62,7 +67,7 @@ export function decodeNativeTransportTimeOrigin(text: unknown): number {
     return value;
   };
   if (u() !== 0x50414342) throw new Error('Invalid native document magic.');
-  const version = u(); if (version !== 1 && version !== 2) throw new Error('Unsupported native binary version.');
+  const version = u(); if (version !== 1 && version !== 2 && version !== 3) throw new Error('Unsupported native binary version.');
   const containers = u(); if (containers > 10000) throw new Error('Too many native containers.');
   const identities = new Set<string>(); let count = 0;
   for (let i = 0; i < containers; i++) {
@@ -74,8 +79,10 @@ export function decodeNativeTransportTimeOrigin(text: unknown): number {
   const color = () => ({ r: d(), g: d(), b: d(), a: d() });
   const style = () => ({ fontFamily: string(256), fontSize: d(), sizeScale: d(), opacity: d(), color: color(), bubble: flag(), bubbleColor: color(), padding: d(), radius: d(), outlineWidth: d(), outlineColor: color(), shadowBlur: d(), shadowX: d(), shadowY: d(), shadowColor: color() });
   const upcoming = style(), current = style(), spoken = style();
-  validateNativeStyle({ upcoming, current, spoken, wordSpacing: d(), lineHeight: d(), titleCase: flag() });
-  const origin = version === 2 ? d() : 0;
+  const nativeStyle: NativeStyle = { upcoming, current, spoken, wordSpacing: d(), lineHeight: d(), titleCase: flag() };
+  const origin = version >= 2 ? d() : 0;
+  if(version>=3){const base=d();if(base!==0)nativeStyle.baseFontWeight=base;for(const word of [upcoming,current,spoken] as NativeWordStyle[]){const weight=d(),italic=u(),offset=u();if(italic>2||offset>2)throw new Error('Invalid native typography mode.');if(weight!==0)word.fontWeight=weight;if(italic)word.italic=italic===2;if(offset)word.fontWeightOffset=offset===2?100:0;}}
+  validateNativeStyle(nativeStyle);
   if (Math.abs(origin) > 864000 || offset !== bytes.length) throw new Error('Invalid native document origin or trailing bytes.');
   return origin;
 }

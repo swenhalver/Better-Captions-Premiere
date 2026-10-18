@@ -94,9 +94,38 @@ test('TS encoder bytes roundtrip through actual C++ decoder and encoder', async 
     const legacyDocument = { ...data, timeOriginSeconds: 0 }, legacy = encodeNativeDocument(legacyDocument).slice(0, -8);
     legacy[4] = 1; writeFileSync(input, legacy);
     execFileSync(executable, ['--roundtrip', input, output]);
-    assert.deepEqual(new Uint8Array(readFileSync(output)), encodeNativeDocument(legacyDocument));
+    assert.deepEqual(new Uint8Array(readFileSync(output)), legacy,'Untouched legacy v1 is not rewritten');
     assert.deepEqual(Array.from(encoded.slice(0, 8)), [66, 67, 65, 80, 2, 0, 0, 0]);
+    const typography=structuredClone(data);typography.style.baseFontWeight=442.5;
+    Object.assign(typography.style.current,{fontWeight:700,fontWeightOffset:100,italic:true});
+    Object.assign(typography.style.upcoming,{fontWeight:1,italic:false});
+    Object.assign(typography.style.spoken,{fontWeight:442.5,fontWeightOffset:0});
+    const v3=encodeNativeDocument(typography);assert.equal(v3.length,encoded.length+56);
+    writeFileSync(input,v3);execFileSync(executable,['--roundtrip',input,output]);
+    assert.deepEqual(new Uint8Array(readFileSync(output)),v3,'v3 typography is byte-exact across TS and C++');
+    assert.equal(new DataView(v3.buffer).getUint32(4,true),3);
   } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('native typography validates bounded weights, explicit italic and the relative B mode', async () => {
+  const {encodeNativeTransportText,decodeNativeTransportTimeOrigin}=await import('../webview-ui/src/lib/native-effect/encode.ts');
+  const {decodeNativePanelDocument}=await import('../webview-ui/src/lib/native-effect/panel.ts');
+  const data=document();data.timeOriginSeconds=123.456;data.style.baseFontWeight=400;
+  Object.assign(data.style.current,{fontWeight:700,italic:true,fontWeightOffset:100});
+  Object.assign(data.style.upcoming,{fontWeight:1,italic:false,fontWeightOffset:0});
+  const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');
+  assert.equal(decoded.binaryVersion,3);assert.deepEqual(decoded.style,data.style);
+  assert.equal(decodeNativeTransportTimeOrigin(text),123.456);
+  assert.equal(encodeNativeTransportText(decoded),text);
+  for(const patch of [{fontWeight:0},{fontWeight:.999},{fontWeight:1000.01},{fontWeight:NaN},{italic:1},{fontWeightOffset:50}]){
+    const bad=structuredClone(data);Object.assign(bad.style.current,patch);assert.throws(()=>validateNativeDocument(bad));
+  }
+  for(const value of [0,.999,1000.01,Infinity])assert.throws(()=>validateNativeDocument({...data,style:{...data.style,baseFontWeight:value}}));
+  const bytes=Buffer.from(text.slice(7),'hex');
+  for(const field of [bytes.length-40,bytes.length-36]){
+    const malformed=Buffer.from(bytes);malformed.writeUInt32LE(3,field);const carrier='BCDOC1:'+malformed.toString('hex');
+    assert.throws(()=>decodeNativePanelDocument(carrier,'seq-1'));assert.throws(()=>decodeNativeTransportTimeOrigin(carrier));
+  }
 });
 
 test('documented UXP component probe stays read-only and does not infer arbitrary transport', async () => {

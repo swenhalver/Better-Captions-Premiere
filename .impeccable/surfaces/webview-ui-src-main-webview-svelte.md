@@ -38,3 +38,14 @@ The user requires a character limit instead of a word limit. Preserve the existi
 ## One physical clip and linked grouping, 2026-10-17
 
 The remote 0.7.3 continuation extends the same two-tab interface. Apply defaults to Automatic above footage. A new transcript uses one physical clip; sentence rows still open individual word timelines. Regroup works after Apply by changing internal rendered groups without replacing clip identities or keys. Deliberate transcript splits and supported native Razor cuts remain physical splits. Keep the character field readable at 280px even when its summary wraps. The design system is unchanged. Browser review covers the visible controls; native installation is blocked on this Windows PC and 0.7.3 remains unreleased.
+
+## Installed-font search and typography, 2026-10-18
+
+Replace the unreliable font datalist with a compact autocomplete combobox and a
+scrollable list of local installed families. Search/select stays inside the panel;
+the popup preserves the host palette, explicit keyboard focus, arrow/Enter/Escape
+behavior and narrow-width fit. Weight choices are numeric and reflect only real
+faces or variable ranges. Relative B uses the next available heavier weight above
+All words. Italic remains available for every font, using synthetic slant when a
+native italic face is absent. Font count/refresh and failure recovery belong in
+the open popup, preserving the compact closed toolbar.

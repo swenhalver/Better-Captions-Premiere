@@ -101,7 +101,7 @@ include a NUL; FLATTEN emits exact-length text without it, matching observed CEP
 serialization. UNFLATTEN accepts either one trailing NUL or none, rejects embedded
 NULs, and also accepts earlier experimental binary BCAP for migration. Binary
 BCAP remains the versioned payload inside the `BCDOC1:` text envelope; envelope
-version1 and document schema2 are distinct. The carrier is limited
+version1 and document schemas1–3 are distinct. BCAP3 adds optional weight/italic/relative-B typography without changing the carrier or parameter disk IDs; untouched older documents retain their exact version. The carrier is limited
 to 16 MiB, equivalent to 4,194,300 binary document bytes.
 Strict checks reject malformed UTF-16, invalid hex, unsupported schema and limits.
 Arbitrary-data interpolation

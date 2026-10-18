@@ -1,4 +1,5 @@
 #include "caption_rasterizer.hpp"
+#include "font_selection.hpp"
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
 #include <cmath>
@@ -12,8 +13,24 @@ template<class T> struct Ref {
  ~Ref(){CFRelease(value);} Ref(const Ref&)=delete; Ref& operator=(const Ref&)=delete;
  operator T()const{return value;}
 };
+// One render can measure/draw dozens of words with the same three state fonts.
+// Reuse selections for that frame only; installed-font changes take effect on
+// the next render without a global cache or a font-registration observer.
+struct FrameFonts {
+ struct Entry {std::string family;double size,weight,base;int italic,offset;CTFontRef font;bool synthetic;};
+ std::vector<Entry> entries;
+ ~FrameFonts(){for(const auto& entry:entries)CFRelease(entry.font);}
+ CTFontRef select(const WordStyle& style,double base,bool& synthetic){
+  const auto size=style.fontSize*style.sizeScale;
+  for(const auto& entry:entries)if(entry.family==style.fontFamily&&entry.size==size&&entry.weight==style.fontWeight&&entry.base==base&&entry.italic==style.italic&&entry.offset==style.fontWeightOffset){synthetic=entry.synthetic;return static_cast<CTFontRef>(CFRetain(entry.font));}
+  auto choice=font_detail::choose(style,base);synthetic=choice.info.syntheticItalic;
+  if(entries.size()<16)entries.push_back({style.fontFamily,size,style.fontWeight,base,style.italic,style.fontWeightOffset,static_cast<CTFontRef>(CFRetain(choice.font)),synthetic});
+  return choice.font;
+ }
+};
 struct Shaped {
- Ref<CFStringRef> text,fontName;
+ Ref<CFStringRef> text;
+ bool syntheticItalic=false;
  Ref<CTFontRef> font;
  Ref<CGColorSpaceRef> space;
  Ref<CGColorRef> fill,stroke;
@@ -27,33 +44,45 @@ struct Shaped {
  }
  static CGColorRef color(CGColorSpaceRef space,const Color& c,double opacity){CGFloat values[]={c.r,c.g,c.b,c.a*opacity};return CGColorCreate(space,values);}
  static CFNumberRef number(double width,double size){double percent=width>0?-100*width/size:0;return CFNumberCreate(nullptr,kCFNumberDoubleType,&percent);}
+ static CTFontRef selectFont(const WordStyle& style,double baseWeight,bool& synthetic,FrameFonts* fonts){if(fonts)return fonts->select(style,baseWeight,synthetic);auto choice=font_detail::choose(style,baseWeight);synthetic=choice.info.syntheticItalic;return choice.font;}
  static CFDictionaryRef attrs(CTFontRef f,CGColorRef fill,CGColorRef stroke,CFNumberRef w){
   const void* keys[]={kCTFontAttributeName,kCTForegroundColorAttributeName,kCTStrokeColorAttributeName,kCTStrokeWidthAttributeName};
   const void* values[]={f,fill,stroke,w};return CFDictionaryCreate(nullptr,keys,values,4,&kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
  }
- Shaped(const std::string& s,const WordStyle& style):text(utf8(s)),fontName(utf8(style.fontFamily)),
- font(CTFontCreateWithName(fontName,style.fontSize*style.sizeScale,nullptr)),space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB)),
+ Shaped(const std::string& s,const WordStyle& style,double baseWeight,FrameFonts* fonts=nullptr):text(utf8(s)),
+ font(selectFont(style,baseWeight,syntheticItalic,fonts)),space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB)),
  fill(color(space,style.color,style.opacity)),stroke(color(space,style.outlineColor,style.opacity)),
  strokeWidth(number(style.outlineWidth,style.fontSize*style.sizeScale)),attributes(attrs(font,fill,stroke,strokeWidth)),
  attributed(CFAttributedStringCreate(nullptr,text,attributes)),line(CTLineCreateWithAttributedString(attributed)){}
- Metrics metrics()const{CGFloat a=0,d=0;double w=CTLineGetTypographicBounds(line,&a,&d,nullptr);return {w,a,d};}
+ CGRect inkBounds()const{return CTLineGetBoundsWithOptions(line,kCTLineBoundsUseGlyphPathBounds);}
+ double offsetX()const{return syntheticItalic?std::max(0.0,-double(inkBounds().origin.x)):0;}
+ Metrics metrics()const{CGFloat a=0,d=0;double w=CTLineGetTypographicBounds(line,&a,&d,nullptr);
+  // Synthetic slant adds ink beyond the advance. Include that overhang in
+  // reflow and bubbles, and draw with the matching offset at the left edge.
+  if(syntheticItalic){const auto ink=inkBounds();const auto left=std::min(0.0,double(ink.origin.x));w=std::max(w,double(CGRectGetMaxX(ink)))-left;a=std::max(double(a),double(CGRectGetMaxY(ink)));d=std::max(double(d),-double(ink.origin.y));}
+  return {w,a,d};}
 };
 }
-Metrics measureText(const std::string& text,const WordStyle& style){
- Document check;check.style.current=style;check.containers.push_back({"measure",false,{{text,0,1,false}}});validate(check);
- return Shaped(text,style).metrics();
+FontSelection fontSelection(const WordStyle& style,double baseWeight){
+ Document check;check.style.current=style;check.style.baseFontWeight=baseWeight;validate(check);
+ auto choice=font_detail::choose(style,baseWeight);CFRelease(choice.font);return choice.info;
+}
+Metrics measureText(const std::string& text,const WordStyle& style,double baseWeight){
+ Document check;check.style.current=style;check.style.baseFontWeight=baseWeight;check.containers.push_back({"measure",false,{{text,0,1,false}}});validate(check);
+ return Shaped(text,style,baseWeight).metrics();
 }
 Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::size_t width,std::size_t height,std::size_t maxChars,double pause){
  validate(document);
  if(!width||!height||width>8192||height>8192||width*height>33554432)throw std::invalid_argument("Native frame exceeds bitmap bounds");
- auto frame=layoutFrame(document,time,box,[](const std::string& text,const WordStyle& style){return Shaped(text,style).metrics();},maxChars,pause);
+ FrameFonts fonts;
+ auto frame=layoutFrame(document,time,box,[&](const std::string& text,const WordStyle& style){return Shaped(text,style,document.style.baseFontWeight,&fonts).metrics();},maxChars,pause);
  Bitmap bitmap{width,height,width*4,std::vector<std::uint8_t>(width*height*4,0),frame.overflow};
  Ref<CGColorSpaceRef> space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
  Ref<CGContextRef> context(CGBitmapContextCreate(bitmap.pixels.data(),width,height,8,bitmap.stride,space,kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big));
  // Core Graphics coordinates are bottom-left; layout geometry is top-left.
  CGContextClipToRect(context,CGRectMake(box.x,height-box.y-box.height,box.width,box.height));
  for(const auto& run:frame.words){
-  const auto& s=run.style;Shaped shaped(run.text,s);auto m=shaped.metrics();double pad=s.bubble?s.padding:0;
+  const auto& s=run.style;Shaped shaped(run.text,s,document.style.baseFontWeight,&fonts);auto m=shaped.metrics();double pad=s.bubble?s.padding:0;
   CGContextSaveGState(context);
   if(s.bubble){
    Ref<CGColorRef> bubble(Shaped::color(space,s.bubbleColor,s.opacity));CGContextSetFillColorWithColor(context,bubble);
@@ -65,7 +94,7 @@ Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::
    Ref<CGColorRef> shadow(Shaped::color(space,s.shadowColor,s.opacity));
    CGContextSetShadowWithColor(context,CGSizeMake(s.shadowX,-s.shadowY),s.shadowBlur,shadow);
   }
-  CGContextSetTextMatrix(context,CGAffineTransformIdentity);CGContextSetTextPosition(context,run.x+pad,height-run.baseline);
+  CGContextSetTextMatrix(context,CGAffineTransformIdentity);CGContextSetTextPosition(context,run.x+pad+shaped.offsetX(),height-run.baseline);
   CTLineDraw(shaped.line,context);CGContextRestoreGState(context);
  }
  return bitmap;

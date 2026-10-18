@@ -16,8 +16,8 @@ function sameSavedSequence(a, b) {
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
-const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionArea', 'readCaptionConsolidation']);
-const SERVICE_READS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
+const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionArea', 'readCaptionConsolidation']);
+const SERVICE_READS = new Set(['getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 
 function createHostAPI(options = {}) {
   const contexts = new Map();
@@ -215,6 +215,7 @@ function createHostAPI(options = {}) {
       await writeJSON(folder, 'captions.better-captions.json', session);
     },
     async getFonts() { if (!currentId) await nativeAPI.getActiveSequenceInfo(); return backend('getFonts', []); },
+    async getFontCatalog() { if (!currentId) await nativeAPI.getActiveSequenceInfo(); return backend('getFontCatalog', []); },
     async showInPremiere(time, id = currentId) { return backend('showInPremiere', [time], id); },
     async beginCaption(captionId, id) { return backend('beginCaption', [captionId], id); },
     async saveCaptionFrames(folder, frames, start, id) { return backend('saveCaptionFrames', [folder, frames, start], id); },

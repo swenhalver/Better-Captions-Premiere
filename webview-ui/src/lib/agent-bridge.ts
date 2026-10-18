@@ -13,11 +13,11 @@ export interface AgentHandler {
   readArea?:(payload:unknown)=>unknown|Promise<unknown>;
   editArea?:(payload:unknown)=>unknown|Promise<unknown>;
 }
-const styleNumbers:Record<string,[number,number]>={fontSize:[8,400],fontWeight:[100,1000],strokeOpacity:[0,1],strokeWidth:[0,30],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],backgroundOpacity:[0,1],backgroundPadding:[0,100],backgroundRadius:[0,200],positionX:[0,1],positionY:[0,1],maxWidth:[.1,1],lineHeight:[.6,3],wordSpacing:[0,300]};
-const stateNumbers:Record<string,[number,number]>={fontSize:[8,1200],letterSpacing:[-10,40],strokeWidth:[0,30],strokeOpacity:[0,1],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],fontWeight:[100,1000],sizeScale:[.4,3],opacity:[0,1],bubbleOpacity:[0,1],padding:[0,100],radius:[0,200]};
+const styleNumbers:Record<string,[number,number]>={fontSize:[8,400],fontWeight:[1,1000],strokeOpacity:[0,1],strokeWidth:[0,30],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],backgroundOpacity:[0,1],backgroundPadding:[0,100],backgroundRadius:[0,200],positionX:[0,1],positionY:[0,1],maxWidth:[.1,1],lineHeight:[.6,3],wordSpacing:[0,300]};
+const stateNumbers:Record<string,[number,number]>={fontSize:[8,1200],letterSpacing:[-10,40],strokeWidth:[0,30],strokeOpacity:[0,1],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],fontWeight:[1,1000],sizeScale:[.4,3],opacity:[0,1],bubbleOpacity:[0,1],padding:[0,100],radius:[0,200]};
 function object(value:unknown):asserts value is Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Expected a JSON object.');for(const key of Object.keys(value))if(['__proto__','prototype','constructor'].includes(key))throw new Error('Invalid property name.');}
 function number(value:unknown,min:number,max:number){if(typeof value!=='number'||!Number.isFinite(value)||value<min||value>max)throw new Error(`Expected a finite number between ${min} and ${max}.`);}
-function font(value:unknown){if(typeof value!=='string'||value.length>160||/[\u0000-\u001f]/.test(value))throw new Error('Invalid font family.');}
+function font(value:unknown){if(typeof value!=='string'||value.length>4096||/[\u0000-\u001f]/.test(value))throw new Error('Invalid font family.');}
 function color(value:unknown){if(typeof value!=='string'||!/^#[0-9a-f]{6}$/i.test(value))throw new Error('Colors must be six-digit hex values.');}
 function bool(value:unknown){if(typeof value!=='boolean')throw new Error('Expected true or false.');}
 function allowedProperties(value:Record<string,unknown>,names:string[]){for(const key of Object.keys(value))if(!names.includes(key))throw new Error('Unknown caption area option: '+key);}

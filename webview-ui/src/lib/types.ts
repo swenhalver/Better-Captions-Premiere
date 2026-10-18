@@ -76,7 +76,7 @@ export type TextTransform = "none" | "uppercase" | "lowercase" | "titlecase";
 
 export interface WordAppearance {
   /** 0 inherits the shared weight, 100 is one step bolder; null/absent keeps an absolute override. */
-  fontWeightOffset?: 0 | 100 | null;
+  fontWeightOffset?: 0 | 100 | null; // 100 means the next installed heavier weight above All words.
   fontSize?: number;
   italic?: boolean;
   letterSpacing?: number;

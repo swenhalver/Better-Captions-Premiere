@@ -5,6 +5,7 @@ declare const window: Window & { __adobe_cep__?: any; require?: any };
 const demoWords = 'Every word has its own style. Move captions anywhere in the frame.'.split(' ').map((text, i) => ({ text, start: i * .42, duration: .36, confidence: 1, eos: /[.!?]$/.test(text), type: 'word' as const, tags: [] }));
 export interface CapturedContext { id: string; name: string; projectPath: string; width: number; height: number; fps: number; duration: number; dir: string; }
 export interface NativeTranscriptProvider { fetch(context: CapturedContext): Promise<string | null>; transcribe(context: CapturedContext): Promise<string | null>; }
+export interface FontCatalogEntry { family:string;weights:number[];italic:boolean;variable?:{min:number;max:number}; }
 const HOST_BRIDGE_METHODS = ['context','seek','selectCaptionClip','readCaptionSelection','readCaptionConnections','writeNativeCaptionDocument','readCaptionGeometry','readCaptionMotion','readCaptionAreaDescriptor','patchCaptionKeyValues','preflight','prepareCaptionTrack','apply','readTimeline','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation'];
 function sameSavedSequence(a:unknown,b:string) {
   if(typeof a!=='string')return false;
@@ -235,6 +236,12 @@ catch(e){var line=Number(e&&e.line);return '{"version":1,"ok":false,"error":'+qu
       await checkSequence(sequenceId); return json;
     },
     async getFonts() { return cep ? runtime.fonts() : ['Arial', 'Helvetica', 'Georgia', 'Verdana', 'Times New Roman', 'Impact']; },
+    async getFontCatalog():Promise<FontCatalogEntry[]> {
+      // BrowserPreview labels its synthetic fixture; installed Premiere always
+      // reads the real runtime catalog and propagates any enumeration failure.
+      if(!cep)return ['Arial','Helvetica','Georgia','Verdana','Times New Roman','Impact'].map(family=>({family,weights:family==='Impact'?[400]:[400,700],italic:family!=='Impact'}));
+      return runtime.fontCatalog();
+    },
     async showInPremiere(time: number, sequenceId = currentId) { const context = captured(sequenceId); return host('seek', [context.id, time, context.projectPath]); },
     async beginCaption(id: string, sequenceId: string) {
       if (!/^[a-zA-Z0-9_-]{1,120}$/.test(id)) throw new Error('Invalid caption identity.');

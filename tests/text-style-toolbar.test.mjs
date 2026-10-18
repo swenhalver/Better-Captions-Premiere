@@ -17,7 +17,12 @@ assert.deepEqual(compiled.warnings, [], 'Compile the actual toolbar without acce
 const folder = mkdtempSync(join(tmpdir(), 'better-captions-text-style-'));
 after(() => rmSync(folder, { recursive: true, force: true }));
 symlinkSync(fileURLToPath(new URL('../webview-ui/node_modules', import.meta.url)), join(folder, 'node_modules'), 'dir');
-const code = compiled.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, (_match, quote, specifier) => `from ${quote}${new URL(`${specifier}.ts`, sourceUrl).href}${quote}`);
+const pickerUrl = new URL('../webview-ui/src/components/FontPicker.svelte', import.meta.url);
+const picker = compile(readFileSync(pickerUrl, 'utf8'), { generate: 'server', filename: 'FontPicker.svelte' });
+assert.deepEqual(picker.warnings, [], 'Compile the installed font picker without accessibility warnings');
+const imports = base => (_match, quote, specifier) => `from ${quote}${specifier.endsWith('.svelte') ? './FontPicker.mjs' : new URL(specifier.endsWith('.ts') ? specifier : `${specifier}.ts`, base).href}${quote}`;
+writeFileSync(join(folder, 'FontPicker.mjs'), picker.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(pickerUrl)));
+const code = compiled.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(sourceUrl));
 writeFileSync(join(folder, 'TextStyleToolbar.mjs'), code);
 const { default: TextStyleToolbar, textStylePatch, textStyleAppearance, textStyleMixed,
   textStyleBoldState, textStyleBoldDisabled, textStyleBoldPatch } = await import(pathToFileURL(join(folder, 'TextStyleToolbar.mjs')));
@@ -215,25 +220,33 @@ test('at the maximum baseline B cannot turn on but an existing on or mixed step 
   for (const key of ['spokenWord', 'activeWord', 'upcomingWord']) assert.equal(resolveAppearance(off, key).fontWeight, 1000);
 });
 
-test('the rendered weight list is numeric and B uses relative state and a clear step tooltip', () => {
+test('the rendered weight list contains only the selected font’s installed weights and B remains relative', () => {
   const style = fresh(); style.fontWeight = 500;
-  const html = view({ style });
+  const html = view({ style, fontCatalog: [{ family: 'Arial', weights: [400, 500, 700], italic: true }] });
   const select = html.match(/<select[^>]*aria-label="Font weight"[\s\S]*?<\/select>/)?.[0];
   const options = [...select.matchAll(/<option[^>]*>([^<]*)<\/option>/g)].map(match => match[1]);
-  assert.deepEqual(options, ['100', '200', '300', '400', '500', '600', '700', '800', '900', '1000']);
+  assert.deepEqual(options, ['400', '500', '700']);
   assert.doesNotMatch(select, /Regular|Bold|Mixed/);
   assert.match(html.match(/<button[^>]*aria-label="Bold"[^>]*>/)[0], /aria-pressed="false"/);
-  assert.match(html, /One step bolder \(\+100\) than All words \(500\)/);
+  assert.match(html, /Next supported weight above All words \(500\)/);
   const on = apply(style, textStyleBoldPatch(style, 'current'));
   assert.match(view({ style: on, scope: 'current' }).match(/<button[^>]*aria-label="Bold"[^>]*>/)[0], /aria-pressed="true"/);
   style.fontWeight = 1000;
   assert.match(view({ style }).match(/<button[^>]*aria-label="Bold"[^>]*>/)[0], /disabled/);
 });
 
+test('the installed font control is a searchable combobox and Italic stays enabled in native mode', () => {
+  const html = view({ nativeMode: true, fontCatalog: [{ family: 'Arial', weights: [400, 700], italic: false }] });
+  assert.match(html, /role="combobox"/); assert.match(html, /aria-autocomplete="list"/);
+  assert.match(html, /aria-label="Show installed fonts"/); assert.doesNotMatch(html, /<datalist/);
+  const italic = html.match(/<button[^>]*aria-label="Italic"[^>]*>/)[0];
+  assert.doesNotMatch(italic, /disabled/); assert.match(italic, /synthetic slant/);
+});
+
 test('the real toolbar starts compact with each advanced control closed', () => {
   const html = view({});
   for (const name of ['All words', 'Past', 'Current', 'Next', 'Spacing', 'Outline', 'Shadow', 'Bubble', 'Layout']) assert.match(html, new RegExp(`>${name}<`));
-  assert.equal((html.match(/aria-expanded="false"/g) ?? []).length, 5);
+  assert.equal((html.match(/class="text-style__more-button[^\"]*"[^>]*aria-expanded="false"/g) ?? []).length, 5);
   assert.doesNotMatch(html, /Letter spacing, px|Word spacing, %|Whole caption background|X offset, px/);
   assert.match(html, /aria-label="Font family"/);
   assert.match(html, /aria-label="Bold"/);

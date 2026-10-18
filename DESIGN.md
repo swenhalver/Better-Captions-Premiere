@@ -202,6 +202,13 @@ All share the global focus treatment: a two-pixel accent outline, offset by (2px
 
 ### Inputs / Fields
 
+The caption font field is a searchable combobox with its own charcoal list rather
+than a browser datalist. Opening shows installed families; typing filters, arrows
+choose an item, Enter applies and Escape cancels. The list scrolls independently
+and uses the normal blue focus/selection treatment. A count and Refresh appear
+only while the list is open. Numeric weight options come from the chosen family's
+installed faces/range. Italic stays available and synthesizes a slant when needed.
+
 Explicit labels sit above dark recessed fields with a small gap (0.375rem). Inputs, selects and textareas share one-pixel borders and the control radius. Hover lightens the border; focus uses the global outline. Textareas use line-height (1.6) and a minimum block size of (5rem). Checkbox and range accents use Focus Blue.
 
 ### Navigation

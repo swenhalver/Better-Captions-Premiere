@@ -1,6 +1,7 @@
 <script module lang="ts">
   import type { StyleConfig, WordAppearance } from "../lib/types";
   import { resolveAppearance, type WordStateKey, type ResolvedAppearance } from "../lib/appearance";
+  import { fontWeightOptions, nextFontWeight, resolveFontWeight, type InstalledFont } from '../lib/font-catalog.ts';
 
   export type TextStyleScope = "all" | "spoken" | "current" | "upcoming";
   const stateKeys: WordStateKey[] = ["spokenWord", "activeWord", "upcomingWord"];
@@ -41,7 +42,7 @@
     if (scope !== "all") return resolveAppearance(style, scopeKeys[scope]);
     const states = stateKeys.map(state => resolveAppearance(style, state));
     const appearance = { ...states[2], fontFamily: style.fontFamily, fontSize: style.fontSize,
-      fontWeight: style.fontWeight, color: style.textColor, textTransform: style.textTransform,
+      fontWeight: resolveFontWeight(style.fontFamily, style.fontWeight), color: style.textColor, textTransform: style.textTransform,
       strokeEnabled: style.strokeEnabled, strokeColor: style.strokeColor, strokeWidth: style.strokeWidth, strokeOpacity: style.strokeOpacity,
       shadowEnabled: style.shadowEnabled, shadowColor: style.shadowColor, shadowOpacity: style.shadowOpacity,
       shadowBlur: style.shadowBlur, shadowOffsetX: style.shadowOffsetX, shadowOffsetY: style.shadowOffsetY };
@@ -50,6 +51,7 @@
         (appearance as Record<string, unknown>)[key] = states[0][key];
       }
     }
+    appearance.fontWeight = resolveFontWeight(appearance.fontFamily, style.fontWeight);
     return appearance;
   }
 
@@ -66,10 +68,12 @@
   }
 
   export function textStyleBoldDisabled(style: StyleConfig, scope: TextStyleScope): boolean {
-    return style.fontWeight >= 1000 && textStyleBoldState(style, scope) === false;
+    if (textStyleBoldState(style, scope) !== false) return false;
+    const keys = scope === 'all' ? stateKeys : [scopeKeys[scope]];
+    return keys.every(key => nextFontWeight(style[key]?.fontFamily || style.fontFamily, style.fontWeight) <= resolveFontWeight(style[key]?.fontFamily || style.fontFamily, style.fontWeight));
   }
 
-  /** B is one relative weight step; it never changes the All words baseline. */
+  /** B uses the next installed heavier face; the shared baseline stays intact. */
   export function textStyleBoldPatch(style: StyleConfig, scope: TextStyleScope): Partial<StyleConfig> {
     const offset = style.fontWeight >= 1000 || textStyleBoldState(style, scope) === true ? 0 : 100;
     const keys = scope === "all" ? stateKeys : [scopeKeys[scope]];
@@ -80,16 +84,30 @@
 </script>
 
 <script lang="ts">
-  interface Props { style: StyleConfig; fonts?: string[]; scope?: TextStyleScope; onScopeChange: (scope: TextStyleScope) => void; onUpdate: (updates: Partial<StyleConfig>) => void; disabled?: boolean; nativeMode?: boolean; }
-  let { style, fonts = [], scope = "all", onScopeChange, onUpdate, disabled = false, nativeMode = false }: Props = $props();
+  import FontPicker from './FontPicker.svelte';
+  interface Props { style: StyleConfig; fonts?: string[]; fontCatalog?: InstalledFont[]; fontsLoading?: boolean; fontsError?: string; onRefreshFonts?: () => void; scope?: TextStyleScope; onScopeChange: (scope: TextStyleScope) => void; onUpdate: (updates: Partial<StyleConfig>) => void; disabled?: boolean; nativeMode?: boolean; }
+  let { style, fonts = [], fontCatalog = [], fontsLoading = false, fontsError = '', onRefreshFonts, scope = "all", onScopeChange, onUpdate, disabled = false, nativeMode = false }: Props = $props();
   const componentId = $props.id();
-  let appearance = $derived(textStyleAppearance(style, scope));
+  let appearance = $derived.by(() => { void fontCatalog; return textStyleAppearance(style, scope); });
   let boldState = $derived(textStyleBoldState(style, scope));
+  let weights = $derived(fontWeightOptions(appearance.fontFamily, fontCatalog));
+  let boldDisabled = $derived.by(() => { void fontCatalog; return !weights.length && boldState === false || textStyleBoldDisabled(style, scope); });
   let expanded = $state<"spacing" | "stroke" | "shadow" | "bubble" | "layout" | null>(null);
   let sizeMax = $derived(scope === "all" ? 400 : 1200);
   const mixed = (key: keyof WordAppearance) => textStyleMixed(style, scope, key);
   const value = (event: Event) => (event.currentTarget as HTMLInputElement).value;
   function update(patch: Partial<WordAppearance>) { onUpdate(textStylePatch(style, scope, patch)); }
+  function selectFont(fontFamily: string) {
+    const patch = textStylePatch(style, scope, { fontFamily });
+    if (scope === 'all') {
+      patch.fontWeight = resolveFontWeight(fontFamily, style.fontWeight);
+      for (const key of stateKeys) Object.assign(patch, { [key]: { ...patch[key], fontWeight: resolveFontWeight(fontFamily, style[key]?.fontWeight ?? style.fontWeight) } });
+    } else {
+      const key = scopeKeys[scope];
+      Object.assign(patch, { [key]: { ...patch[key], fontWeight: resolveFontWeight(fontFamily, style[key]?.fontWeight ?? style.fontWeight) } });
+    }
+    onUpdate(patch);
+  }
   function numeric(event: Event, min: number, max: number, apply: (value: number) => void, factor = 1) {
     const number = (event.currentTarget as HTMLInputElement).valueAsNumber;
     if (Number.isFinite(number)) apply(clamp(number, min, max) / factor);
@@ -119,16 +137,15 @@
   </div>
 
   <div class="text-style__font-row">
-    <input class="text-style__input" list={`${componentId}-fonts`} aria-label="Font family" title="Font family" maxlength="160" value={mixed("fontFamily") ? "" : appearance.fontFamily} placeholder={mixed("fontFamily") ? "Mixed fonts" : "Font family"} onchange={(event) => { const font = value(event).trim(); if (font) update({ fontFamily: font }); }} />
-    <datalist id={`${componentId}-fonts`}>{#each fonts as font}<option value={font}></option>{/each}</datalist>
+    <FontPicker value={mixed('fontFamily') ? '' : appearance.fontFamily} {fonts} placeholder={mixed('fontFamily') ? 'Mixed fonts' : 'Font family'} loading={fontsLoading} error={fontsError} onOpen={() => { if (!fonts.length) onRefreshFonts?.(); }} onRetry={onRefreshFonts} onSelect={selectFont} />
     <label class="text-style__number" title={scope === "all" ? "Base font size, px — keeps relative word sizes" : "Font size, px"}><input type="number" aria-label={scope === "all" ? "Base font size, px" : "Font size, px"} min="8" max={sizeMax} step=".5" value={Number(appearance.fontSize.toFixed(2))} onchange={(event) => numeric(event, 8, sizeMax, fontSize => update({ fontSize }))} /><span aria-hidden="true">px</span></label>
-    <button class="text-style__toggle" aria-label="Bold" title={style.fontWeight >= 1000 ? boldState === false ? "All words is already at weight 1000; no heavier step is available" : "Turn off the +100 weight step and follow All words" : `One step bolder (+100) than All words (${style.fontWeight})`} aria-pressed={boldState} disabled={nativeMode || textStyleBoldDisabled(style, scope)} onclick={() => onUpdate(textStyleBoldPatch(style, scope))}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3.5h4a3.25 3.25 0 0 1 0 6.5H6m4 0a3.25 3.25 0 0 1 0 6.5H6v-13"/></svg></button>
-    <button class="text-style__toggle" aria-label="Italic" title={nativeMode ? "Italic is unavailable in the experimental native renderer" : "Italic"} disabled={nativeMode} aria-pressed={mixed("italic") ? "mixed" : appearance.italic} onclick={() => update({ italic: mixed("italic") || !appearance.italic })}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 3.5h8M4 16.5h8M12 3.5l-4 13"/></svg></button>
+    <button class="text-style__toggle" aria-label="Bold" title={boldDisabled ? 'This font has no heavier installed weight' : boldState === true ? 'Turn off the bolder step and follow All words' : `Next supported weight above All words (${style.fontWeight})`} aria-pressed={boldState} disabled={boldDisabled} onclick={() => onUpdate(textStyleBoldPatch(style, scope))}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3.5h4a3.25 3.25 0 0 1 0 6.5H6m4 0a3.25 3.25 0 0 1 0 6.5H6v-13"/></svg></button>
+    <button class="text-style__toggle" aria-label="Italic" title="Italic — uses a synthetic slant when needed" aria-pressed={mixed("italic") ? "mixed" : appearance.italic} onclick={() => update({ italic: mixed("italic") || !appearance.italic })}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 3.5h8M4 16.5h8M12 3.5l-4 13"/></svg></button>
     <input class="text-style__color" type="color" value={appearance.color} aria-label="Text color" title={mixed("color") ? "Text color — mixed word colors" : "Text color"} oninput={(event) => update({ color: value(event) })} />
   </div>
 
   <div class="text-style__format-row">
-    <select class="text-style__input" aria-label="Font weight" disabled={nativeMode} title={scope === "all" ? "All words font weight" : "Font weight — absolute override"} value={scope === "all" ? style.fontWeight : appearance.fontWeight} onchange={(event) => update({ fontWeight: Number(value(event)) })}>{#each [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000] as weight}<option value={weight}>{weight}</option>{/each}</select>
+    <select class="text-style__input" aria-label="Font weight" disabled={!weights.length} title={weights.length ? scope === "all" ? "All words font weight" : "Font weight — absolute override" : "Select an installed font to choose its supported weights"} value={appearance.fontWeight} onchange={(event) => update({ fontWeight: Number(value(event)) })}>{#if !weights.length}<option value={appearance.fontWeight}>{appearance.fontWeight}</option>{:else}{#if !weights.includes(appearance.fontWeight)}<option value={appearance.fontWeight} disabled hidden>{appearance.fontWeight}</option>{/if}{#each weights as weight}<option value={weight}>{weight}</option>{/each}{/if}</select>
     <select class="text-style__input" aria-label="Text case" title="Text case" disabled={nativeMode && scope !== "all"} value={mixed("textTransform") ? "" : appearance.textTransform} onchange={(event) => update({ textTransform: value(event) as WordAppearance["textTransform"] })}>{#if mixed("textTransform")}<option value="" disabled>Mixed case</option>{/if}<option value="none">As typed</option><option value="uppercase" disabled={nativeMode}>UPPERCASE</option><option value="lowercase" disabled={nativeMode}>lowercase</option><option value="titlecase">Title Case</option></select>
     <label class="text-style__number" title="Text opacity, %"><input type="number" aria-label="Text opacity, %" min="0" max="100" value={mixed("opacity") ? "" : Math.round(appearance.opacity * 100)} placeholder="Mixed" onchange={(event) => numeric(event, 0, 100, opacity => update({ opacity }), 100)} /><span aria-hidden="true">%</span></label>
   </div>

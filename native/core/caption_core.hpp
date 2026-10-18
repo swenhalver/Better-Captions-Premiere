@@ -5,13 +5,16 @@
 #include <vector>
 
 namespace better_captions {
-constexpr std::uint32_t kSchemaVersion = 2;
+constexpr std::uint32_t kSchemaVersion = 3;
 constexpr std::size_t kMaxWords = 100000;
 constexpr std::size_t kMaxDocumentBytes = 16 * 1024 * 1024;
 struct Color { double r=1,g=1,b=1,a=1; };
 struct Word { std::string text; double start=0,end=0; bool endOfSentence=false; };
 struct WordStyle {
     std::string fontFamily="Arial";
+    // Zero / -1 preserve legacy named-face selection until explicitly styled.
+    double fontWeight=0;
+    int italic=-1, fontWeightOffset=-1; // offset100 means next available heavier
     double fontSize=64, sizeScale=1, opacity=1;
     Color color;
     bool bubble=false;
@@ -21,7 +24,7 @@ struct WordStyle {
     double shadowBlur=0,shadowX=0,shadowY=0;
     Color shadowColor{0,0,0,0.5};
 };
-struct Style { WordStyle upcoming,current,spoken; double wordSpacing=12,lineHeight=1.3; bool titleCase=false; };
+struct Style { WordStyle upcoming,current,spoken; double wordSpacing=12,lineHeight=1.3; bool titleCase=false; double baseFontWeight=0; };
 struct CaptionContainer { std::string id; bool manualSplit=false; std::vector<Word> words; };
 struct Document { std::uint32_t schemaVersion=kSchemaVersion; std::vector<CaptionContainer> containers; Style style; double timeOriginSeconds=0; };
 struct Phrase { std::string containerId; std::size_t firstWord=0,wordCount=0; double start=0,end=0; };

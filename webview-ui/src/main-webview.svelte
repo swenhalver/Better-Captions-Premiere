@@ -20,6 +20,7 @@
   import SequenceStatus from "./components/SequenceStatus.svelte";
   import TranscriptPreview from "./components/TranscriptPreview.svelte";
   import TextStyleToolbar from "./components/TextStyleToolbar.svelte";
+  import { registerFontCatalog, type InstalledFont } from './lib/font-catalog.ts';
   import AnimationPanel from "./components/AnimationPanel.svelte";
   import StylePresets from "./components/StylePresets.svelte";
   import { applyPresetLook, type PresetLook } from "./lib/style-presets";
@@ -35,6 +36,15 @@
   let sequenceInfo = $state<SequenceInfo | null>(null);
   let selectedId = $state<string | null>(null);
   let fonts = $state<string[]>([]);
+  let fontCatalog = $state<InstalledFont[]>([]);
+  let fontsLoading = $state(false), fontsError = $state('');
+  async function refreshFonts() {
+    if (fontsLoading) return;
+    fontsLoading = true; fontsError = '';
+    try { fontCatalog = registerFontCatalog(await api.getFontCatalog()); fonts = fontCatalog.map(font => font.family); }
+    catch { fontsError = 'Couldn’t load installed fonts.'; }
+    finally { fontsLoading = false; }
+  }
   let error = $state("");
   let selectionHint = $state<{ sequenceId: string; captionId: string } | null>(null);
   let isRefreshing = $state(false);
@@ -605,6 +615,7 @@
     return {
       reflow: { phase: reflowStatus.phase, message: reflowStatus.message.slice(0, 1000), pauseReason: motionPauseReason(), watcher: motionWatcher?.diagnostics() ?? null },
       visibility: { hostPanelVisible, documentHidden: document.hidden, documentVisibilityState: document.visibilityState },
+      fonts: { count: fonts.length, loading: fontsLoading, error: fontsError },
       selectedId, nativeSelection: nativeSelection ? { ...nativeSelection } : null,
       liveOutput: { ...liveStatus, ...liveOutput?.diagnostics(), nativeAvailable },
       connection: { status: connectionStatus, kind: session?.nativeClipId ? 'native-effect' : 'generated-movie', clipNodeId: session?.nativeClipId, reconnect: reconnect?.diagnostics() ?? null },
@@ -792,7 +803,7 @@
     window.addEventListener("message", receiveVisibility);
     document.addEventListener("visibilitychange", updateVisibility);
     updateVisibility();
-    void refreshSequence().then(() => { liveOutput?.notify(); return api.getFonts(); }).then((available) => { fonts = available; }).catch(() => { fonts = ["Arial", "Helvetica", "Georgia", "Verdana", "Impact"]; });
+    void refreshSequence().then(() => { liveOutput?.notify(); void refreshFonts(); });
     return () => {
       window.removeEventListener("message", receiveVisibility);
       document.removeEventListener("visibilitychange", updateVisibility);
@@ -827,7 +838,7 @@
           {#key session.sequenceId}
             <StylePresets style={session.style} animation={session.animation} load={api.loadStylePresets} save={api.saveStylePresets} onApply={applyStylePreset} isDemo={api.isDemo} disabled={editsLocked || isRefreshing || isSyncing || session.isLoading} />
           {/key}
-          <TextStyleToolbar style={session.style} {fonts} scope={wordState} nativeMode={!!session.nativeClipId} onScopeChange={changeWordState} onUpdate={handleStyle} />
+          <TextStyleToolbar style={session.style} {fonts} {fontCatalog} {fontsLoading} {fontsError} onRefreshFonts={() => { void refreshFonts(); }} scope={wordState} nativeMode={!!session.nativeClipId} onScopeChange={changeWordState} onUpdate={handleStyle} />
           {#if session.nativeClipId}<p class="caption-help">Position, box size and animation are in this layer’s Effect Controls.</p>{/if}
           {#if selected && !session.nativeClipId}
             <TextAreaControls caption={selected} sequenceId={session.sequenceId} frameRate={session.frameRate} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} refreshRevision={areaControlRevision} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={exportBusy||agentAreaBusy||isRefreshing||isSyncing||session.isLoading} isDemo={api.isDemo} read={api.readCaptionArea} edit={api.editCaptionArea} getCurrentTime={async()=>{if(api.isDemo)return session.currentTime;const info=await api.getActiveSequenceInfo();if(!info||info.id!==session.sequenceId)throw new Error("The active sequence changed. Refresh Position & size before editing.");return info.playhead??session.currentTime;}} onSeek={async(time)=>{const result=!api.isDemo?await api.showInPremiere(time,session.sequenceId):null;if(sessionManager.current?.sequenceId!==session.sequenceId)throw new Error("The active sequence changed while seeking.");sessionManager.setCurrentTime(typeof result?.time==='number'?result.time:time);}} onSelect={selectSelectedCaption} onBusy={setAreaBusy} onChanged={areaChanged}/>

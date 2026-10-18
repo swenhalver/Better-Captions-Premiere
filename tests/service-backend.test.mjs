@@ -39,6 +39,14 @@ test('service inserts captured sequence identity and preserves previous-caption 
   await service.dispatchServiceRequest(api, data);
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[[{ id: 'cue' }], 2, 'seq-a', [{ id: 'old' }]]]);
 });
+test('font catalog service reads use no caller arguments and expire before executing stale native work',async()=>{
+  let calls=0;const catalog=[{family:'Only Real',weights:[380,617],italic:false}],api={getActiveSequenceInfo:info,getFontCatalog:async()=>{calls++;return catalog;}};
+  const data=request('getFontCatalog');data.expiresAt=data.createdAt+10000;
+  assert.equal(service.validateServiceRequest(data,data.id+'.json').action,'getFontCatalog');
+  assert.deepEqual(await service.dispatchServiceRequest(api,data),catalog);assert.equal(calls,1);
+  const injected={...data,args:['arbitrary-script']};assert.throws(()=>service.validateServiceRequest(injected,injected.id+'.json'),/arguments/);
+  assert.throws(()=>service.validateServiceRequest(data,data.id+'.json',data.expiresAt),/expired before execution/);assert.equal(calls,1);
+});
 test('track preparation uses the captured identity and automatic sentinel without accepting another sequence argument', async () => {
   const calls=[],api={getActiveSequenceInfo:info,prepareCaptionTrack:(...args)=>calls.push(args)},captions=[{id:'bundle'}],previous=[{id:'old'}];
   const data=request('prepareCaptionTrack',[captions,-1,previous]);

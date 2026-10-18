@@ -89,5 +89,20 @@ int main(int argc,char** argv){try{
  check(std::equal(pixels.begin(),pixels.end(),originReference.begin(),[](auto a,auto b){return a.alpha==b.alpha&&a.red==b.red&&a.green==b.green&&a.blue==b.blue;}),"persisted origin changed source5 frame after Razor");
  layerStart=300;in.current_time=30;sequenceOffsetSeconds=10;check(main(PF_Cmd_RENDER,&in,&out,params.data(),&output,nullptr)==0,"moved adjustment render failed");
  check(std::equal(pixels.begin(),pixels.end(),originReference.begin(),[](auto a,auto b){return a.alpha==b.alpha&&a.red==b.red&&a.green==b.green&&a.blue==b.blue;}),"footage-local clock changed moved adjustment frame");
+ // Render a BCAP3 carrier through the actual dynamically loaded effect entry.
+ // This checks document decode -> CoreText typography -> ARGB compositing,
+ // independently of panel contracts and direct rasterizer unit tests.
+ sourceStart=0;layerStart=0;sequenceOffsetSeconds=0;in.current_time=30;
+ fixture=better_captions::Document{};fixture.containers.push_back({"typography",false,{{"Caption",0,10,false}}});
+ fixture.style.baseFontWeight=400;fixture.style.current.fontWeight=400;fixture.style.current.italic=0;
+ values[5].u.fs_d.value=48;
+ auto typographyFrame=[&](){carrier=better_captions::adobe::textCarrier(better_captions::encode(fixture),true);carrierBytes=carrier.size();raw=reinterpret_cast<char*>(carrier.data());check(main(PF_Cmd_RENDER,&in,&out,params.data(),&output,nullptr)==0,"BCAP3 typography render failed");return pixels;};
+ const auto regularFrame=typographyFrame();fixture.style.current.fontWeightOffset=100;const auto boldFrame=typographyFrame();
+ auto differs=[](const auto& a,const auto& b){return !std::equal(a.begin(),a.end(),b.begin(),[](auto p,auto q){return p.alpha==q.alpha&&p.red==q.red&&p.green==q.green&&p.blue==q.blue;});};
+ check(differs(regularFrame,boldFrame),"Compiled B mode did not change native glyph pixels");
+ fixture.style.current.fontWeightOffset=0;fixture.style.current.italic=1;const auto italicFrame=typographyFrame();
+ check(differs(regularFrame,italicFrame),"Compiled italic did not change native glyph pixels");
+ fixture.style.current.fontFamily="Impact";fixture.style.current.italic=0;const auto plainOnlyFrame=typographyFrame();
+ fixture.style.current.italic=1;check(differs(plainOnlyFrame,typographyFrame()),"Compiled synthetic italic did not change glyph pixels");
  dlclose(binary);std::cout<<"Compiled adapter smoke passed: ARGB/determinism/reflow/half-resolution and pixel-equal persisted adjustment-origin Razor frames; not host acceptance.\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

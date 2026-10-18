@@ -31,6 +31,9 @@ void style(const WordStyle& s) {
  require(finite(s.fontSize)&&s.fontSize>0&&s.fontSize<=4096,"invalid font size");
  require(finite(s.sizeScale)&&s.sizeScale>0&&s.sizeScale<=16,"invalid size scale");
  require(finite(s.opacity)&&s.opacity>=0&&s.opacity<=1,"invalid opacity");
+ require(s.fontWeight==0||(finite(s.fontWeight)&&s.fontWeight>=1&&s.fontWeight<=1000),"invalid font weight");
+ require(s.italic>=-1&&s.italic<=1,"invalid italic mode");
+ require(s.fontWeightOffset==-1||s.fontWeightOffset==0||s.fontWeightOffset==100,"invalid relative weight mode");
  for(double v:{s.padding,s.radius,s.outlineWidth,s.shadowBlur}) require(finite(v)&&v>=0&&v<=4096,"invalid style extent");
  require(finite(s.shadowX)&&finite(s.shadowY)&&std::abs(s.shadowX)<=4096&&std::abs(s.shadowY)<=4096,"invalid shadow offset");
  color(s.color);color(s.bubbleColor);color(s.outlineColor);color(s.shadowColor);
@@ -65,7 +68,8 @@ WordStyle readStyle(Reader& r) {
 }
 }
 void validate(const Document& d) {
- require(d.schemaVersion==kSchemaVersion,"unsupported schema version");require(finite(d.timeOriginSeconds)&&std::abs(d.timeOriginSeconds)<=864000,"invalid document time origin");require(d.containers.size()<=10000,"too many containers");
+ require(d.schemaVersion>=1&&d.schemaVersion<=kSchemaVersion,"unsupported schema version");require(finite(d.timeOriginSeconds)&&std::abs(d.timeOriginSeconds)<=864000,"invalid document time origin");require(d.containers.size()<=10000,"too many containers");
+ require(d.style.baseFontWeight==0||(finite(d.style.baseFontWeight)&&d.style.baseFontWeight>=1&&d.style.baseFontWeight<=1000),"invalid base font weight");
  std::size_t total=0,bytes=0;std::vector<std::string> ids;
  for(const auto& c:d.containers) {
   require(!c.id.empty()&&c.id.size()<=256,"invalid container id");text(c.id);ids.push_back(c.id);bytes+=c.id.size();
@@ -92,17 +96,25 @@ std::vector<Phrase> regroup(const Document& d,std::size_t maxChars,double pause)
  }return out;
 }
 std::vector<std::uint8_t> encode(const Document& d) {
- validate(d);Writer w;w.u(0x50414342);w.u(d.schemaVersion);w.u(static_cast<std::uint32_t>(d.containers.size()));
+ validate(d);auto wireVersion=d.schemaVersion;
+ bool typography=d.style.baseFontWeight!=0;
+ for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken})typography=typography||s->fontWeight!=0||s->italic!=-1||s->fontWeightOffset!=-1;
+ if(typography)wireVersion=3;else if(wireVersion==1&&d.timeOriginSeconds!=0)wireVersion=2;
+ Writer w;w.u(0x50414342);w.u(wireVersion);w.u(static_cast<std::uint32_t>(d.containers.size()));
  for(const auto& c:d.containers){w.s(c.id);w.u(c.manualSplit);w.u(static_cast<std::uint32_t>(c.words.size()));for(const auto& a:c.words){w.s(a.text);w.d(a.start);w.d(a.end);w.u(a.endOfSentence);}}
- writeStyle(w,d.style.upcoming);writeStyle(w,d.style.current);writeStyle(w,d.style.spoken);w.d(d.style.wordSpacing);w.d(d.style.lineHeight);w.u(d.style.titleCase);w.d(d.timeOriginSeconds);
+ writeStyle(w,d.style.upcoming);writeStyle(w,d.style.current);writeStyle(w,d.style.spoken);w.d(d.style.wordSpacing);w.d(d.style.lineHeight);w.u(d.style.titleCase);
+ if(wireVersion>=2)w.d(d.timeOriginSeconds);
+ if(wireVersion>=3){w.d(d.style.baseFontWeight);for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){w.d(s->fontWeight);w.u(static_cast<std::uint32_t>(s->italic+1));w.u(s->fontWeightOffset==-1?0:s->fontWeightOffset==0?1:2);}}
  require(w.b.size()<=kMaxDocumentBytes,"document size exceeded");return w.b;
 }
 Document decode(const std::vector<std::uint8_t>& b) {
- require(b.size()<=kMaxDocumentBytes,"document size exceeded");Reader r{b};require(r.u()==0x50414342,"invalid document magic");Document d;const auto wireVersion=r.u();require(wireVersion==1||wireVersion==kSchemaVersion,"unsupported schema version");
+ require(b.size()<=kMaxDocumentBytes,"document size exceeded");Reader r{b};require(r.u()==0x50414342,"invalid document magic");Document d;const auto wireVersion=r.u();require(wireVersion>=1&&wireVersion<=kSchemaVersion,"unsupported schema version");d.schemaVersion=wireVersion;
  auto n=r.u();require(n<=10000,"too many containers");std::size_t total=0;
  for(std::uint32_t i=0;i<n;++i){CaptionContainer c;c.id=r.s(256);c.manualSplit=r.flag();auto k=r.u();total+=k;require(total<=kMaxWords,"too many words");
  for(std::uint32_t j=0;j<k;++j){Word w;w.text=r.s(4096);w.start=r.d();w.end=r.d();w.endOfSentence=r.flag();c.words.push_back(std::move(w));}d.containers.push_back(std::move(c));}
- d.style.upcoming=readStyle(r);d.style.current=readStyle(r);d.style.spoken=readStyle(r);d.style.wordSpacing=r.d();d.style.lineHeight=r.d();d.style.titleCase=r.flag();if(wireVersion>=2)d.timeOriginSeconds=r.d();require(r.p==b.size(),"trailing document bytes");validate(d);return d;
+ d.style.upcoming=readStyle(r);d.style.current=readStyle(r);d.style.spoken=readStyle(r);d.style.wordSpacing=r.d();d.style.lineHeight=r.d();d.style.titleCase=r.flag();if(wireVersion>=2)d.timeOriginSeconds=r.d();
+ if(wireVersion>=3){d.style.baseFontWeight=r.d();for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){s->fontWeight=r.d();const auto italic=r.u(),offset=r.u();require(italic<=2&&offset<=2,"invalid native typography mode");s->italic=static_cast<int>(italic)-1;s->fontWeightOffset=offset==0?-1:offset==1?0:100;}}
+ require(r.p==b.size(),"trailing document bytes");validate(d);return d;
 }
 std::string displayText(const std::string& text,bool title) {
  if(!title)return text;std::string out=text;bool initial=true;

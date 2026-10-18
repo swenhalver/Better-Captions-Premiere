@@ -1,4 +1,5 @@
 import type { StyleConfig, WordAppearance } from './types';
+import { resolveFontWeight, nextFontWeight } from './font-catalog.ts';
 
 export type WordStateKey = 'upcomingWord' | 'activeWord' | 'spokenWord';
 export type ResolvedAppearance = Required<WordAppearance>;
@@ -16,10 +17,10 @@ export function resolveAppearance(style: StyleConfig, key: WordStateKey): Resolv
     shadowOffsetX: style.shadowOffsetX, shadowOffsetY: style.shadowOffsetY,
   };
   const saved = style[key];
-  return { ...base, ...saved, fontFamily: saved?.fontFamily || style.fontFamily,
-    fontWeight: saved?.fontWeightOffset === 0 || saved?.fontWeightOffset === 100
-      ? Math.min(1000, Math.max(100, style.fontWeight + saved.fontWeightOffset))
-      : saved?.fontWeight ?? style.fontWeight,
+  const family = saved?.fontFamily || style.fontFamily;
+  return { ...base, ...saved, fontFamily: family,
+    fontWeight: saved?.fontWeightOffset === 100 ? nextFontWeight(family, style.fontWeight)
+      : resolveFontWeight(family, saved?.fontWeightOffset === 0 ? style.fontWeight : saved?.fontWeight ?? style.fontWeight),
     fontSize: saved?.fontSize ?? style.fontSize * (saved?.sizeScale ?? 1) };
 }
 

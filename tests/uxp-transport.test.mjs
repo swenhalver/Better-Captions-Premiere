@@ -38,6 +38,7 @@ function harness(t, nativeOverrides = {}) {
     async fetchTranscriptJSON(id) { calls.push(['fetchTranscriptJSON', id]); return '{"segments":[]}'; },
     async transcribeSequence(id) { calls.push(['transcribeSequence', id]); return '{"segments":[{"words":[]}]}'; },
     async getFonts() { return ['Arial']; },
+    async getFontCatalog() { return [{family:'Arial',weights:[400,700],italic:true}]; },
     async getColorScheme() { return { theme: 'darkest', colors: {} }; },
     async saveSession() { throw new Error('Save the Premiere project first.'); },
     async startAgentBridge(value) { proxy = value; return async () => { stops++; }; },
@@ -96,6 +97,14 @@ function harness(t, nativeOverrides = {}) {
   };
 }
 
+test('font catalog metadata and explicit system errors round trip through both fixed native allowlists',async t=>{
+  const expected=[{family:'Literal, 字體',weights:[380,400.444,617],italic:false,variable:{min:380,max:617}}];
+  let calls=0;
+  const app=harness(t,{async getFontCatalog(){calls++;if(calls===2)throw new Error('System font enumeration is unavailable.');return expected;}});
+  assert.deepEqual(JSON.parse(JSON.stringify(await app.api.getFontCatalog())),expected);
+  await assert.rejects(app.api.getFontCatalog(),/System font enumeration is unavailable/);assert.equal(calls,2);
+  assert.deepEqual(Array.from(await app.api.getFonts()),['Arial'],'the original family-name method remains available');
+});
 test('preset library reads and writes round trip through the bounded UXP allowlist', async t => {
   const library = { version: 1, revision: 3, presets: [] };
   const app = harness(t, { async loadStylePresets() { return library; }, async saveStylePresets(value) { assert.equal(value.revision, 3); return { ...value, revision: 4 }; } });

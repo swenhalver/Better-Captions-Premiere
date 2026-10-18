@@ -3,6 +3,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <limits>
+#include <cmath>
+#include <CoreText/CoreText.h>
 using namespace better_captions;
 void check(bool b,const char* s){if(!b)throw std::runtime_error(s);}
 struct Bounds {std::size_t left,top,right,bottom;};
@@ -53,6 +55,60 @@ int main(){
  check(std::abs(double(fullBounds.left)-2*halfBounds.left)<=3&&std::abs(double(fullBounds.top)-2*halfBounds.top)<=3&&std::abs(double(fullBounds.bottom)-2*halfBounds.bottom)<=3,"Scaled pixel geometry shifted normalized placement");
  failed=false;try{auto invalid=d.style.current;invalid.fontSize=std::numeric_limits<double>::infinity();macos::measureText("Caption",invalid);}catch(const std::invalid_argument&){failed=true;}check(failed,"Direct font metrics accepted infinite size");
  failed=false;try{macos::measureText("bad\ntext",d.style.current);}catch(const std::invalid_argument&){failed=true;}check(failed,"Direct font metrics accepted control text");
+ // Family weight selection uses actual installed faces, not requested labels.
+ WordStyle upright;upright.fontFamily="Arial";upright.fontSize=52;upright.fontWeight=400;upright.italic=0;
+ const auto regular=macos::fontSelection(upright);check(regular.family=="Arial"&&regular.weight==400,"Arial regular face not selected");
+ auto bold=upright;bold.fontWeight=700;const auto heavier=macos::fontSelection(bold);
+ check(heavier.weight==700&&heavier.postscriptName!=regular.postscriptName,"Actual bold face not selected");
+ auto relative=upright;relative.fontWeightOffset=100;const auto next=macos::fontSelection(relative,400);
+ check(next.weight==700,"B did not choose Arial's next available heavier face");
+ relative.fontWeightOffset=0;check(macos::fontSelection(relative,400).weight==400,"Relative B off did not follow shared base");
+ auto naturalItalic=upright;naturalItalic.italic=1;const auto italicFace=macos::fontSelection(naturalItalic);
+ check(italicFace.nativeItalic&&!italicFace.syntheticItalic,"Available real italic face was not preferred");
+ auto legacyFace=upright;legacyFace.fontFamily="Arial-BoldItalicMT";legacyFace.fontWeight=0;legacyFace.italic=-1;
+ const auto legacySelection=macos::fontSelection(legacyFace);
+ check(legacySelection.postscriptName=="Arial-BoldItalicMT"&&legacySelection.nativeItalic,"Legacy named face changed without a typography edit");
+ Document fontDocument; fontDocument.containers.push_back({"font",false,{{"Caption",0,1,false}}});
+ fontDocument.style.current=upright;const auto regularPixels=macos::rasterize(fontDocument,.5,{20,20,500,120},640,180);
+ fontDocument.style.current=bold;check(regularPixels.pixels!=macos::rasterize(fontDocument,.5,{20,20,500,120},640,180).pixels,"Weight selection did not change rendered glyphs");
+ // Exercise a real installed regular-only family. Synthetic italic must draw
+ // slanted glyphs and account for their horizontal ink when measuring/reflowing.
+ bool syntheticTested=false;
+ for(const char* family:{"Impact","Arial Black","Papyrus","Marker Felt","DIN Alternate","Apple Chancery"}){
+  auto plain=upright;plain.fontFamily=family;const auto plainSelection=macos::fontSelection(plain);
+  if(plainSelection.family!=family)continue;
+  auto slanted=plain;slanted.italic=1;const auto slantSelection=macos::fontSelection(slanted);
+  if(!slantSelection.syntheticItalic)continue;
+  check(!slantSelection.nativeItalic,"Synthetic italic falsely reported a native italic face");
+  fontDocument.containers[0].words[0].text="ffff AWA";fontDocument.style.current=plain;
+  const auto plainPixels=macos::rasterize(fontDocument,.5,{20,20,500,120},640,180);
+  fontDocument.style.current=slanted;const auto slantPixels=macos::rasterize(fontDocument,.5,{20,20,500,120},640,180);
+  check(plainPixels.pixels!=slantPixels.pixels&&count(slantPixels)>0,"Synthetic italic did not change real glyph pixels");
+  const auto measured=macos::measureText("ffff AWA",slanted);const auto bounds=visible(slantPixels);
+  check(double(bounds.right-bounds.left)<=std::ceil(measured.width)+2,"Synthetic italic ink escaped measured width");
+  check(bounds.left>=20&&bounds.right<520&&bounds.top>=20&&bounds.bottom<140,"Synthetic italic escaped layout clipping");
+  syntheticTested=true;std::cout<<"Synthetic italic acceptance: "<<family<<"\n";break;
+ }
+ check(syntheticTested,"No installed regular-only family exercised the synthetic italic path");
+ // If this Mac has a variable wght family, verify a fractional coordinate on
+ // its real range. The selector verifies the returned CTFont variation too.
+ bool variableTested=false;auto families=CTFontManagerCopyAvailableFontFamilyNames();
+ for(CFIndex i=0;families&&i<CFArrayGetCount(families)&&!variableTested;++i){
+  auto name=static_cast<CFStringRef>(CFArrayGetValueAtIndex(families,i));auto candidate=CTFontCreateWithName(name,52,nullptr);
+  auto axes=CTFontCopyVariationAxes(candidate);double low=0,high=0;
+  for(CFIndex j=0;axes&&j<CFArrayGetCount(axes);++j){auto axis=static_cast<CFDictionaryRef>(CFArrayGetValueAtIndex(axes,j));int tag=0;
+   if(!CFNumberGetValue(static_cast<CFNumberRef>(CFDictionaryGetValue(axis,kCTFontVariationAxisIdentifierKey)),kCFNumberIntType,&tag)||tag!=0x77676874)continue;
+   CFNumberGetValue(static_cast<CFNumberRef>(CFDictionaryGetValue(axis,kCTFontVariationAxisMinimumValueKey)),kCFNumberDoubleType,&low);
+   CFNumberGetValue(static_cast<CFNumberRef>(CFDictionaryGetValue(axis,kCTFontVariationAxisMaximumValueKey)),kCFNumberDoubleType,&high);
+  }
+  if(axes)CFRelease(axes);CFRelease(candidate);if(low<1||high>1000||low>=high)continue;
+  char utf8[1024];if(!CFStringGetCString(name,utf8,sizeof utf8,kCFStringEncodingUTF8))continue;
+  auto variable=upright;variable.fontFamily=utf8;variable.fontWeight=low+(high-low)*.371;
+  const auto selection=macos::fontSelection(variable);check(std::abs(selection.weight-variable.fontWeight)<.01,"Fractional variable font weight was not applied");
+  fontDocument.style.current=variable;check(count(macos::rasterize(fontDocument,.5,{20,20,500,120},640,180))>0,"Variable font rendered no glyphs");
+  variableTested=true;std::cout<<"Variable weight acceptance: "<<utf8<<" "<<selection.weight<<"\n";
+ }
+ if(families)CFRelease(families);if(!variableTested)std::cout<<"Variable wght acceptance skipped: no installed weight axis\n";
  for(auto* s:{&d.style.current,&d.style.upcoming,&d.style.spoken})s->opacity=0;
  check(count(macos::rasterize(d,.5,box,640,240))==0,"Zero opacity leaked pixels");
  std::cout<<"CoreText rasterizer acceptance passed\n";

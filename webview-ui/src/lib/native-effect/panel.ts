@@ -1,6 +1,6 @@
 import { DEFAULT_ANIMATION, DEFAULT_STYLE, type CaptionItem, type SequenceInfo, type SessionState, type StyleConfig, type WordAppearance } from '../types.ts';
 import { resolveAppearance } from '../appearance.ts';
-import { normalizeNativeMatchName, validateNativeDocument, type NativeCaption, type NativeColor, type NativeDocument, type NativeWordStyle } from './contract.ts';
+import { normalizeNativeMatchName, validateNativeDocument, type NativeCaption, type NativeColor, type NativeDocument, type NativeStyle, type NativeWordStyle } from './contract.ts';
 import { buildCepNativeReadScript, type CepNativeLocator, type CepNativeSnapshot } from './cep-operations.ts';
 import { encodeNativeTransportText, MAX_NATIVE_CARRIER_BYTES, NATIVE_TRANSPORT_PREFIX } from './encode.ts';
 
@@ -17,12 +17,12 @@ export interface NativePanelBinding {
 const clone = <T,>(value: T): T => structuredClone(value);
 const pairs = [['upcomingWord', 'upcoming'], ['activeWord', 'current'], ['spokenWord', 'spoken']] as const;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-const unsupportedGlobal = ['fontWeight', 'backgroundEnabled', 'backgroundColor', 'backgroundOpacity', 'backgroundPadding', 'backgroundRadius', 'positionX', 'positionY', 'textAlign', 'maxWidth', 'maxChars', 'wordSpacing'] as const;
-const unsupportedWord = ['fontWeight', 'fontWeightOffset', 'italic', 'letterSpacing', 'strokeEnabled', 'shadowEnabled'] as const;
+const unsupportedGlobal = ['backgroundEnabled', 'backgroundColor', 'backgroundOpacity', 'backgroundPadding', 'backgroundRadius', 'positionX', 'positionY', 'textAlign', 'maxWidth', 'maxChars', 'wordSpacing'] as const;
+const unsupportedWord = ['letterSpacing', 'strokeEnabled', 'shadowEnabled'] as const;
 export const NATIVE_PANEL_CAPABILITIES = {
   storage: 'embedded-native-document', geometry: 'premiere-effect-controls', animation: 'premiere-effect-controls',
   unsupportedGlobalStyleFields: unsupportedGlobal, unsupportedWordStyleFields: unsupportedWord,
-  supportedWordStyleFields: ['fontFamily', 'fontSize', 'sizeScale', 'color', 'opacity', 'bubble', 'bubbleColor', 'bubbleOpacity', 'padding', 'radius', 'strokeColor', 'strokeWidth', 'strokeOpacity', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'],
+  supportedWordStyleFields: ['fontFamily', 'fontWeight', 'fontWeightOffset', 'italic', 'fontSize', 'sizeScale', 'color', 'opacity', 'bubble', 'bubbleColor', 'bubbleOpacity', 'padding', 'radius', 'strokeColor', 'strokeWidth', 'strokeOpacity', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'],
   case: 'shared-none-or-ascii-titlecase', wordSpacing: 'native-pixels-not-panel-percent',
 } as const;
 
@@ -50,7 +50,7 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
   const flag = () => { const value = u(); if (value > 1) throw new Error('Invalid native document flag.'); return value === 1; };
   const string = (limit: number) => { const size = u(); if (!size || size > limit) throw new Error('Invalid native document string.'); need(size); const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(offset, offset + size)); offset += size; return value; };
   if (u() !== 0x50414342) throw new Error('Invalid native document magic.');
-  const version = u(); if (version !== 1 && version !== 2) throw new Error('Unsupported native binary version.');
+  const version = u(); if (version !== 1 && version !== 2 && version !== 3) throw new Error('Unsupported native binary version.');
   const count = u(); if (count > 10000) throw new Error('Too many native caption containers.');
   const captions: NativeCaption[] = []; let totalWords = 0;
   for (let i = 0; i < count; i++) {
@@ -62,10 +62,11 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
   }
   const color = (): NativeColor => ({ r: d(), g: d(), b: d(), a: d() });
   const wordStyle = (): NativeWordStyle => ({ fontFamily: string(256), fontSize: d(), sizeScale: d(), opacity: d(), color: color(), bubble: flag(), bubbleColor: color(), padding: d(), radius: d(), outlineWidth: d(), outlineColor: color(), shadowBlur: d(), shadowX: d(), shadowY: d(), shadowColor: color() });
-  const style = { upcoming: wordStyle(), current: wordStyle(), spoken: wordStyle(), wordSpacing: d(), lineHeight: d(), titleCase: flag() };
-  const timeOriginSeconds = version === 2 ? d() : 0;
+  const style: NativeStyle = { upcoming: wordStyle(), current: wordStyle(), spoken: wordStyle(), wordSpacing: d(), lineHeight: d(), titleCase: flag() };
+  const timeOriginSeconds = version >= 2 ? d() : 0;
+  if(version>=3){const base=d();if(base!==0)style.baseFontWeight=base;for(const word of [style.upcoming,style.current,style.spoken]){const weight=d(),italic=u(),mode=u();if(italic>2||mode>2)throw new Error('Invalid native typography mode.');if(weight!==0)word.fontWeight=weight;if(italic)word.italic=italic===2;if(mode)word.fontWeightOffset=mode===2?100:0;}}
   if (offset !== bytes.length) throw new Error('Trailing native document bytes.');
-  return validateNativeDocument({ version: 1, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(sequenceId), captions, style, timeOriginSeconds });
+  return validateNativeDocument({ version: 1, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(sequenceId), captions, style, timeOriginSeconds, ...(version===2?{}:{binaryVersion:version}) });
 }
 
 function hexColor(color: NativeColor): string {
@@ -76,8 +77,8 @@ function editColor(previous: NativeColor, value: string): NativeColor {
   return { r: Number.parseInt(value.slice(1, 3), 16) / 255, g: Number.parseInt(value.slice(3, 5), 16) / 255, b: Number.parseInt(value.slice(5, 7), 16) / 255, a: previous.a };
 }
 function panelWord(native: NativeWordStyle, titleCase: boolean): WordAppearance {
-  return { fontFamily: native.fontFamily, fontWeight: 400, fontWeightOffset: null, fontSize: native.fontSize * native.sizeScale, sizeScale: native.sizeScale,
-    italic: false, letterSpacing: 0, textTransform: titleCase ? 'titlecase' : 'none', color: hexColor(native.color), opacity: native.opacity,
+  return { fontFamily: native.fontFamily, fontWeight: native.fontWeight??400, fontWeightOffset: native.fontWeightOffset??null, fontSize: native.fontSize * native.sizeScale, sizeScale: native.sizeScale,
+    italic: native.italic??false, letterSpacing: 0, textTransform: titleCase ? 'titlecase' : 'none', color: hexColor(native.color), opacity: native.opacity,
     bubble: native.bubble, bubbleColor: hexColor(native.bubbleColor), bubbleOpacity: native.bubbleColor.a, padding: native.padding, radius: native.radius,
     strokeEnabled: native.outlineWidth > 0, strokeWidth: native.outlineWidth, strokeColor: hexColor(native.outlineColor), strokeOpacity: native.outlineColor.a,
     shadowEnabled: native.shadowColor.a > 0 && (native.shadowBlur > 0 || native.shadowX !== 0 || native.shadowY !== 0), shadowColor: hexColor(native.shadowColor), shadowOpacity: native.shadowColor.a,
@@ -105,7 +106,7 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
   const document = decodeNativePanelDocument(entry.documentText, snapshot.locator.sequenceId);
   const timelineOffsetSeconds = document.timeOriginSeconds - (tickSeconds(entry.inTicks) - tickSeconds(entry.startTicks));
   const style: StyleConfig = { ...clone(DEFAULT_STYLE), fontFamily: document.style.upcoming.fontFamily, fontSize: document.style.upcoming.fontSize,
-    fontWeight: 400, textColor: hexColor(document.style.upcoming.color), strokeEnabled: document.style.upcoming.outlineWidth > 0,
+    fontWeight: document.style.baseFontWeight??document.style.upcoming.fontWeight??400, textColor: hexColor(document.style.upcoming.color), strokeEnabled: document.style.upcoming.outlineWidth > 0,
     strokeColor: hexColor(document.style.upcoming.outlineColor), strokeOpacity: document.style.upcoming.outlineColor.a, strokeWidth: document.style.upcoming.outlineWidth,
     shadowEnabled: document.style.upcoming.shadowColor.a > 0 && (document.style.upcoming.shadowBlur > 0 || document.style.upcoming.shadowX !== 0 || document.style.upcoming.shadowY !== 0),
     shadowColor: hexColor(document.style.upcoming.shadowColor), shadowOpacity: document.style.upcoming.shadowColor.a, shadowBlur: document.style.upcoming.shadowBlur,
@@ -120,7 +121,7 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
   const binding: NativePanelBinding = { snapshot, document: clone(document), baseline: clone(session), timelineOffsetSeconds, clip: clone(entry) };
   const warnings = [
     'Native Position, Width, Height, character limit and animated overrides remain in Premiere Effect Controls. Panel edits do not rewrite their keyframes.',
-    'The native renderer does not support font weight/B, italic, letter spacing, alignment or whole-caption backgrounds. Those edits are refused instead of discarded.',
+    'Native typography supports available font weights, relative B and real or synthetic italic. Letter spacing, alignment and whole-caption backgrounds remain unsupported.',
     `Native word spacing is ${document.style.wordSpacing} px; the panel percentage control is unavailable. Outline/shadow enable switches have no separate persisted native flag.`,
   ];
   warnings.push('Native text case supports shared As typed or ASCII Title Case only; the source transcript is preserved.');
@@ -129,11 +130,13 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
 }
 
 function unsupported(field: string): never { throw new Error(`Native captions cannot apply ${field}. Edit supported document styles or use Premiere Effect Controls; the native document was preserved.`); }
-function updateWord(previous: NativeWordStyle, before: ReturnType<typeof resolveAppearance>, after: ReturnType<typeof resolveAppearance>): NativeWordStyle {
+function updateWord(previous: NativeWordStyle, before: ReturnType<typeof resolveAppearance>, after: ReturnType<typeof resolveAppearance>, beforeRaw: Partial<WordAppearance>|undefined, afterRaw: Partial<WordAppearance>|undefined): NativeWordStyle {
   const result = clone(previous);
   if (!after.strokeEnabled && after.strokeWidth !== before.strokeWidth) unsupported('outline width while the outline is disabled');
   if (!after.shadowEnabled && ['shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'].some(key => before[key as keyof typeof before] !== after[key as keyof typeof after])) unsupported('shadow extents or opacity while the shadow is disabled');
   if (before.fontFamily !== after.fontFamily) result.fontFamily = after.fontFamily;
+  if(before.fontWeight!==after.fontWeight||beforeRaw?.fontWeight!==afterRaw?.fontWeight||beforeRaw?.fontWeightOffset!==afterRaw?.fontWeightOffset){result.fontWeight=after.fontWeight;result.fontWeightOffset=afterRaw?.fontWeightOffset??null;}
+  if(before.italic!==after.italic||beforeRaw?.italic!==afterRaw?.italic)result.italic=after.italic;
   if (before.fontSize !== after.fontSize) result.fontSize = after.fontSize / result.sizeScale;
   if (before.color !== after.color) result.color = editColor(result.color, after.color);
   if (before.opacity !== after.opacity) result.opacity = after.opacity;
@@ -166,7 +169,8 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
   const styles = pairs.map(([key]) => resolveAppearance(edited.style, key));
   if (!styles.every(style => style.textTransform === styles[0].textTransform) || !['none', 'titlecase'].includes(styles[0].textTransform)) unsupported('different word-state case, uppercase or lowercase');
   const document = clone(binding.document);
-  for (const [key, nativeKey] of pairs) document.style[nativeKey] = updateWord(document.style[nativeKey], resolveAppearance(before.style, key), resolveAppearance(edited.style, key));
+  if(edited.style.fontWeight!==before.style.fontWeight||pairs.some(([key])=>edited.style[key]?.fontWeightOffset!==before.style[key]?.fontWeightOffset&&(edited.style[key]?.fontWeightOffset===0||edited.style[key]?.fontWeightOffset===100)))document.style.baseFontWeight=edited.style.fontWeight;
+  for (const [key, nativeKey] of pairs) document.style[nativeKey] = updateWord(document.style[nativeKey], resolveAppearance(before.style, key), resolveAppearance(edited.style, key),before.style[key],edited.style[key]);
   if (edited.style.lineHeight !== before.style.lineHeight) document.style.lineHeight = edited.style.lineHeight;
   document.style.titleCase = styles[0].textTransform === 'titlecase';
   const upcoming = document.style.upcoming;

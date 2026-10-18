@@ -9,12 +9,12 @@ const readJobs = new Set();
 const PNG_SIGNATURE = Buffer.from('89504e470d0a1a0a', 'hex');
 
 /** The executable and every argument are separate: no command shell is involved. */
-function run(exe, args, { cwd, env, signal, timeout = 60 * 60 * 1000 } = {}) {
+function run(exe, args, { cwd, env, signal, timeout = 60 * 60 * 1000, maxOutputBytes = 4 * 1024 * 1024, strictOutput = false } = {}) {
   if (signal?.aborted) return Promise.reject(new Error('Cancelled.'));
   return new Promise((resolve, reject) => {
     const child = spawn(exe, args, { cwd, env, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
-    let out = '', err = '', settled = false;
+    let out = '', err = '', settled = false, outputBytes = 0, overflow = false;
     const abort = () => child.kill('SIGTERM');
     const timer = setTimeout(() => child.kill('SIGTERM'), timeout);
     const finish = (error) => {
@@ -25,10 +25,14 @@ function run(exe, args, { cwd, env, signal, timeout = 60 * 60 * 1000 } = {}) {
       error ? reject(error) : resolve(out);
     };
     signal?.addEventListener('abort', abort, { once: true });
-    child.stdout.on('data', b => { out = (out + b).slice(-4 * 1024 * 1024); });
+    child.stdout.on('data', b => {
+      outputBytes += Buffer.byteLength(b, 'utf8');
+      if (strictOutput && outputBytes > maxOutputBytes) { overflow = true; child.kill('SIGTERM'); return; }
+      out = (out + b).slice(-maxOutputBytes);
+    });
     child.stderr.on('data', b => { err = (err + b).slice(-12000); });
     child.on('error', finish);
-    child.on('close', (code, killedBy) => finish(code === 0 ? null : new Error(signal?.aborted ? 'Cancelled.' : err.slice(-2000) || `Local process stopped (${code ?? killedBy}).`)));
+    child.on('close', (code, killedBy) => finish(overflow ? new Error('Local process output exceeded its safe size limit.') : code === 0 ? null : new Error(signal?.aborted ? 'Cancelled.' : err.slice(-2000) || `Local process stopped (${code ?? killedBy}).`)));
   });
 }
 
@@ -145,14 +149,140 @@ async function encode(folder, fps, count, signal, renderBounds) {
   return output;
 }
 
-async function fonts() {
-  if (process.platform === 'win32') {
-    const script = "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); Add-Type -AssemblyName System.Drawing; $fonts=New-Object System.Drawing.Text.InstalledFontCollection; try { $fonts.Families | ForEach-Object { $_.Name } } finally { $fonts.Dispose() }";
-    const text = await run(platform.systemPowerShell(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: platform.powerShellEnv(), timeout: 15000 });
-    return [...new Set(text.split(/\r?\n/).map(s => s.trim()).filter(Boolean))].sort();
+const FONT_CATALOG_BYTES = 4 * 1024 * 1024, FONT_CATALOG_ROWS = 100000, FONT_CATALOG_FAMILIES = 20000;
+// Enumerate aliases individually: a comma can also be part of a family name.
+// https://github.com/fontconfig/fontconfig/blob/main/doc/fcformat.fncs
+const FONTCONFIG_FORMAT = '%{weight}\t%{slant}\t%{variable}\t[%{[]family{"%{family|cescape}",}}]\n';
+// Values from fontconfig.h, converted by the documented piecewise interpolation
+// of FcWeightToOpenTypeDouble. Book and semilight deliberately remain 380/350.
+// https://www.freedesktop.org/software/fontconfig/fontconfig-devel/fcweighttoopentypedouble.html
+const FC_WEIGHT_POINTS = [[0,100],[40,200],[50,300],[55,350],[75,380],[80,400],[100,500],[180,600],[200,700],[205,800],[210,900],[215,1000]];
+function cssWeightFromFontconfig(weight) {
+  if (typeof weight !== 'number' || !Number.isFinite(weight) || weight < 0 || weight > 215) throw new Error('Fontconfig returned an invalid font weight.');
+  for (let index = 0; index < FC_WEIGHT_POINTS.length; index++) {
+    const [fc, css] = FC_WEIGHT_POINTS[index];
+    if (weight === fc) return css;
+    if (weight < fc) {
+      const [previousFC, previousCSS] = FC_WEIGHT_POINTS[index - 1];
+      return Math.round((previousCSS + (weight - previousFC) * (css - previousCSS) / (fc - previousFC)) * 1000) / 1000;
+    }
   }
-  const text = await run(platform.resolveTool('fc-list'), ['--format', '%{family}\n'], { timeout: 15000 });
-  return [...new Set(text.split('\n').flatMap(x => x.split(',')).map(s => s.trim()).filter(Boolean))].sort();
+  throw new Error('Fontconfig returned an unsupported font weight.');
 }
+function fontText(text) {
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > FONT_CATALOG_BYTES || !text.trim()) throw new Error('The installed font catalog is empty or exceeds its safe size limit.');
+  return text.replace(/^\uFEFF/, '');
+}
+function fontValues(text, maximum) {
+  const number = '(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?', scalar = new RegExp('^' + number + '$'), range = new RegExp('^\\[\\s*(' + number + ')\\s+(' + number + ')\\s*\\]$');
+  const values = text.split(',');
+  if (values.length > 64) throw new Error('The installed font metadata contains too many values.');
+  return values.map(value => {
+    value = value.trim(); const match = range.exec(value);
+    let min, max;
+    if (match) { min = Number(match[1]); max = Number(match[2]); }
+    else if (scalar.test(value)) min = max = Number(value);
+    else throw new Error('The installed font metadata is malformed.');
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max < min || max > maximum) throw new Error('The installed font metadata is out of range.');
+    return { min, max, range: !!match };
+  });
+}
+function fontCatalogBuilder() {
+  const families = new Map();
+  function add(names, weights, italic, ranges = []) {
+    if (!Array.isArray(names) || !names.length || names.length > 256 || typeof italic !== 'boolean') throw new Error('The installed font family metadata is malformed.');
+    for (let name of names) {
+      if (typeof name !== 'string' || !name.trim() || name.length > 4096 || /[\u0000-\u001f\u007f]/.test(name)) throw new Error('The installed font family name is invalid.');
+      name = name.trim(); const id = name.normalize('NFC').toLocaleLowerCase();
+      let entry = families.get(id);
+      if (!entry) {
+        if (families.size >= FONT_CATALOG_FAMILIES) throw new Error('The installed font catalog contains too many families.');
+        entry = { family:name, weights:new Set(), italic:false, ranges:[] }; families.set(id, entry);
+      } else if (name < entry.family) entry.family = name;
+      for (const weight of weights) {
+        if (typeof weight !== 'number' || !Number.isFinite(weight) || weight < 1 || weight > 1000) throw new Error('The installed font weight is invalid.');
+        entry.weights.add(weight);
+      }
+      if (entry.weights.size > 2000 || entry.ranges.length + ranges.length > FONT_CATALOG_ROWS) throw new Error('The installed font family has too many weight values.');
+      entry.italic ||= italic; entry.ranges.push(...ranges);
+    }
+  }
+  function finish() {
+    if (!families.size) throw new Error('No physical installed font families could be enumerated.');
+    return [...families.values()].map(entry => {
+      const result = { family:entry.family, weights:[...entry.weights].sort((a,b)=>a-b), italic:entry.italic };
+      const ranges = entry.ranges.sort((a,b)=>a.min-b.min || a.max-b.max), merged = [];
+      for (const range of ranges) {
+        const last = merged.at(-1);
+        if (last && range.min <= last.max) last.max = Math.max(last.max, range.max);
+        else merged.push({ ...range });
+      }
+      // Do not claim the unsupported gap between separate variable fonts.
+      if (merged.length === 1 && merged[0].max > merged[0].min) result.variable = merged[0];
+      return result;
+    }).sort((a,b)=>a.family.localeCompare(b.family,'en',{sensitivity:'base'}) || a.family.localeCompare(b.family,'en'));
+  }
+  return { add, finish };
+}
+function parseFontConfigCatalog(text) {
+  const lines = fontText(text).trimEnd().split(/\r?\n/), builder = fontCatalogBuilder();
+  if (lines.length > FONT_CATALOG_ROWS) throw new Error('The installed font catalog contains too many faces.');
+  for (const line of lines) {
+    const fields = line.split('\t');
+    if (fields.length !== 4 || !/^(?:true|false)?$/i.test(fields[2])) throw new Error('Fontconfig returned malformed font metadata.');
+    let aliases;
+    try { aliases = JSON.parse(fields[3].replace(/,\]$/, ']')); } catch { throw new Error('Fontconfig returned malformed font family aliases.'); }
+    const values = fontValues(fields[0],215), weights = [], ranges = [], variable = /^true$/i.test(fields[2]);
+    for (const value of values) {
+      const min = cssWeightFromFontconfig(value.min), max = cssWeightFromFontconfig(value.max);
+      weights.push(min, max);
+      if (value.range && variable && min < max) ranges.push({min,max});
+    }
+    builder.add(aliases, weights, fontValues(fields[1],110).some(value=>value.max>0), ranges);
+  }
+  return builder.finish();
+}
+// WPF exposes actual physical faces and OpenType weights. Composite families
+// have no GlyphTypeface; simulated bold/oblique faces are not installed faces.
+// https://learn.microsoft.com/dotnet/api/system.windows.media.fontfamily.gettypefaces
+const WINDOWS_FONT_SCRIPT = String.raw`$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
+Add-Type -AssemblyName PresentationCore
+$rows=New-Object System.Collections.ArrayList
+$familyCount=0; $faceCount=0
+foreach($family in [System.Windows.Media.Fonts]::SystemFontFamilies) {
+  $familyCount++; if($familyCount -gt 20000) { throw 'Too many installed font families.' }
+  $names=New-Object 'System.Collections.Generic.List[string]'
+  $names.Add($family.Source)
+  foreach($name in $family.FamilyNames.Values) { $names.Add($name) }
+  foreach($face in $family.GetTypefaces()) {
+    $faceCount++; if($faceCount -gt 100000) { throw 'Too many installed font faces.' }
+    [System.Windows.Media.GlyphTypeface]$glyph=$null
+    if($face.IsBoldSimulated -or $face.IsObliqueSimulated -or -not $face.TryGetGlyphTypeface([ref]$glyph)) { continue }
+    $italic=($glyph.Style -eq [System.Windows.FontStyles]::Italic -or $glyph.Style -eq [System.Windows.FontStyles]::Oblique)
+    $null=$rows.Add([PSCustomObject]@{families=@($names.ToArray());weight=$glyph.Weight.ToOpenTypeWeight();italic=$italic})
+  }
+}
+[Console]::WriteLine((ConvertTo-Json -InputObject @($rows.ToArray()) -Depth 4 -Compress))`;
+function parseWindowsFontCatalog(text) {
+  let rows;
+  try { rows = JSON.parse(fontText(text)); } catch (error) { throw new Error('Windows did not return a valid installed font catalog: ' + error.message); }
+  if (!Array.isArray(rows) || !rows.length || rows.length > FONT_CATALOG_ROWS) throw new Error('Windows returned an empty or oversized installed font catalog.');
+  const builder = fontCatalogBuilder();
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row) || !Number.isInteger(row.weight)) throw new Error('Windows returned malformed installed font metadata.');
+    builder.add(row.families,[row.weight],row.italic);
+  }
+  return builder.finish();
+}
+async function fontCatalog() {
+  const options = { timeout:15000, strictOutput:true, maxOutputBytes:FONT_CATALOG_BYTES };
+  if (process.platform === 'win32') {
+    const text = await run(platform.systemPowerShell(), ['-NoLogo','-NoProfile','-NonInteractive','-Sta','-EncodedCommand',Buffer.from(WINDOWS_FONT_SCRIPT,'utf16le').toString('base64')], { ...options,env:platform.powerShellEnv() });
+    return parseWindowsFontCatalog(text);
+  }
+  return parseFontConfigCatalog(await run(platform.resolveTool('fc-list'),['--format',FONTCONFIG_FORMAT],options));
+}
+async function fonts() { return (await fontCatalog()).map(entry=>entry.family); }
 
-module.exports = { run, directory, save, load, writeJSON, readJob, disposeReadJob, jobDir, saveFrames, encode, fonts, frameRateArgument, fs, path, platform };
+module.exports = { run, directory, save, load, writeJSON, readJob, disposeReadJob, jobDir, saveFrames, encode, fonts, fontCatalog, parseFontConfigCatalog, parseWindowsFontCatalog, cssWeightFromFontconfig, FONTCONFIG_FORMAT, WINDOWS_FONT_SCRIPT, frameRateArgument, fs, path, platform };

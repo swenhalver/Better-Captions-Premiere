@@ -69,7 +69,7 @@ function fixture(t, options = {}) {
     readCaptionConnections: options.connections ? async (id, links, optionsRead) => options.connections(id, links, optionsRead) : undefined,
     writeNativeCaptionDocument: options.writeNative,
     fetchTranscriptJSON: async () => { calls.transcript++; return options.transcript ? JSON.stringify(options.transcript) : null; },
-    saveSession: async value => calls.saves.push(clone(value)), getFonts: async () => ['Arial'], startAgentBridge: () => () => {},
+    saveSession: async value => calls.saves.push(clone(value)), getFonts: async () => ['Arial'], getFontCatalog: async () => [{ family: 'Arial', weights: [400, 700], italic: true }], startAgentBridge: () => () => {},
     onTransportAvailability(listener) { availability = listener; listener({ state: options.availability ?? 'ready' }); return () => {}; },
     readTimeline: async captions => ({ ok: true, cues: captions.map(c => ({ id: c.id, clipNodeId: c.clipNodeId, path: c.mediaPath, start: c.startTime, end: c.endTime, projectItemId: c.projectItemId })) }),
     readCaptionMotion: async captions => ({ ok: true, cues: captions.map(c => ({ id: c.id, clipNodeId: c.clipNodeId, projectItemId: c.projectItemId, path: c.mediaPath, motionProfile: clone(c.motionProfile ?? profile) })) }),

@@ -96,7 +96,8 @@ PF_Err render(PF_InData* in_data, PF_ParamDef* params[], PF_LayerDef* output) {
  auto document=missingDocument?demo():decode(adobe::bytes(in_data,params[Transcript]->u.arb_d.value));
  // Only the exact built-in fixture bypasses persisted-origin mapping. Matching
  // its ID alone is insufficient; edited/custom documents must use their origin.
- const bool demoMode=missingDocument||encode(document)==encode(demo());
+ auto demoComparison=document;demoComparison.schemaVersion=kSchemaVersion;
+ const bool demoMode=missingDocument||encode(demoComparison)==encode(demo());
  const auto color=params[TextColor]->u.cd.value;
  adobe::NativeAppearanceControls appearances;
  appearances.current=wordControls(params,CurrentSize);
