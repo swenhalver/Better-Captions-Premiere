@@ -17,7 +17,7 @@ OWN-WORLD: User-pinned Premiere native supersedes the assigned continuity-script
 
 STORY: Confirm sequence, transcribe in Premiere, choose and edit a caption, style upcoming/current/spoken words, then apply to the main Program Monitor. Native-only actions remain clearly unavailable in the synthetic browser fixture.
 
-FIRST VIEWPORT: Compact title and sequence header, native transcription action, two tabs, scrollable sentence list and the selected sentence’s one-lane word timeline. Persistent lower apply area. At wide widths the transcript list sits alongside its editor; the docked version stacks them. Signature interaction: choosing a cue anchors its editor and preserves selection across tabs, with direct access to all three word states. Timing edges clamp to adjacent words; connected edges move together on the sequence frame grid. Styling holds Past words / Current word / Next words, each with typography, stroke, shadow and bubble controls. Selected-caption Position & size supplies X/Y, independent width/height, stopwatches, key navigation, interpolation and Undo. Width reflows at fixed font size. A labeled type sample is an interactive specimen, while Premiere remains the sole video monitor.
+FIRST VIEWPORT: Compact title and sequence header, native transcription action, two tabs, scrollable sentence list and the selected sentence’s one-lane word timeline. Persistent lower apply area. At wide widths the transcript list sits alongside its editor; the docked version stacks them. Signature interaction: choosing a cue anchors its editor and preserves selection across tabs, with direct access to all three word states. Timing edges are independent and clamp to adjacent words on the sequence frame grid; trimming touching words can open a gap without moving neighbours. Whole-word dragging translates timing in free space and shortens at a neighbour or caption boundary, down to three frames. Fit content is the default zoom. Styling holds Past words / Current word / Next words, each with typography, stroke, shadow and bubble controls. Selected-caption Position & size supplies X/Y, independent width/height, stopwatches, key navigation, interpolation and Undo. Width reflows at fixed font size. A labeled type sample is an interactive specimen, while Premiere remains the sole video monitor.
 
 FORM: Premiere-native canon explicitly requested by the user. The seven considered sources were subtitle proofs, film-festival catalogues, type specimens, continuity scripts, exhibition signage, contact sheets and sound cue sheets. Catalog challengers (console, cassette, grid specimen, lexicon, atlas, emission rail) do not override that pinned choice. No raster comp; this session builds code-first, no standing default recorded.
 
@@ -49,3 +49,20 @@ faces or variable ranges. Relative B uses the next available heavier weight abov
 All words. Italic remains available for every font, using synthetic slant when a
 native italic face is absent. Font count/refresh and failure recovery belong in
 the open popup, preserving the compact closed toolbar.
+
+## Direct transcript editing, 2026-10-18
+
+The user requested the caption list as the single sentence-editing surface.
+Click sentence text or its timestamps to edit in place; remove the duplicate
+selected-caption heading/word strip and separate text/timing disclosures. Keep
+the horizontally scrollable word lane, with directly draggable edges on every
+word, and place its Start/End spinner fields in two columns even in a narrow
+panel. Input arrows adjust one frame and apply immediately. Premiere's CTI drives
+the lane marker; a separate plugin playhead slider and persistent gesture-help
+paragraph do not belong here. Compact Split-before-selected-word and Merge-next
+actions belong in the lane toolbar, replacing the old disclosure. Fit content
+is the default zoom; numeric zooms preserve precise scrolling. Word edits enforce
+a three-frame minimum and shorten on collision while keeping neighbours fixed.
+Preserve native
+palette, focus, Undo and timing
+validation, including non-destructive Escape cancellation.

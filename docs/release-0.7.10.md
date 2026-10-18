@@ -25,6 +25,26 @@ On macOS the installed catalog comes from fontconfig; on Windows it comes from
 physical WPF font faces and OpenType weight metadata. Catalog failures are visible
 and retryable. The browser review alone uses labeled synthetic fixture data.
 
+Transcript editing now happens in the caption list: click a sentence to edit its
+words or click its timestamps to edit the caption range. The separate text and
+caption-timing sections, repeated sentence strip and instructional paragraph are
+removed. Selected-word Start and End fields sit side by side, apply immediately,
+and use input arrows for one-frame adjustments. Every word's timing edges can be
+grabbed directly without a prior selection; the same gesture selects the word.
+Dragging a whole word translates its timing while space is available, then
+shortens the dragged word when it reaches a neighbour or caption boundary. Word
+edits have a three-frame minimum and never move neighbours. Edges are
+independent even when words touch, allowing gaps without moving neighbours;
+all gestures stop before overlap. Fit content is the default zoom and adapts
+to the panel width; larger precision zooms remain available.
+Split-before-selected-word and Merge-next are
+compact actions in the lane toolbar, preserving existing linked-clip guards.
+
+The word lane follows Premiere's timeline position through a host-only read-only
+sampler. There is no separate plugin playhead slider. Sampling skips an occupied
+native lane, stops while the panel is hidden or reloading, and rejects late or
+other-project/sequence updates. Playhead movement never saves or renders captions.
+
 Native-effect Razor timing, direct Program Monitor dragging and installed Windows
 Premiere acceptance remain separate open items. The native effect is still an
 experimental development build. See [Mac verification](mac-verification-0.7.10.md)

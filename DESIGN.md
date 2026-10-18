@@ -178,9 +178,9 @@ Use the shared spacing rhythm for section padding and gaps. Field groups use two
 
 Transcript list and editor stack below the container breakpoint (48rem, or 624px at the base size). At that breakpoint, they form columns `minmax(18rem, .8fr)` and `minmax(22rem, 1fr)`. The stacked list is bounded by `clamp(7rem, 16vh, 12rem)`; expanded lists allow (60vh). Use container width, not the outer browser window, to choose this topology.
 
-The current panel has two workspaces: Transcript and Styling. Transcript puts search and sentence grouping above the caption list, then anchors the selected sentence’s word lane and timing controls in its editor. Sentence text, caption timing, and split/merge controls use disclosures below that lane. Styling remains a single column at all panel widths, with appearance selection, a type sample, selected-caption geometry, and disclosed appearance/layout controls. Selection persists when switching workspaces.
+The current panel has two workspaces: Transcript and Styling. Transcript puts search and sentence grouping above the caption list, then anchors the selected sentence’s word lane and timing controls in its editor. Sentence text and caption timestamps are edited directly in the list; compact Split/Merge actions belong in the lane toolbar. Styling remains a single column at all panel widths, with appearance selection, a type sample, selected-caption geometry, and disclosed appearance/layout controls. Selection persists when switching workspaces.
 
-The word lane scrolls horizontally inside its own bordered region. Its width follows the sentence length and zoom, with a minimum of (320px) before zoom and at least the available container width. It never wraps into multiple timing lanes. Narrow panels retain the same controls; toolbar buttons may wrap, text wraps, and X/Y fields stay in two columns.
+The word lane scrolls horizontally inside its own bordered region. Fit content is the default and uses the available width without horizontal scrolling. Numeric precision zooms follow sentence length with a minimum of (320px) before zoom and at least the available container width. It never wraps into multiple timing lanes. Narrow panels retain the same controls; toolbar buttons may wrap, text wraps, and X/Y fields stay in two columns.
 
 ## Elevation & Depth
 
@@ -227,13 +227,13 @@ Typography is open by default for the chosen word state. Stroke, Shadow and Word
 
 ### Caption Cues
 
-Each full-width row combines a muted ordinal, tabular timecode and wrapping caption text. Selection uses Selection Slate; hover uses Raised Charcoal; playing timing uses Focus Blue. Keyboard focus is drawn inside the row with outline-offset (-2px).
+Each full-width row combines a muted ordinal, tabular timecode and wrapping caption text. Click the sentence or its timestamps to edit in place. Edits commit on blur or their keyboard action, support Escape cancellation, and preserve Undo and validation. Selection uses Selection Slate; hover uses Raised Charcoal; playing timing uses Focus Blue. Keyboard focus is drawn inside the row with outline-offset (-2px).
 
 ### Sentence Word Lane
 
-The selected sentence has clickable words above a single horizontal time lane. Timing blocks have widths and positions proportional to the word’s duration and start time. Selected blocks use Selection Slate with an accent border; the selected word has two narrow accent handles. A three-label ruler, zoom selector, frame count, start/end fields, one-frame nudge buttons and a playhead range expose timing without a second timeline row.
+The selected sentence has a single horizontal time lane. Timing blocks have widths and positions proportional to the word’s duration and start time. Selected blocks use Selection Slate with an accent border; every word exposes directly draggable edge handles on hover/focus, and dragging selects it in the same gesture. A three-label ruler, zoom selector, frame count and two-column Start/End spinner fields expose timing. Spinner arrows apply one frame immediately. A thin noninteractive lane marker follows Premiere’s CTI; there is no separate plugin playhead slider or duplicate sentence strip.
 
-**The Single Lane Rule.** Keep the selected sentence’s words on one time-based lane. Edges snap to sequence frames, stop at adjacent boundaries, and move together where connected. Preserve both draggable handles and explicit numeric/frame controls.
+**The Single Lane Rule.** Keep the selected sentence’s words on one time-based lane. Edges snap to sequence frames and stop at adjacent boundaries. They remain independent, including when words touch, so trimming an edge can open a gap without moving its neighbour. Dragging a whole word translates both ends while space is available, then shortens at a neighbour or caption boundary. The minimum edited word duration is three frames. Preserve draggable handles and numeric spinner controls; Split acts before the selected word.
 
 ### Word Appearances and Type Sample
 
