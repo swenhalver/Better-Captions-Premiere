@@ -5,6 +5,70 @@ against Adobe's official 26.5 SDK headers. `BetterCaptionsPiPL.r` uses the SDK's
 resource types. No SDK header, utility implementation or sample project is
 vendored. Keep SDK downloads outside this repository and retain their license.
 
+## Current experimental Mac status
+
+The opt-in straight-alpha Metal compositor is the installed experimental effect;
+the panel remains 0.7.11. Executable SHA-256 prefix `a5156eda`, metallib prefix
+`dd6d2a53` identify the accepted candidate. It is not production-ready and is
+separate from the ordinary CPU build below.
+
+Actual SDR Mac host exports now pass 30 fps baseline/UI-Razor/moved-split raw-pixel
+equality and whole-layer movement with captions following their adjustment layer.
+Opacity 100/50/0 exports match an independent CPU straight-source-over reference
+(R/G/B max error 1, alpha exact, untouched pixels unchanged). Fresh initial
+attachments also pass the “Native”→“captions” boundary at 29.97 frames 59→60 and
+23.976 frames 47→48, with paired hashes identical across rates. Their persisted
+origins were captured from actual `(inPoint-start)` after setting FPS; changing
+FPS on an already attached document remains a separate preservation limitation.
+
+The GPU renderer consumes Premiere's request
+`inClipTime / ticksPerSecond - persistedOrigin`; it does not poll CTI or borrow
+the footage clock. The standard
+CPU fallback still has the historical adjustment-layer cut/move clock defect.
+The verified Metal candidate remains installed rather than restoring that failed
+CPU candidate. HDR/linear, 16f host frames, Windows, custom dragging, copy/paste
+and performance remain unaccepted. After an actual Premiere restart, UI-Razor,
+whole-layer move and both fractional fixtures reproduce the earlier pixels;
+out-of-order 1→5→1 second seeks are deterministic. Seven private test sequences
+were archived and removed, all 22 original scratch graphs/CTIs were preserved,
+and four private control plug-ins were moved to recovery while Premiere was quit.
+The production project's SHA-256 is unchanged.
+
+The current candidate supports the verified single-bundle setup and uniform
+preview scaling. Unequal X/Y downsample behavior and module-relative metallib
+lookup remain hardening items. Synchronous Metal completion has not been
+performance-qualified.
+
+Local evidence is under ignored `artifacts/host-scratch/`, including
+`gpu-straight-reference/comparison-receipt.json`, `gpu-straight-timing-receipt.json`,
+`gpu-straight-frame-hashes.json` and `gpu-fractional-fresh-fixtures.json`.
+See [the acceptance record](../../docs/native-effect-acceptance.md) for hashes and
+scope. Build the separate compositor only with the explicit experiment script:
+
+```sh
+bash native/adobe/build-gpu-caption-probe-macos.sh
+```
+
+The SDK environment variables used below are required. This script builds only;
+it does not install, restart Premiere, or replace the standard artifact. It adds
+Foundation/Metal and an original metallib to the CPU dependencies listed below.
+It emits `gpu-caption-provenance.json` with the archived base, actual overlaid
+source hashes, effective patched inputs, SDK header hashes, current compiler
+versions and output hashes. The accepted candidate also has a retrospective
+manifest, explicitly distinguished from contemporaneous build evidence.
+
+Install that explicit artifact only after quitting Premiere:
+
+```sh
+BC_NATIVE_PLUGIN_SOURCE="/absolute/path/to/BetterCaptionsNativeProbe.plugin" \
+  bash native/adobe/install-user-macos.sh
+```
+
+This per-user route needs no password or fingerprint prompt. Do not run the
+standard CPU installer over the accepted Metal artifact when testing its fix.
+
+## Standard CPU build (historical timing limitation)
+
 ```sh
 AE_SDK_EXAMPLES="/path/to/AdobeAfterEffectsSDK_26.5_MacOS/Examples" \
   PREMIERE_SDK_HEADERS="/path/to/Premiere Pro 26.0 C++ SDK/Examples/Headers" \
@@ -82,11 +146,12 @@ The CEP string carrier is implemented following observed UTF-16 serialized value
 CEP write/readback and edited transcript rendering passed in Premiere on the
 preceding schema1 prototype. BCAPv2 origins survived Premiere restart and CEP
 readback; adjustment-layer rendering passed before splitting and after moving a
-split right half. Complete Razor host acceptance is failing, as detailed below.
+split right half. Those earlier CPU Razor tests failed, as detailed below; the opt-in Metal cases
+now pass as recorded above.
 `getValue` exposed the
 FLATTEN representation, so binary BCAP flattening appeared as truncated text.
 The current FLATTEN representation is exact-length UTF-16LE `BCDOC1:` hex.
-New instances default to Position50%/90%, Height150px. Existing authored values
+New instances default to Position 50%/90%, Height 150 px. Existing authored values
 and keyframes are not changed by those defaults.
 
 The default document is a synthetic eight-second phrase fixture. Rendering reads
@@ -108,9 +173,10 @@ Arbitrary-data interpolation
 holds the left document until the right endpoint, and the document parameter is
 not time varying.
 
-The renderer currently accepts only SDK-baseline premultiplied ARGB 8-bit frames
-and converts its CoreGraphics premultiplied RGBA bitmap explicitly. It advertises
-no AE 16-bit, SmartFX, GPU, Premiere float/YUV or AEGP support. It depends only on
+The standard CPU renderer accepts only SDK-baseline premultiplied ARGB 8-bit frames
+and converts its CoreGraphics premultiplied RGBA bitmap explicitly. That standard build advertises
+no AE16-bit, SmartFX, GPU, Premiere float/YUV or AEGP support; the opt-in Metal
+companion above is a separate build. It depends only on
 system CoreText, CoreGraphics, CoreFoundation, libc++ and libSystem. Premiere
 loading and baseline ARGB caption rendering are verified; remaining formats,
 render-time scaling, trim/split times, undo and project persistence require tests.
@@ -143,7 +209,7 @@ are required; unsupported suites/callbacks leave scalar controls available.
 This does not establish keyframe/easing/undo/cancel behavior. A native point
 control or rendered rectangle alone is not proof of custom dragging.
 
-## Adjustment-layer document timing and optional diagnostics
+## Historical CPU document timing and diagnostic progression
 
 The requested host surface is an actual Premiere adjustment layer. Premiere gives
 new adjustment layers a one-hour source in-point; this is not the document's first
@@ -154,7 +220,7 @@ splits. Legacy documents keep origin0 until an explicit migration/application.
 
 Observed adjustment-layer timing differs between unmoved and moved split items.
 The relationship to underlying footage is a hypothesis, not an established SDK
-contract. Real documents currently use the queried rendering sequence clock and
+contract. The historical CPU path uses the queried rendering sequence clock and
 this layer's track start. This experimental ordinary-speed mapping remains
 unchanged pending controlled host diagnosis:
 
@@ -238,11 +304,9 @@ four words. At 30fps the observed `(sequence seconds, clip seconds)` pairs were
 uncut `(5,3605)`, whole-layer move `(5,3601)`, actual UI Razor right side
 `(5,3605)`, and moved split `(11,3605)`. Thus the GPU candidate can use
 `inClipTime / ticksPerSecond - persistedOrigin` for those cases without a graph
-or playhead cache. This establishes a request clock, not rendered caption output.
-The diagnostic still returns no GPU frame and its guarded CPU float path rejects
-unsupported input; its frame exports fail by design. Real GPU compositing,
-save/reopen/export pixel acceptance, other frame rates and software timing remain
-pending.
+or playhead cache. That diagnostic established a request clock, not rendered output. Its frame
+exports failed by design. It has since been superseded by the accepted straight
+Metal compositor above; software timing remains unresolved.
 Detailed test receipts are in
 [the acceptance record](../../docs/native-effect-acceptance.md).
 
@@ -250,7 +314,8 @@ The adapter does not infer that every synthetic clip has origin3600. Adjustment
 layers need underlying rendered coverage; the host does not render the effect
 over an otherwise empty timeline region.
 
-Caption frames render at the timeline's cadence. Premiere invokes `PF_Cmd_RENDER`
+The CPU path is scheduled at the timeline's cadence, despite its unresolved
+layer-clock defect. Premiere invokes `PF_Cmd_RENDER`
 for its requested sequence frames; the adapter consumes the SDK render-sequence
 clock and this layer's timeline start, and returns one bitmap for that request.
 PF raw time is used only by the built-in demo and opt-in diagnostics. It creates no

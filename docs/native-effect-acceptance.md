@@ -4,13 +4,71 @@ Status date: 2026-10-18. Experimental branch; not a replacement release.
 The supported target is a genuine Premiere adjustment layer. Official AE 26.5
 and Premiere 26.0 SDKs are external build dependencies; no substitute headers or
 guessed ABI are used. Premiere 26.5.2 loads the arm64 effect and renders embedded
-caption documents with live text/style updates. **Adjustment-layer Razor timing
-is unresolved**, so this is not yet ready for production caption work.
+caption documents with live text/style updates. The opt-in Metal compositor now
+passes the SDR Mac adjustment-layer timing, opacity and fractional-cadence cases
+below. The software fallback still has the historical wrong-clock failure. This
+is an experimental effect, not production-ready.
 
-## Verified evidence
+## Current opt-in Metal acceptance
 
-- Development panel 0.7.9 and the new native control build are installed on the
-  Mac. Selecting an existing native adjustment layer automatically restored its
+The separate experimental effect remains installed with the accepted straight-alpha
+Metal candidate (executable SHA-256 prefix `a5156eda`, metallib prefix `dd6d2a53`).
+The Better Captions panel remains **0.7.11**. Restoring the failed CPU-only candidate
+would remove this verified fix; it is retained only as historical evidence.
+
+- At 30 fps, the baseline at sequence 5, actual UI-Razor right half at sequence 5,
+  and moved split at sequence 11 have identical raw RGBA SHA-256
+  `3b7dfb88c96d617aa3f8208d31a422bb850d05f5fa2c44310e082dd0aa9cabc8`.
+  Moving the whole layer from 0 to 4 renders the earlier “Native” word at sequence 5,
+  hash `ee8be3d0e61eac403d8ef2eab4f86741892ab9eecbd909f4304e43a0c3ee6962`.
+  Captions therefore move with the adjustment layer in these accepted cases.
+- Actual exported PNGs at underlying opacity 100/50/0 match an independent CPU
+  straight-source-over reference: R/G/B maximum error 1, alpha exact, and zero
+  changes to untouched pixels. All three comparisons pass. Receipt:
+  `artifacts/host-scratch/gpu-straight-reference/comparison-receipt.json`.
+- Fresh initial attachments at 29.97 transition from “Native” to “captions” on
+  frames 59→60; at 23.976 the transition is frames 47→48. Corresponding before/after
+  raw RGBA hashes match across rates. Each private fixture captured its origin
+  from actual layer `(inPoint-start)` after setting sequence FPS. Changing FPS
+  after attachment can snap the host in-point and remains a separate preservation
+  limitation; these fixtures do not claim to fix that case.
+
+Additional local receipts: `gpu-straight-timing-receipt.json`,
+`gpu-straight-frame-hashes.json`, `gpu-straight-opacity-receipt.json`, and
+`gpu-fractional-fresh-fixtures.json` under ignored `artifacts/host-scratch/`.
+These receipts support only the tested SDR Apple Silicon/Metal path. HDR/linear
+color, installed Windows, 16f host frames, custom UI dragging, copy/paste and
+performance remain unaccepted. The CPU software fallback is not a valid timing
+fallback for adjustment layers.
+
+After an actual Premiere restart, UI-Razor, whole-layer move and both fractional
+fixtures reproduce their earlier pixels exactly. Seeking the base 1→5→1 seconds
+also reproduces the expected frame hashes. Receipts: `gpu-straight-reopen-receipt.json`
+and `gpu-straight-frame-hashes.json`.
+
+All seven private test sequences were archived in
+`gpu-caption-full-acceptance-29-sequences.prproj` and removed from the working
+scratch project. Its original 22 full sequence graphs match the fresh checkpoint;
+all original playheads and active sequence were restored. Only recorded viewport
+floating-point serialization noise (at most 1e-14) is normalized. Four private
+control plug-ins were hash/signature verified and moved to a recovery folder while
+Premiere was fully quit. The accepted caption bundle remains installed. See
+`gpu-caption-final-preservation.json`, `gpu-temporary-sequence-cleanup.json` and
+`gpu-temporary-plugin-cleanup.json`. The closed production project and fresh
+human-saved baseline retain identical SHA-256
+`c4259feec4b32e0a52c1f2a72ef9f049626d74133fa91fee1d2788a62cd97d03`.
+
+The prototype synchronously waits for its Metal command and has no performance
+acceptance yet. Uniform preview scaling is locally tested; unequal X/Y scales are
+not accepted. Only one experimental bundle with this identifier was loaded during
+host testing; module-relative metallib lookup remains a hardening item before
+supporting multiple simultaneous copies.
+
+## Earlier verified evidence
+
+- Earlier panel-integration acceptance used development panel 0.7.9 and the native
+  control build on the Mac (the current panel is 0.7.11). Selecting an existing
+  native adjustment layer automatically restored its
   timed words/styles without Refresh. A Current-word color edit changed that
   same layer's visible Program Monitor frame without a movie export; the test
   color was then restored. Current/Past/Next groups appear in Effect Controls.
@@ -67,19 +125,25 @@ Build hashes identify snapshots, not acceptance:
 | Same mapping with opt-in numeric render diagnostics | `d23470ea5cc798a2de18d8d45bc47e544b57f5bee04e32bc3365748d116ad633` |
 | Installed panel-integration/control candidate | `688697ac134ff530f9e02121f4843a53b33346b50c7cba40615631a9c910ec03` |
 | Normal typography candidate restored after timing probes | `6312eaabae8795ca9f4efa20a116cac9bf11f09c299b18e0368518ed7f62f74d` |
+| Current installed straight-alpha Metal candidate | `a5156eda8b80d317fe1d0bedc07b699a4fd17eb7da1b64144e422c394380c9f0` |
 
-Regenerate hashes after rebuilding. The normal typography candidate (hash below) was restored after the timing probes;
-standard builds disable custom UI and all probe logging. The earlier diagnostic snapshots are retained as historical
-timing evidence.
+The current `CaptionComposite.metallib` SHA-256 is
+`dd6d2a53a07ec92e8a43dcd9bab97c53f7370c7ea6e53e53a6dfe88827eff5bd`.
+The ignored artifact manifest records actual snapshot/overlay, SDK header and
+output hashes and labels its retrospective compiler observations explicitly.
+
+Regenerate hashes after rebuilding. The typography/CPU candidates in this table
+are historical snapshots. The current installed effect is the separate opt-in
+Metal candidate identified above; standard CPU builds remain a distinct path.
 The optional global `.pkg` path was not scanned by this Premiere installation and
 is not the verified install route.
 
-## Adjustment-layer timing failure under investigation
+## Historical CPU timing failure and GPU diagnostic progression
 
 Swen confirmed that captions must **move with their adjustment layer**. A fixed
 persisted origin preserves authored word times across edits, but a reliable
-per-render layer clock is still required. The current CPU mapping does not meet
-that requirement.
+per-render layer clock is still required. The CPU mapping described here did not meet
+that requirement; the accepted opt-in GPU path is recorded above.
 
 The baseline layer is 0–10 s with source in 3600 s and origin 3600 s. At sequence
 5 s it renders the expected word. A real Premiere UI Razor cut at 4 s produces a
@@ -168,28 +232,27 @@ The carrier is UTF-16LE `BCDOC1:` data in borrowed `PrMemoryPtr` storage; it is
 read before another parameter query and never freed or treated as a PF handle.
 This establishes the GPU request clock for these cases. The diagnostic returns
 no GPU frame and intentionally rejects CPU float input, so its failed frame
-exports are expected. Real compositing and pixel acceptance remain pending;
-there is still no accepted end-to-end adjustment-layer timing fix or reliable
-software fallback.
+exports were expected for that diagnostic-only snapshot. It was superseded by
+the accepted compositor above. Its CPU fallback failure remains unresolved.
 
 ## Acceptance matrix
 
 | Requirement | Current status |
 | --- | --- |
-| Bounded versioned document/container identities | BCAP 2 implemented; BCAP 1 reads upgrade with origin 0; independent container IDs/grouping tested. |
+| Bounded versioned document/container identities | BCAP 1–3 supported; persisted origins and typography are versioned; independent container IDs/grouping tested. |
 | Independent styles/Title Case | Native host frames verified; ASCII-only Title Case preserves source bytes. Full Unicode casing pending. |
 | Bottom placement/independent box reflow | Native defaults and width/height behavior verified; broader resolution/pixel-aspect coverage pending. |
 | Position/Width/Height animation | Numeric interpolation verified; native Position edit/Undo observed. Complete point keys, easing, Redo and individual reset pending. |
 | Program Monitor move/resize | Optional probe draws 4 blue handles. Host drag delivered no click/drag callbacks and changed no native value. Input remains unverified; standard build keeps it off. |
 | Embedded document transfer/live update | Exact guarded CEP write/readback and changed native frames verified. Installed panel adoption and supported color update verified in 0.7.9; native keys/geometry stay host-owned. |
-| Save/reopen/clone | Transcript retained; BCAP 2 origin retained. Copy/paste, keys and complete pixel persistence remain open. |
-| Adjustment-layer trim/Razor/move | Actual UI and QE Razor fail; one moved sample passes but whole-layer move over continuous footage fails. Not accepted. |
+| Save/reopen/clone | Transcript/origin persistence verified. Metal pixels match after actual Premiere restart and out-of-order 1→5→1 seeks. Copy/paste and broader key preservation remain open. |
+| Adjustment-layer trim/Razor/move | Opt-in Metal passes 30 fps baseline/UI-Razor/moved-split pixel equality and whole-layer move. Historical CPU fallback fails; broader trim/retime coverage pending. |
 | Adjustment-only application | Live transfer requires exact true role check; manual native effect selection remains a Premiere UI operation. |
 | Built-in Transcribe/editable word timing | Existing native document words/timing restore into the panel; timing edits have adapter/controller tests. Fresh transcription still follows the existing movie workflow; replacing a native embedded transcript is refused. Full installed native timing-edit acceptance pending. |
 | One adjustment container above footage | Manually created genuine layer verified. Automatic creation/migration pending. |
 | Compact panel/agent hooks | Installed compact panel and agent get_state/patch_style adopted the existing native layer and changed its visible color. Unsupported native styles are disabled/refused. |
 | Retimed/reversed native layers | Explicitly unsupported; callback/speed failures return errors. |
-| Additional formats/Windows | Baseline ARGB 8 Mac host verified. Float/YUV/GPU and Windows installed-host loading/drawing pending. |
+| Additional formats/Windows | Baseline ARGB8 CPU and tested SDR 32f Metal Mac path verified. 16f host, HDR/linear, YUV and installed Windows remain unaccepted. |
 
 ## First host probe
 
