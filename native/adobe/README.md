@@ -222,8 +222,27 @@ Set `BC_NATIVE_GPU_CLOCK_FLOAT_PROBE=1` only for a separate eligibility experime
 It changes the snapshot's format advertisement/PiPL to FLOAT_COLOR_AWARE and
 BGRA32f/ARGB8, while guarding the CPU renderer against unsupported float frames
 before writing any pixels. GPU device metadata logs use named numeric fields.
-This does not implement float rendering or change the normal build. Eligibility,
-correct GPU adjustment-layer timing and parameter bytes remain unverified.
+This does not implement float rendering or change the normal build.
+
+The subsequent controlled host comparison identified an additional dispatch
+condition: writing zero to `PrGPUFilterInstance.outIsRealtime` suppressed
+adjustment-layer frame requests. Preserving Premiere's incoming value (observed
+as one) enabled them. The diagnostic now preserves that value. A minimal control
+with actual Smart Render handlers but still forcing zero did not enable GPU
+requests; Adobe's SDK Vignette and the realtime-preserving control did.
+
+The caption probe then received full-size GPU requests for the exact embedded
+adjustment-layer documents. Bounded carrier fingerprints matched MCP readback;
+the host supplied UTF-16LE `BCDOC1:` data, decoded as BCAP2 with origin 3600 and
+four words. At 30fps the observed `(sequence seconds, clip seconds)` pairs were
+uncut `(5,3605)`, whole-layer move `(5,3601)`, actual UI Razor right side
+`(5,3605)`, and moved split `(11,3605)`. Thus the GPU candidate can use
+`inClipTime / ticksPerSecond - persistedOrigin` for those cases without a graph
+or playhead cache. This establishes a request clock, not rendered caption output.
+The diagnostic still returns no GPU frame and its guarded CPU float path rejects
+unsupported input; its frame exports fail by design. Real GPU compositing,
+save/reopen/export pixel acceptance, other frame rates and software timing remain
+pending.
 Detailed test receipts are in
 [the acceptance record](../../docs/native-effect-acceptance.md).
 

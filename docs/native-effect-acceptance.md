@@ -124,8 +124,8 @@ The first isolated GPU companion probe (`fc682b3b…`) was discovered in Premier
 it received 18 CreateInstance and 18 DisposeInstance calls. It received no frame
 dependency or Render callbacks during the three guarded scratch exports, an
 additional seek and brief playback. The saved scratch project specifies Mercury
-Metal. Consequently no GPU frame clock or arbitrary-data representation has been
-observed yet. The CPU fallback still produced the same failing whole-move/UI-cut
+Metal. That test established neither a GPU frame clock nor the arbitrary-data
+representation. The CPU fallback still produced the same failing whole-move/UI-cut
 pixels and the same isolated moved-split passing pixels.
 
 The extra CPU metadata reports sequence zero point 0, the actual containing
@@ -137,14 +137,40 @@ pre-probe checkpoint after the documented sibling-property ordering normalizatio
 no data was omitted. Receipts are `gpu-clock-timing-receipt.json` and
 `gpu-scratch-preservation.json` in ignored `artifacts/host-scratch/`.
 
-The next isolated eligibility probe tests whether the ARGB8-only software format
+The subsequent isolated eligibility probe tested whether the ARGB8-only software format
 declaration prevents GPU frame dispatch. It advertises BGRA32f only in a snapshot
 and explicitly rejects unsupported CPU float frames before any pixel write. This
-is a diagnostic hypothesis, not a float renderer. The explicit GPU request clocks
-may still provide a viable native path, but adjustment-layer dispatch, parameter
-representation and reliable software fallback remain unverified. A diagnostic
-that returns no frame is never a usable renderer or proof of fallback. No timing
-fix is accepted yet.
+is a diagnostic hypothesis, not a float renderer. With `outIsRealtime` forced to
+zero, the float probe also received no adjustment-layer frame callbacks. Its
+later ordinary-footage callbacks must not be treated as adjustment-layer proof.
+
+A controlled comparison then isolated that callback field: a minimal control
+preserving Premiere's incoming value (one) received adjustment-layer dependency
+and Render requests; the otherwise matching control forcing zero did not. A
+separate control implementing genuine Smart Render handlers while retaining zero
+also did not dispatch GPU frames. Adobe's SDK Vignette control rendered and
+exported correctly. These private controls were tested above the same visible
+underlying footage in scratch clones, without modifying the production project.
+
+The caption correlation probe `4729aa15…` preserves incoming realtime and verifies
+the real layer's arbitrary-data carrier using a bounded FNV fingerprint and
+decoded metadata. PID78385 received full-size Render requests at 30fps with BCAP2
+origin3600/four words matching exact MCP carrier readback:
+
+| Adjustment-layer case | Sequence seconds | GPU clip seconds | Clip seconds minus origin |
+| --- | ---: | ---: | ---: |
+| Uncut layer | 5 | 3605 | 5 |
+| Whole layer moved from 0 to 4 | 5 | 3601 | 1 |
+| Actual UI Razor right side, start4/in3604 | 5 | 3605 | 5 |
+| Split moved to start10/in3604 | 11 | 3605 | 5 |
+
+The carrier is UTF-16LE `BCDOC1:` data in borrowed `PrMemoryPtr` storage; it is
+read before another parameter query and never freed or treated as a PF handle.
+This establishes the GPU request clock for these cases. The diagnostic returns
+no GPU frame and intentionally rejects CPU float input, so its failed frame
+exports are expected. Real compositing and pixel acceptance remain pending;
+there is still no accepted end-to-end adjustment-layer timing fix or reliable
+software fallback.
 
 ## Acceptance matrix
 

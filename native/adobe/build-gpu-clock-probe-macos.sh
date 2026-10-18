@@ -29,7 +29,7 @@ fi
 suffix="";if test "$float_probe" = 1;then suffix="-float";fi
 output="${BC_NATIVE_OUTPUT_DIR:-$root/artifacts/native-gpu-clock-diagnostics-$probe_short$suffix}"
 BC_NATIVE_OUTPUT_DIR="$output" BC_ENABLE_RENDER_TIME_DIAGNOSTICS=1 BC_ENABLE_CUSTOM_UI_PROBE=0 BC_ENABLE_SOURCE_TIME_PROBE=0 BC_ENABLE_ADJUSTMENT_TIME_PROBE=0 bash "$snapshot/native/adobe/build-macos.sh"
-xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined -I "$PREMIERE_SDK_HEADERS" "$snapshot/native/adobe/gpu_clock_test.cpp" -o "$output/gpu_clock_test"
+xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined -I "$PREMIERE_SDK_HEADERS" "$snapshot/native/adobe/gpu_clock_test.cpp" "$snapshot/native/core/caption_core.cpp" -o "$output/gpu_clock_test"
 "$output/gpu_clock_test" "$output/BetterCaptionsNativeProbe.plugin/Contents/MacOS/BetterCaptionsNativeProbe"
 if test "$float_probe" = 1;then
  xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined -I "$PREMIERE_SDK_HEADERS" -I "$AE_SDK_EXAMPLES/Headers" -I "$AE_SDK_EXAMPLES/Headers/SP" "$snapshot/native/adobe/gpu_float_guard_test.cpp" -o "$output/gpu_float_guard_test"
