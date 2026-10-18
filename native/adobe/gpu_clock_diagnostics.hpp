@@ -4,6 +4,7 @@
 #include <PrSDKVideoSegmentSuite.h>
 #include <PrSDKMemoryManagerSuite.h>
 #include <SPBasic.h>
+#include <PrSDKGPUDeviceSuite.h>
 #include <atomic>
 #include <cstdio>
 #include <algorithm>
@@ -38,7 +39,21 @@ inline void log(int phase,const PrGPUFilterInstance* instance,const PrGPUFilterR
   if(phase==2)paramsLog(file,instance,params);
  }::close(file);
 }
-inline prSuiteError create(PrGPUFilterInstance* instance){if(!instance)return suiteError_InvalidParms;instance->ioPrivatePluginData=nullptr;instance->outIsRealtime=0;log(0,instance,nullptr);return suiteError_NoError;}
+inline void deviceLog(const PrGPUFilterInstance* instance){
+ if(!instance||(!instance->inNodeID&&!instance->inTimelineID)||!instance->piSuites||!instance->piSuites->utilFuncs||!instance->piSuites->utilFuncs->getSPBasicSuite)return;
+ auto* basic=instance->piSuites->utilFuncs->getSPBasicSuite();if(!basic)return;
+ const PrSDKGPUDeviceSuite* suite=nullptr;basic->AcquireSuite(kPrSDKGPUDeviceSuite,kPrSDKGPUDeviceSuiteVersion,reinterpret_cast<const void**>(&suite));
+ PrGPUDeviceInfo info{};prSuiteError error=suite&&suite->GetDeviceInfo?suite->GetDeviceInfo(kPrSDKGPUDeviceSuiteVersion,instance->inDeviceIndex,&info):suiteError_NotImplemented;
+ static std::atomic<unsigned> count{0};
+ if(count.fetch_add(1,std::memory_order_relaxed)<4096){
+  const int file=::open("/tmp/better-captions-native-gpu-clock.log",O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW,0600);
+  if(file>=0){struct stat st{};if(!::fstat(file,&st)&&S_ISREG(st.st_mode)&&st.st_uid==::getuid()&&st.st_size<1024*1024){
+   char line[220];const int n=std::snprintf(line,sizeof(line),"gpu-device timeline=%d node=%d device=%u error=%ld framework=%d minimumAcceleration=%d\n",int(instance->inTimelineID),int(instance->inNodeID),unsigned(instance->inDeviceIndex),long(error),int(info.outDeviceFramework),int(info.outMeetsMinimumRequirementsForAcceleration));if(n>0)::write(file,line,std::min<int>(n,sizeof(line)-1));
+  }::close(file);}
+ }
+ if(suite)basic->ReleaseSuite(kPrSDKGPUDeviceSuite,kPrSDKGPUDeviceSuiteVersion);
+}
+inline prSuiteError create(PrGPUFilterInstance* instance){if(!instance)return suiteError_InvalidParms;instance->ioPrivatePluginData=nullptr;instance->outIsRealtime=0;log(0,instance,nullptr);deviceLog(instance);return suiteError_NoError;}
 inline prSuiteError dispose(PrGPUFilterInstance* instance){log(1,instance,nullptr);return suiteError_NoError;}
 inline prSuiteError dependencies(PrGPUFilterInstance* instance,const PrGPUFilterRenderParams* params,csSDK_int32*,PrGPUFilterFrameDependency*){log(2,instance,params);return suiteError_NotImplemented;}
 inline prSuiteError precompute(PrGPUFilterInstance* instance,const PrGPUFilterRenderParams* params,csSDK_int32,PPixHand){log(3,instance,params);return suiteError_NotImplemented;}

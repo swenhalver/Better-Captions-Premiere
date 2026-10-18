@@ -213,9 +213,19 @@ AE_SDK_EXAMPLES="/path/to/AE/Examples" \
 The script snapshots committed HEAD (or `BC_NATIVE_PROBE_REF`), overlays only the
 owned timing diagnostics and runs SDK/GPU ABI checks. It does not modify the
 normal artifact, install or restart Premiere. The probe returns no GPU frame;
-it is not a renderer or evidence of software fallback. GPU host dispatch and
-correct adjustment-layer clock behavior remain unverified. Detailed test receipts
-are in [the acceptance record](../../docs/native-effect-acceptance.md).
+it is not a renderer or evidence of software fallback. The first host test found
+the companion entry and created/disposed GPU instances, but sent no frame requests
+during guarded exports, seeking or brief playback in a Mercury Metal project.
+CPU sequence zero point/duration metadata did not resolve the timing error.
+
+Set `BC_NATIVE_GPU_CLOCK_FLOAT_PROBE=1` only for a separate eligibility experiment.
+It changes the snapshot's format advertisement/PiPL to FLOAT_COLOR_AWARE and
+BGRA32f/ARGB8, while guarding the CPU renderer against unsupported float frames
+before writing any pixels. GPU device metadata logs use named numeric fields.
+This does not implement float rendering or change the normal build. Eligibility,
+correct GPU adjustment-layer timing and parameter bytes remain unverified.
+Detailed test receipts are in
+[the acceptance record](../../docs/native-effect-acceptance.md).
 
 The adapter does not infer that every synthetic clip has origin3600. Adjustment
 layers need underlying rendered coverage; the host does not render the effect
