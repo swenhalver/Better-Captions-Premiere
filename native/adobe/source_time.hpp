@@ -34,6 +34,7 @@ struct OwnLayerClock {
  A_long startFrame=0,trackStartFrame=0,clipStartFrame=0,filterInstanceId=0;PrTime sequenceTime=0,frameTicks=0,ticksPerSecond=0;double speed=0;
  PF_Err errSequence=-1,errTrack=-1,errStart=-1,errRate=-1,errSpeed=-1,errClock=-1;
  PF_Err errClipStart=-1,errFilterInstance=-1;
+ PrTime sequenceZeroPoint=0,sequenceDuration=0;PF_Err errZeroPoint=-1,errDuration=-1;
 };
 } // namespace
 #if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
@@ -85,6 +86,9 @@ inline PF_Err ordinaryMediaSeconds(PF_InData* in,double& seconds,OwnLayerClock* 
  if(trace){
   if(utility->GetClipStart)c.errClipStart=utility->GetClipStart(in->effect_ref,&c.clipStartFrame);
   if(utility->GetFilterInstanceID)c.errFilterInstance=utility->GetFilterInstanceID(in->effect_ref,&c.filterInstanceId);
+  if(utility->GetSequenceZeroPoint)c.errZeroPoint=utility->GetSequenceZeroPoint(in->effect_ref,&c.sequenceZeroPoint);
+  Suite<PF_UtilitySuite11> metadata(in,kPFUtilitySuite,kPFUtilitySuiteVersion11);
+  if(metadata&&metadata->GetSequenceDuration)c.errDuration=metadata->GetSequenceDuration(in->effect_ref,&c.sequenceDuration);
  }
 #endif
  if((c.errSequence=utility->GetSequenceTime(in->effect_ref,&c.sequenceTime))||

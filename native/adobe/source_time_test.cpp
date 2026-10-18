@@ -21,8 +21,11 @@ PF_Err trackStart(PF_ProgPtr,A_long* out){if(!trackOK)return PF_Err_INVALID_CALL
 PF_Err frameRate(PF_ProgPtr,PrTime* out){*out=effectFrameTicks;return 0;}
 PF_Err clipSpeed(PF_ProgPtr,double* out){*out=speed;return 0;}
 PF_Err originalRate(PF_ProgPtr,PrTime* out){++originalRateCalls;*out=10584000000LL;return 0;} // actual24fps source, NOT effect30fps
+PF_UtilitySuite11 metadata{};
+PF_Err zeroPoint(PF_ProgPtr,PrTime* out){*out=321;return 0;}
+PF_Err sequenceDuration(PF_ProgPtr,PrTime* out){*out=654;return 0;}
 PF_UtilitySuite10 utility{};PrSDKTimeSuite clockSuite{};
-SPErr acquire(const char* name,int32_t version,const void** out){if(!available)return -1;if(!std::strcmp(name,kPFUtilitySuite)&&version==10){*out=&utility;return 0;}if(!std::strcmp(name,kPrSDKTimeSuite)&&version==1){*out=&clockSuite;return 0;}return -1;}
+SPErr acquire(const char* name,int32_t version,const void** out){if(!available)return -1;if(!std::strcmp(name,kPFUtilitySuite)&&version==11){*out=&metadata;return 0;}if(!std::strcmp(name,kPFUtilitySuite)&&version==10){*out=&utility;return 0;}if(!std::strcmp(name,kPrSDKTimeSuite)&&version==1){*out=&clockSuite;return 0;}return -1;}
 SPErr release(const char*,int32_t){return 0;}
 void check(bool ok){if(!ok)throw std::runtime_error("Source-time suite probe test failed");}
 }
@@ -45,13 +48,13 @@ int main(){try{
  ticks=0;check(better_captions::adobe::source_time_probe::mediaSeconds(&in,value)==0&&value==1);
  // Host calibration: actual24fps media in30fps sequence reports start120,
  // effect frame ticks8467200000 and clock254016000000. At local1 => source5.
- utility.GetClipStart=clipStart;utility.GetFilterInstanceID=instanceId;utility.GetUnscaledClipStart=clipStart;utility.GetTrackItemStart=trackStart;utility.GetMediaFrameRate=frameRate;utility.GetClipSpeed=clipSpeed;utility.GetOriginalClipFrameRate=originalRate;
+ utility.GetSequenceZeroPoint=zeroPoint;metadata.GetSequenceDuration=sequenceDuration;utility.GetClipStart=clipStart;utility.GetFilterInstanceID=instanceId;utility.GetUnscaledClipStart=clipStart;utility.GetTrackItemStart=trackStart;utility.GetMediaFrameRate=frameRate;utility.GetClipSpeed=clipSpeed;utility.GetOriginalClipFrameRate=originalRate;
  ticks=254016000000LL;sequence=ticks;in.current_time=30;in.time_scale=30;value=-1;
  check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value)==0&&value==5&&originalRateCalls==0);
  better_captions::adobe::source_time_probe::OwnLayerClock trace;
- check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value,&trace)==0&&value==5&&trace.filterInstanceId==42&&trace.clipStartFrame==120&&trace.errFilterInstance==0&&trace.errClipStart==0);
- utility.GetFilterInstanceID=nullptr;utility.GetClipStart=nullptr;
- check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value,&trace)==0&&value==5&&trace.errFilterInstance==-1&&trace.errClipStart==-1);
+ check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value,&trace)==0&&value==5&&trace.filterInstanceId==42&&trace.clipStartFrame==120&&trace.errFilterInstance==0&&trace.errClipStart==0&&trace.sequenceZeroPoint==321&&trace.errZeroPoint==0&&trace.sequenceDuration==654&&trace.errDuration==0);
+ utility.GetFilterInstanceID=nullptr;utility.GetClipStart=nullptr;utility.GetSequenceZeroPoint=nullptr;metadata.GetSequenceDuration=nullptr;
+ check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value,&trace)==0&&value==5&&trace.errFilterInstance==-1&&trace.errClipStart==-1&&trace.errZeroPoint==-1&&trace.errDuration==-1);
  sequence=2794176000000LL;trackStartFrame=300; // same sourcein4, movedtrack10 at CTI11: still source5
  check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value)==0&&value==5);
  startFrame=0;trackStartFrame=0;sequence=5*ticks;in.current_time=150;check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value)==0&&value==5); // before Razor
