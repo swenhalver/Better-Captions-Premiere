@@ -120,12 +120,31 @@ flags from 4 to 6 and reproduced the same wrong time and blank pixels. It was
 rejected and is absent from the normal build. Diagnostic builds were removed;
 the normal typography candidate was restored for the parallel font acceptance.
 
-The next isolated probe adds the official GPU companion entry point to inspect
-`PrGPUFilterRenderParams.inClipTime`, `inSequenceTime` and `inRenderTicksPerFrame`.
-These explicit request clocks may provide a viable native path, but adjustment-
-layer host dispatch, parameter data representation and CPU fallback remain
-unverified. A diagnostic that returns no frame is never a usable renderer or
-proof of software fallback. No timing fix is accepted yet.
+The first isolated GPU companion probe (`fc682b3b…`) was discovered in Premiere:
+it received 18 CreateInstance and 18 DisposeInstance calls. It received no frame
+dependency or Render callbacks during the three guarded scratch exports, an
+additional seek and brief playback. The saved scratch project specifies Mercury
+Metal. Consequently no GPU frame clock or arbitrary-data representation has been
+observed yet. The CPU fallback still produced the same failing whole-move/UI-cut
+pixels and the same isolated moved-split passing pixels.
+
+The extra CPU metadata reports sequence zero point 0, the actual containing
+sequence duration, PF total time equal to clip duration and local step 1. It does
+not supply an independent render position. The normal typography bundle was
+restored, its hash verified, the bridge restarted with Codex Computer Use and
+MCP readback verified. All 22 saved scratch sequence graphs match the fresh
+pre-probe checkpoint after the documented sibling-property ordering normalization;
+no data was omitted. Receipts are `gpu-clock-timing-receipt.json` and
+`gpu-scratch-preservation.json` in ignored `artifacts/host-scratch/`.
+
+The next isolated eligibility probe tests whether the ARGB8-only software format
+declaration prevents GPU frame dispatch. It advertises BGRA32f only in a snapshot
+and explicitly rejects unsupported CPU float frames before any pixel write. This
+is a diagnostic hypothesis, not a float renderer. The explicit GPU request clocks
+may still provide a viable native path, but adjustment-layer dispatch, parameter
+representation and reliable software fallback remain unverified. A diagnostic
+that returns no frame is never a usable renderer or proof of fallback. No timing
+fix is accepted yet.
 
 ## Acceptance matrix
 
