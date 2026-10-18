@@ -2,19 +2,18 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const os = require('node:os');
 const { spawn } = require('node:child_process');
-const ffmpeg = '/opt/homebrew/bin/ffmpeg';
-const ffprobe = '/opt/homebrew/bin/ffprobe';
+const platform = require('./platform.cjs');
 const jobs = new Map();
 const readJobs = new Set();
 const PNG_SIGNATURE = Buffer.from('89504e470d0a1a0a', 'hex');
 
 /** The executable and every argument are separate: no command shell is involved. */
-function run(exe, args, { cwd, signal, timeout = 60 * 60 * 1000 } = {}) {
+function run(exe, args, { cwd, env, signal, timeout = 60 * 60 * 1000 } = {}) {
   if (signal?.aborted) return Promise.reject(new Error('Cancelled.'));
   return new Promise((resolve, reject) => {
-    const child = spawn(exe, args, { cwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(exe, args, { cwd, env, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     let out = '', err = '', settled = false;
     const abort = () => child.kill('SIGTERM');
     const timer = setTimeout(() => child.kill('SIGTERM'), timeout);
@@ -55,13 +54,10 @@ function writeJSON(file, data) {
 }
 
 /** Polling jobs stay outside media projects and exist only while ExtendScript reads them. */
-function readJob(data, root = path.join(os.homedir(), 'Library', 'Application Support', 'Better Captions', 'service')) {
+function readJob(data, root = path.join(platform.dataRoot(), 'service')) {
   const folder = path.join(root, 'jobs');
   for (const dir of [path.dirname(root), root, folder]) {
-    try { fs.mkdirSync(dir, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
-    const stat = fs.lstatSync(dir);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) throw new Error('The caption read-job folder must be a real private directory owned by you.');
-    fs.chmodSync(dir, 0o700);
+    platform.secureDirectory(dir);
   }
   const file = path.join(folder, 'read-' + crypto.randomBytes(16).toString('hex') + '.json');
   writeJSON(file, data); readJobs.add(file); return file;
@@ -123,7 +119,7 @@ function frameRateArgument(fps) {
 async function encode(folder, fps, count, signal, renderBounds) {
   const job = captionJob(folder), rate = frameRateArgument(fps);
   if (!Number.isSafeInteger(count) || count < 1 || count !== job.next) throw new Error('Caption frame count does not match the rendered frames.');
-  if (!fs.existsSync(ffmpeg) || !fs.existsSync(ffprobe)) throw new Error('Install the local FFmpeg and FFprobe executables first.');
+  const ffmpeg = platform.resolveTool('ffmpeg'), ffprobe = platform.resolveTool('ffprobe');
   const output = path.join(folder, 'caption.mov'), partial = path.join(folder, 'caption.partial.mov');
   if (fs.existsSync(output) || fs.existsSync(partial)) throw new Error('Caption output already exists. Render again to a new job folder.');
   let width=job.width,height=job.height,filters=[];
@@ -150,8 +146,13 @@ async function encode(folder, fps, count, signal, renderBounds) {
 }
 
 async function fonts() {
-  const text = await run('/opt/homebrew/bin/fc-list', ['--format', '%{family}\n'], { timeout: 15000 });
+  if (process.platform === 'win32') {
+    const script = "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); Add-Type -AssemblyName System.Drawing; $fonts=New-Object System.Drawing.Text.InstalledFontCollection; try { $fonts.Families | ForEach-Object { $_.Name } } finally { $fonts.Dispose() }";
+    const text = await run(platform.systemPowerShell(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: platform.powerShellEnv(), timeout: 15000 });
+    return [...new Set(text.split(/\r?\n/).map(s => s.trim()).filter(Boolean))].sort();
+  }
+  const text = await run(platform.resolveTool('fc-list'), ['--format', '%{family}\n'], { timeout: 15000 });
   return [...new Set(text.split('\n').flatMap(x => x.split(',')).map(s => s.trim()).filter(Boolean))].sort();
 }
 
-module.exports = { run, directory, save, load, writeJSON, readJob, disposeReadJob, jobDir, saveFrames, encode, fonts, frameRateArgument, fs, path };
+module.exports = { run, directory, save, load, writeJSON, readJob, disposeReadJob, jobDir, saveFrames, encode, fonts, frameRateArgument, fs, path, platform };

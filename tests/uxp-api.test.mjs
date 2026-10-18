@@ -2,22 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function harness(t, options = {}) {
   let active='one',projectPath='/projects/edit.prproj',counter=0;
-  let projectReads=0,clockOffset=0;
+  let projectReads=0,serviceReads=0,clockOffset=0;
   const writes=[],requests=[];
   const sequences=['one','two'].map(id=>({guid:{toString:()=>id},name:id,getSettings:async()=>({getVideoFrameRect:async()=>({width:720,height:1280})}),getTimebase:async()=>10584000000,getEndTime:async()=>({seconds:10}),getPlayerPosition:async()=>({seconds:id==='one'?2.5:7}),getVideoTrackCount:async()=>0}));
   const project={get path(){return projectPath;},getSequences:async()=>sequences,getActiveSequence:async()=>sequences.find(s=>s.name===active)};
   const folders=new Map();
   function folder(path) {
     if(folders.has(path))return folders.get(path);
-    const entries=new Map(),value={nativePath:path,getEntry:async name=>{if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
+    const entries=new Map(),value={nativePath:path,getEntries:async()=>[...entries].map(([name,file])=>({...file,name})),getEntry:async name=>{if(path==='/private/service'&&name==='service.json')serviceReads++;if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
     folders.set(path,value);return value;
   }
-  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection']});
+  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues','prepareCaptionTrack','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation']});
   function setService(status) {
     const entries=folder('/private/service').entries;
     if(status===null)entries.delete('service.json');else entries.set('service.json',{data:status});
@@ -31,7 +33,7 @@ function harness(t, options = {}) {
         requests.push(value);
         // The real worker can claim a file before getEntry resolves: no input
         // remains, but its matching response is already available.
-        if(options.autoRespond!==false)respond(value,['Arial','Georgia']);
+        if(options.autoRespond!==false)respond(value,options.serviceResult?await options.serviceResult(value):['Arial','Georgia']);
         else parent.entries.set(name,{data:value,delete:async()=>parent.entries.delete(name)});
       }else parent.entries.set(name,{data:value,delete:async()=>{}});
     },
@@ -45,15 +47,99 @@ function harness(t, options = {}) {
   const module={exports:{}};
   const context={module,exports:module.exports,setTimeout,clearTimeout,Date:{now:()=>Date.now()+clockOffset},Map,Set,require:name=>{
     if(name==='premierepro')return {Project:{getActiveProject:async()=>{projectReads++;return project;}},Constants:{TrackItemType:{CLIP:1}}};
-    if(name==='uxp')return {storage:{localFileSystem:{}}};
+    if(name==='uxp')return {storage:{localFileSystem:{getDataFolder:async()=>folder('/plugin-data')}}};
+    if(name==='./style-presets.js')return require('../uxp/style-presets.js');
     if(name==='./storage.js')return storage;
     if(name==='./transcript.js')return native;
+    if(name==='./paths.js')return require('../uxp/paths.js');
+    if(name==='./text-area.js'&&options.textArea)return options.textArea;
+    if(name==='./consolidation.js'&&options.consolidation)return options.consolidation;
     throw new Error('Unexpected import '+name);
   }};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/api.js',import.meta.url),'utf8'),context);
-  const api=module.exports.createHostAPI({readTimeoutMs:options.readTimeoutMs??12000});t.after(()=>api.dispose());
-  return {api,writes,requests,respond,setService,healthyService,advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},get projectReads(){return projectReads;}};
+  const api=module.exports.createHostAPI({readTimeoutMs:options.readTimeoutMs??12000,serviceStartupGraceMs:options.serviceStartupGraceMs??0,serviceStartupPollMs:options.serviceStartupPollMs??5});t.after(()=>api.dispose());
+  return {api,writes,requests,respond,setService,healthyService,advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},get projectReads(){return projectReads;},get serviceReads(){return serviceReads;}};
 }
+
+test('style preset storage works without a project or renderer and serializes stale writers', async t => {
+  const h = harness(t, { service: null });
+  const initial = await h.api.loadStylePresets();
+  assert.equal(initial.revision, 0); assert.equal(initial.presets.length, 0);
+  const results = await Promise.allSettled([h.api.saveStylePresets(initial), h.api.saveStylePresets(initial)]);
+  assert.equal(results[0].status, 'fulfilled'); assert.equal(results[1].status, 'rejected');
+  assert.match(results[1].reason.message, /another panel/);
+  assert.equal((await h.api.loadStylePresets()).revision, 1);
+  assert.equal(h.writes.length, 1); assert.equal(h.writes[0].path, '/plugin-data');
+  assert.equal(h.writes[0].name, 'style-presets.json');
+  assert.equal(h.projectReads, 0); assert.equal(h.serviceReads, 0); assert.equal(h.requests.length, 0);
+});
+
+function conversionFixture(t,mode='success'){
+ const previous=[{id:'old-a',clipNodeId:'a'},{id:'old-b',clipNodeId:'b'}],caption={id:'bundle',captionBundle:true,mediaPath:'/generated/new.mov'};
+ const plan={ok:true,version:1,sequenceId:'one',projectPath:'/projects/edit.prproj',signature:'native-proof',clips:structuredClone(previous)};
+ let complete=false,entered,release;const started=new Promise(resolve=>{entered=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+ const h=harness(t,{
+  serviceResult:request=>{
+   if(request.action==='readCaptionConsolidation')return {...plan,signature:mode==='stale'?'changed':plan.signature};
+   if(request.action==='prepareCaptionTrack')return {ok:true,sequenceId:'one',projectPath:plan.projectPath,destination:{mode:'reuse',trackIndex:2}};
+   if(request.action==='stageCaptionConsolidation')return {ok:true,cues:[{id:'bundle',clipNodeId:'new-node',projectItemId:'new-item',path:caption.mediaPath,start:0,end:5}]};
+   if(request.action==='verifyCaptionConsolidation')return mode==='partial'?{error:'Only some legacy clips remain'}:{ok:true,complete,clips:structuredClone(previous)};
+   if(request.action==='rollbackCaptionConsolidation')return {ok:true,rolledBack:true};
+   assert.fail('Unexpected conversion action '+request.action);
+  },
+  consolidation:{async removeLegacyClips(ppro,project,sequence,proof,verify){
+   assert.equal(sequence.name,'one');assert.equal(proof.signature,'native-proof');entered();if(mode==='gated')await gate;
+   if(mode==='reject'||mode==='partial')throw new Error('native transaction refused');
+   assert.equal((await verify()).complete,false);complete=true;
+   if(mode==='uncertain')throw new Error('native response lost');
+   assert.equal((await verify()).complete,true);
+  }},
+ });
+ return {...h,previous,caption,plan,started,release};
+}
+
+test('deleted-link recovery stays frozen through automatic destination preparation and final Apply',async t=>{
+ let entered,release;const started=new Promise(resolve=>{entered=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+ const h=harness(t,{serviceResult:async request=>{
+  if(request.action==='preflightCaptionClips')return {ok:true};
+  if(request.action==='prepareCaptionTrack'){entered();await gate;return {ok:true,sequenceId:'one',projectPath:'/projects/edit.prproj',destination:{mode:'reuse',trackIndex:2}};}
+  if(request.action==='applyCaptionClips')return {ok:true,cues:[{id:'bundle',clipNodeId:'new-node'}]};
+  assert.fail('Unexpected recovery action '+request.action);
+ }});
+ const captions=[{id:'bundle',mediaPath:'/generated/new.mov'}],previous=[{id:'bundle'}],deleted=[{id:'bundle',clipNodeId:'old-node',projectItemId:'old-item',mediaPath:'/generated/old.mov'}];
+ await h.api.getActiveSequenceInfo();await h.api.preflightCaptionClips(captions,-1,'one',deleted);
+ const pending=h.api.applyCaptionClips(captions,-1,'one',previous,deleted);await started;deleted[0].clipNodeId='edited-later';captions[0].id='edited-later';previous[0].id='edited-later';release();assert.equal((await pending).cues[0].clipNodeId,'new-node');
+ assert.deepEqual(h.requests.map(request=>request.action),['preflightCaptionClips','prepareCaptionTrack','applyCaptionClips']);
+ for(const request of h.requests.slice(1)){assert.equal(request.sequenceId,'one');assert.equal(request.args[0][0].id,'bundle');assert.equal(request.args[2][0].id,'bundle');assert.equal(request.args[3][0].clipNodeId,'old-node');assert.equal(request.args[3][0].mediaPath,'/generated/old.mov');}
+ assert.equal(h.requests.at(-1).args[1],2);
+ await assert.rejects(h.api.preflightCaptionClips(captions,-1,'one','injected'),/Invalid deleted/);await assert.rejects(h.api.applyCaptionClips(captions,-1,'one',previous,{}),/Invalid deleted/);assert.equal(h.requests.length,3);
+});
+
+test('legacy conversion keeps one serial native lane and freezes its identities through verified replacement',async t=>{
+ const h=conversionFixture(t,'gated');await h.api.getActiveSequenceInfo();
+ const pending=h.api.applyConsolidatedCaption(h.caption,h.previous,h.plan,'one');await h.started;
+ h.caption.id='changed-by-editor';h.previous[0].clipNodeId='unrelated';h.plan.signature='changed-by-editor';
+ const before=h.requests.length,queued=h.api.getActiveSequenceInfo();await tick();assert.equal(h.requests.length,before);
+ h.release();assert.equal((await pending).cues[0].clipNodeId,'new-node');assert.equal((await queued).id,'one');
+ assert.deepEqual(h.requests.map(request=>request.action),['readCaptionConsolidation','prepareCaptionTrack','stageCaptionConsolidation','verifyCaptionConsolidation','verifyCaptionConsolidation']);
+ for(const request of h.requests){assert.equal(request.sequenceId,'one');assert.equal(request.projectPath,'/projects/edit.prproj');}
+ const stage=h.requests[2];assert.equal(stage.args[1],2);assert.equal(stage.args[2][0].clipNodeId,'a');assert.equal(stage.args[3].signature,'native-proof');assert.equal(Object.hasOwn(stage,'expiresAt'),false);
+ for(const request of h.requests.slice(3)){assert.equal(request.args[0].id,'bundle');assert.equal(request.args[0].clipNodeId,'new-node');assert.equal(request.args[1][0].clipNodeId,'a');assert.equal(request.args[2].signature,'native-proof');}
+ assert.equal(typeof h.api.stageCaptionConsolidation,'undefined');assert.equal(typeof h.api.rollbackCaptionConsolidation,'undefined');
+});
+
+test('legacy conversion rolls back only a fully verified untouched original set',async t=>{
+ const stale=conversionFixture(t,'stale');await stale.api.getActiveSequenceInfo();await assert.rejects(stale.api.applyConsolidatedCaption(stale.caption,stale.previous,stale.plan,'one'),/geometry changed/);assert.equal(stale.requests.length,1);
+ const rejected=conversionFixture(t,'reject');await rejected.api.getActiveSequenceInfo();await assert.rejects(rejected.api.applyConsolidatedCaption(rejected.caption,rejected.previous,rejected.plan,'one'),/Original clips were preserved/);
+ assert.deepEqual(rejected.requests.slice(-2).map(request=>request.action),['verifyCaptionConsolidation','rollbackCaptionConsolidation']);
+ const partial=conversionFixture(t,'partial');await partial.api.getActiveSequenceInfo();await assert.rejects(partial.api.applyConsolidatedCaption(partial.caption,partial.previous,partial.plan,'one'),/native transaction refused/);
+ assert.equal(partial.requests.some(request=>request.action==='rollbackCaptionConsolidation'),false,'uncertain partial removal must retain the replacement');
+});
+
+test('an uncertain native transaction that actually removed all originals retains the verified replacement',async t=>{
+ const h=conversionFixture(t,'uncertain');await h.api.getActiveSequenceInfo();assert.equal((await h.api.applyConsolidatedCaption(h.caption,h.previous,h.plan,'one')).ok,true);
+ assert.equal(h.requests.at(-1).action,'verifyCaptionConsolidation');assert.equal(h.requests.some(request=>request.action==='rollbackCaptionConsolidation'),false);
+});
 
 test('direct native requests and slow saves retain the captured sequence after selection changes',async t=>{
   const h=harness(t);assert.equal((await h.api.getActiveSequenceInfo()).playhead,2.5);h.select('two');assert.equal((await h.api.getActiveSequenceInfo()).playhead,7);
@@ -61,6 +147,12 @@ test('direct native requests and slow saves retain the captured sequence after s
   await h.api.saveSession({sequenceId:'one',captions:[{text:'original'}]});
   assert.equal(h.writes.at(-1).path,'/projects/Better Captions/one');
   assert.equal(h.writes.at(-1).value.sequenceId,'one');
+});
+
+test('Windows sessions save beside the captured project and preserve raw project identity in service requests',async t=>{
+  const h=harness(t);h.relocate('D:\\Project Data\\Café\\edit.prproj');await h.api.getActiveSequenceInfo();
+  await h.api.saveSession({sequenceId:'one',captions:[]});assert.equal(h.writes.at(-1).path,'D:/Project Data/Café/Better Captions/one');
+  await h.api.getFonts();assert.equal(h.requests.at(-1).projectPath,'D:\\Project Data\\Café\\edit.prproj');
 });
 
 test('font loading initializes native context and accepts a renderer that claims immediately',async t=>{
@@ -130,4 +222,79 @@ for(const unavailable of ['missing','stale','unsupported'])test(`an unavailable 
 test('a fresh busy background renderer is available and retains the existing in-flight deadline protections',async t=>{
   const h=harness(t),status=h.healthyService();status.busy=true;h.setService(status);
   assert.deepEqual(Array.from(await h.api.getFonts()),['Arial','Georgia']);assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,'getFonts');
+});
+test('startup grace waits only for the private heartbeat and sends one request once the renderer is ready',async t=>{
+  const h=harness(t,{service:null,serviceStartupGraceMs:100});
+  const pending=h.api.getFonts();await tick();const nativeReads=h.projectReads;
+  await delay(15);assert.equal(h.projectReads,nativeReads,'heartbeat polling must not repeat native context calls');
+  assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);assert.ok(h.serviceReads>=2);
+  h.setService(h.healthyService());assert.deepEqual(Array.from(await pending),['Arial','Georgia']);
+  assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,'getFonts');
+});
+test('a stale startup heartbeat can be replaced by a ready renderer within the grace period',async t=>{
+  const h=harness(t,{serviceStartupGraceMs:100}),old=h.healthyService();old.updatedAt-=20000;old.version=0;h.setService(old);
+  const pending=h.api.getFonts();await delay(15);assert.equal(h.requests.length,0);
+  h.setService(h.healthyService());assert.deepEqual(Array.from(await pending),['Arial','Georgia']);assert.equal(h.requests.length,1);
+});
+for(const incompatible of ['version','action'])test(`a fresh incompatible renderer ${incompatible} fails immediately without heartbeat retries`,async t=>{
+  const h=harness(t,{serviceStartupGraceMs:1000}),status=h.healthyService();
+  if(incompatible==='version')status.version=2;else status.actions=['readTimeline'];h.setService(status);
+  await assert.rejects(h.api.getFonts(),/unavailable or out of date/);
+  assert.equal(h.serviceReads,1);assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);
+  assert.equal((await h.api.getActiveSequenceInfo()).id,'one');
+});
+test('an unavailable renderer after startup grace leaves the lane recoverable without a dangling request',async t=>{
+  const h=harness(t,{service:null,serviceStartupGraceMs:30,readTimeoutMs:200});
+  await assert.rejects(h.api.getFonts(),/Save your work, restart Premiere/);
+  assert.ok(h.serviceReads>=2);assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);
+  assert.equal((await h.api.getActiveSequenceInfo()).id,'one');
+  h.setService(h.healthyService());assert.deepEqual(Array.from(await h.api.getFonts()),['Arial','Georgia']);assert.equal(h.requests.length,1);
+});
+test('zero startup grace preserves an immediate unavailable response',async t=>{
+  const h=harness(t,{service:null,serviceStartupGraceMs:0});await assert.rejects(h.api.getFonts(),/unavailable/);
+  assert.equal(h.serviceReads,1);assert.equal(h.requests.length,0);
+});
+test('configured startup grace is capped at five seconds of elapsed heartbeat time',async t=>{
+  const h=harness(t,{service:null,serviceStartupGraceMs:60000});
+  const pending=assert.rejects(h.api.getFonts(),/unavailable/);await tick();h.advanceTime(6000);await pending;
+  assert.equal(h.requests.length,0);assert.equal((await h.api.getActiveSequenceInfo()).id,'one');
+});
+test('a queued startup check reserves its remaining serial deadline instead of poisoning the lane',async t=>{
+  let finish;const gate=new Promise(resolve=>{finish=resolve;});
+  const h=harness(t,{service:null,serviceStartupGraceMs:150,readTimeoutMs:200,transcribe:()=>gate});await h.api.getActiveSequenceInfo();
+  const transcription=h.api.transcribeSequence('one');await tick();const startup=assert.rejects(h.api.getFonts(),/unavailable/);
+  await delay(130);finish('done');await transcription;await startup;
+  assert.equal(h.requests.length,0);assert.equal((await h.api.getActiveSequenceInfo()).id,'one');
+});
+test('disposing during startup stops heartbeat polling without writing a service request',async t=>{
+  const h=harness(t,{service:null,serviceStartupGraceMs:100});
+  const pending=assert.rejects(h.api.getFonts(),/plugin closed/);await tick();const reads=h.serviceReads;h.api.dispose();
+  await pending;await delay(15);assert.equal(h.serviceReads,reads);assert.equal(h.requests.length,0);
+});
+
+test('native key edits use the internal CEP lane without deadlock or exposing a public arbitrary patch method',async t=>{
+  let editStarted,continueEdit;const entered=new Promise(resolve=>{editStarted=resolve;}),gate=new Promise(resolve=>{continueEdit=resolve;});
+  const descriptor={ok:true,path:'/projects/caption.mov',nativeMotion:{test:'captured'}};
+  const caption={id:'cue',clipNodeId:'clip',projectItemId:'item',mediaPath:descriptor.path,renderBounds:{width:576,height:512},words:[{text:'private words'}]};
+  const patch={version:1,descriptor,updates:[{property:'width',ticks:'0',expectedValue:100,value:125}]};
+  const request={signature:'sig',frame:23,operation:'set-key',track:'width',keyTicks:'0',value:[720]};
+  const h=harness(t,{serviceResult:input=>input.action==='readCaptionAreaDescriptor'?descriptor:{ok:true,descriptor,updates:patch.updates},textArea:{
+    editArea:async(ppro,project,sequence,captured,input,revalidate,options)=>{
+      assert.equal(sequence.name,'one');assert.deepEqual(captured,descriptor);assert.deepEqual(input,request);
+      editStarted();await gate;
+      caption.projectItemId='UI-mutated';caption.mediaPath='/unrelated.mov';caption.renderBounds.width=1;
+      const fresh=await revalidate();assert.deepEqual(fresh,descriptor);
+      return options.patchKeyValues(patch);
+    },
+  }});
+  await h.api.getActiveSequenceInfo();h.select('two');await h.api.getActiveSequenceInfo();
+  const editing=h.api.editCaptionArea(caption,'one',request);await entered;
+  const before=h.projectReads,queued=h.api.getActiveSequenceInfo();await tick();assert.equal(h.projectReads,before,'the outer edit retains the serial native lane');
+  continueEdit();assert.equal((await editing).ok,true);assert.equal((await queued).id,'two');
+  assert.deepEqual(h.requests.map(r=>r.action),['readCaptionAreaDescriptor','readCaptionAreaDescriptor','patchCaptionKeyValues']);
+  assert.ok(h.requests.every(r=>r.sequenceId==='one'));
+  for(const input of h.requests){assert.equal(input.args[0].projectItemId,'item');assert.equal(input.args[0].mediaPath,descriptor.path);assert.equal(input.args[0].renderBounds.width,576);assert.equal(Object.hasOwn(input.args[0],'words'),false);}
+  assert.deepEqual(h.requests.at(-1).args[1],patch);
+  assert.equal(Object.hasOwn(h.requests.at(-1),'expiresAt'),false,'a mutation must not acquire the read-expiry contract');
+  assert.equal(h.api.patchCaptionKeyValues,undefined,'only the trusted native editor gets the bounded internal callback');
 });

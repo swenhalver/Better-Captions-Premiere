@@ -10,6 +10,7 @@ import {
   DEFAULT_ANIMATION,
 } from "../types";
 import { parseTranscript } from "../transcript/parser";
+import { restoreSessionStyle } from './style';
 
 const STORAGE_KEY = "better-captions-sessions";
 
@@ -67,7 +68,7 @@ class SessionManager {
   activeSequenceId = $state<string | null>(null);
   saveHandler: ((session:SessionState)=>void) | null = null;
   persist() { persistSessions(this.sessions);const current=this.current;if(current)this.saveHandler?.(current); }
-  restore(session:SessionState) { this.sessions.set(session.sequenceId,reactiveSession({...session,style:{...DEFAULT_STYLE,...session.style,activeWord:{...DEFAULT_STYLE.activeWord,...session.style?.activeWord},spokenWord:{...DEFAULT_STYLE.spokenWord,...session.style?.spokenWord}},animation:{...DEFAULT_ANIMATION,...session.animation},isLoading:false}));this.activeSequenceId=session.sequenceId; }
+  restore(session:SessionState) { this.sessions.set(session.sequenceId,reactiveSession({...session,style:restoreSessionStyle(session.style),animation:{...DEFAULT_ANIMATION,...session.animation},isLoading:false}));this.activeSequenceId=session.sequenceId; }
   updateCaptions(captions:CaptionItem[]) { const s=this.current;if(!s)return;s.captions=captions;s.hasTranscript=captions.length>0;this.sessions.set(s.sequenceId,s);this.persist(); }
 
   current = $derived.by(() => {
@@ -85,7 +86,7 @@ class SessionManager {
       const persisted = loadPersistedSessions();
       const saved = persisted.get(info.id);
       if (saved) {
-        session.style = { ...DEFAULT_STYLE, ...saved.style, activeWord: { ...DEFAULT_STYLE.activeWord, ...saved.style?.activeWord }, spokenWord: { ...DEFAULT_STYLE.spokenWord, ...saved.style?.spokenWord } };
+        session.style = restoreSessionStyle(saved.style);
         session.animation = { ...DEFAULT_ANIMATION, ...saved.animation };
       }
       this.sessions.set(info.id, session);
@@ -109,7 +110,7 @@ class SessionManager {
     const session = this.sessions.get(this.activeSequenceId);
     if (!session) return;
     session.transcriptJson = json;
-    session.captions = parseTranscript(json, session.style.maxWords);
+    session.captions = parseTranscript(json, session.style.maxChars);
     for (const caption of session.captions) {
       const lastWord = caption.words[caption.words.length - 1];
       if (session.duration > 0 && lastWord?.endTime <= session.duration && caption.endTime > session.duration) caption.endTime = session.duration;

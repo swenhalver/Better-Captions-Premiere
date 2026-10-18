@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
-const root=path.join(os.homedir(),'Library','Application Support','Better Captions','agent');
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const root=path.join(require('../cep/platform.cjs').dataRoot(),'agent');
 const args=process.argv.slice(2),action=args.shift()||'status';
 function option(name){const i=args.indexOf(name);if(i<0)return undefined;const v=args[i+1];args.splice(i,2);return v;}
 const instanceId=option('--instance'),sequenceId=option('--sequence'),file=option('--file'),timeout=Number(option('--timeout')||90000);
@@ -12,7 +12,7 @@ const instances=()=>fs.existsSync(path.join(root,'instances'))?fs.readdirSync(pa
   const matches=live.filter(d=>(!instanceId||d.instanceId===instanceId)&&(!sequenceId||d.sequenceId===sequenceId));
   if(matches.length!==1)throw new Error(matches.length?'Several panels match; use --instance or --sequence.':'No matching live Better Captions panel. Open Window > UXP Plugins > Better Captions.');
   const instance=matches[0],payload=file?JSON.parse(fs.readFileSync(file,'utf8')):args[0]?JSON.parse(args[0]):{};
-  const allowed=['get_state','patch_style','patch_animation','set_captions','set_position','refresh','apply'];if(!allowed.includes(action))throw new Error('Unknown action. Use '+allowed.join(', '));
+  const allowed=['get_state','patch_style','patch_animation','set_captions','set_position','read_area','edit_area','refresh','apply'];if(!allowed.includes(action))throw new Error('Unknown action. Use '+allowed.join(', '));
   const id=crypto.randomUUID(),request={version:1,id,instanceId:instance.instanceId,sequenceId:instance.sequenceId,createdAt:Date.now(),action,payload};
   const target=path.join(root,'requests',id+'.json'),temp=target+'.tmp';fs.writeFileSync(temp,JSON.stringify(request),{mode:0o600});fs.renameSync(temp,target);
   const response=path.join(root,'responses',id+'.json'),deadline=Date.now()+timeout;

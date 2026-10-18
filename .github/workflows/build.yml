@@ -1,0 +1,40 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    name: ${{ matrix.os }} / Node 24
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: webview-ui/package-lock.json
+      - name: Install macOS render dependencies
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg fontconfig
+      - name: Install Windows render dependencies
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg --no-progress -y
+      - run: npm --prefix webview-ui ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - run: npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Better-Captions-${{ runner.os }}
+          path: |
+            dist/*.ccx
+            dist/*Windows-macOS.zip
+          if-no-files-found: error

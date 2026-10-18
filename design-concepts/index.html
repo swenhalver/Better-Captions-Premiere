@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Better Captions combined interface: transcript editing with a word timeline, plus independent past, current and next word styling.">
+  <title>Better Captions — Transcript + Styling</title>
+  <link rel="stylesheet" href="./editor.css">
+  <script type="module" src="./editor.js"></script>
+</head>
+<body>
+  <a class="skip" href="#caption-plugin">Skip to the plugin</a>
+  <header class="site-header"><a class="brand" href="../">Better Captions</a><nav aria-label="Review navigation"><a href="./explorations/">Original concepts</a><a href="../">Current interface</a></nav></header>
+  <main class="review">
+    <section class="intro"><h1>One workspace. Two focused tabs.</h1><p>The transcript and word timeline work together. Styling gives past, current, and next words their own appearance.</p></section>
+    <div class="workbench">
+      <section aria-label="Combined plugin mockup">
+        <div class="review-controls"><label>Panel width <select id="panel-width"><option value="360">360 px</option><option value="280">280 px</option><option value="480">480 px</option></select></label><button id="reset">Reset demo</button></div>
+        <div id="caption-plugin" class="plugin" aria-label="Better Captions interactive mockup"></div>
+        <p class="demo-label">Interactive mockup · Sample data · No Premiere connection.</p><span id="reset-status" class="sr-only" role="status"></span>
+      </section>
+      <aside class="review-copy" aria-label="How the combined design works">
+        <section><h2>Read the sentence. Shape its timing.</h2><p>Choose a sentence in the transcript to open its words in one timeline lane. Your sentence stays in view while you work on a word.</p><ul><li><strong>Select a word</strong> in the phrase or timeline.</li><li><strong>Drag either edge</strong>, enter seconds, or nudge one frame. Connected edges move together.</li><li><strong>No overlaps.</strong> Boundaries stop before a word loses its last frame. Gaps between words remain usable space.</li></ul></section>
+        <section><h2>Style every stage of the sentence.</h2><p>Past words, the current word, and next words have independent settings. Switch between them without losing the selected sentence.</p><ul><li><strong>Typography:</strong> font, weight, size, fill, opacity, spacing, case and italic.</li><li><strong>Stroke and shadow:</strong> separate colors, widths, opacity, blur and offsets.</li><li><strong>Word bubbles:</strong> fill, opacity, padding and corners.</li><li><strong>Caption layout and animation:</strong> shared controls in the same Styling tab.</li></ul></section>
+        <section><h2>Place the text. Keyframe its area.</h2><p>In Styling, Position &amp; size controls the selected caption’s center, width, and height. Each property has a stopwatch and previous, add/remove, and next keyframe buttons.</p><ul><li><strong>Scrub the sample playhead</strong> to inspect interpolated values.</li><li><strong>Set Linear, Ease in/out, or Hold</strong> for the segment after a keyframe.</li><li><strong>Keep type size fixed.</strong> Width controls wrapping; height remains independent.</li></ul></section><p class="review-proposal">This is the proposed combined interface. Per-state stroke and shadow extend the existing controls; they still need renderer integration. Text-area keyframes work on sample values here. Connecting these panel controls to native Motion still needs integration. The type sample demonstrates appearance; on-video placement and animation playback require Premiere.</p>
+        <form id="notes-form" class="review-notes"><label for="notes">Notes for the next iteration</label><textarea id="notes" rows="4" placeholder="What feels right? What should change?"></textarea><div class="notes-actions"><span id="notes-status" role="status">Saved in this browser.</span><button type="submit">Download review</button></div><p class="demo-label">Download includes your notes and sample edits. Notes stay in this browser; they do not sync between devices.</p></form>
+      </aside>
+    </div>
+  </main>
+  <footer class="site-footer">Better Captions · Premiere-native interface direction · Windows / macOS</footer>
+</body>
+</html>

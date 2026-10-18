@@ -1,16 +1,24 @@
 import type { CaptionItem, SequenceInfo, RenderBounds } from './lib/types';
+import type { DeletedCaptionLink } from './lib/export/deleted-links';
+import { emptyPresetLibrary, validatePresetLibrary, PRESET_STORAGE_KEY, type PresetLibrary } from './lib/style-presets.ts';
 declare const window: Window & { __adobe_cep__?: any; require?: any };
 const demoWords = 'Every word has its own style. Move captions anywhere in the frame.'.split(' ').map((text, i) => ({ text, start: i * .42, duration: .36, confidence: 1, eos: /[.!?]$/.test(text), type: 'word' as const, tags: [] }));
 export interface CapturedContext { id: string; name: string; projectPath: string; width: number; height: number; fps: number; duration: number; dir: string; }
 export interface NativeTranscriptProvider { fetch(context: CapturedContext): Promise<string | null>; transcribe(context: CapturedContext): Promise<string | null>; }
+const HOST_BRIDGE_METHODS = ['context','seek','selectCaptionClip','readCaptionSelection','readCaptionGeometry','readCaptionMotion','readCaptionAreaDescriptor','patchCaptionKeyValues','preflight','prepareCaptionTrack','apply','readTimeline','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation'];
 
 export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
   const cep = window.__adobe_cep__;
   const contexts = new Map<string, CapturedContext>();
-  let currentId = '', runtime: any = null;
+  let currentId = '', runtime: any = null, hostScript = '';
+  let hostReady: Promise<void> | null = null;
+  let hostReadinessFailedAt: number | null = null;
   if (cep) {
-    const root = decodeURI(cep.getSystemPath('extension')).replace(/^file:\/\//, '');
-    runtime = window.require!(root + '/runtime.cjs');
+    const extension = cep.getSystemPath('extension');
+    const root = extension.startsWith('file:') ? window.require!('node:url').fileURLToPath(extension) : extension;
+    const path = window.require!('node:path');
+    hostScript = path.join(root, 'host', 'bridge.jsx');
+    runtime = window.require!(path.join(root, 'runtime.cjs'));
   }
   function captured(sequenceId = currentId): CapturedContext {
     const value = contexts.get(sequenceId);
@@ -18,20 +26,78 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     if (!value.projectPath || !value.dir) throw new Error('Save the Premiere project first so captions have a permanent home.');
     return value;
   }
-  function host(method: string, args: unknown[] = []): Promise<any> {
-    return new Promise((resolve, reject) => {
-      if (!cep) return reject(new Error('Open Better Captions in Premiere to use the timeline.'));
-      const serialized = args.map(x => JSON.stringify(x).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')).join(',');
-      cep.evalScript('BetterCaptionsHost.' + method + '(' + serialized + ')', (raw: string) => {
+  function responseError(method: string, raw: unknown, phase = 'host') {
+    const preview = typeof raw === 'string' ? raw.slice(0, 240).replace(/[\u0000-\u001f\u007f]/g, ' ') : '';
+    return Object.assign(new Error('Premiere did not return a valid caption response [' + method + '; ' + typeof raw + ']: ' + JSON.stringify(preview)), {
+      details: { phase, method, responseType: typeof raw, responseLength: typeof raw === 'string' ? raw.length : null, responsePreview: preview },
+    });
+  }
+  function ensureHostReady(): Promise<void> {
+    if (!cep) return Promise.reject(new Error('Open Better Captions in Premiere to use the timeline.'));
+    if (hostReady && hostReadinessFailedAt !== null && Date.now() - hostReadinessFailedAt >= 1000) {
+      hostReady = null; hostReadinessFailedAt = null;
+    }
+    if (!hostReady) hostReady = new Promise<void>((resolve, reject) => {
+      // This is a fixed extension-owned file, never a caller-supplied script.
+      // Keep the bootstrap ES3 and independent of the host's optional JSON API.
+      const file = JSON.stringify(hostScript).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+      const script = String.raw`(function(){/*better-captions-host-ready-v1*/
+var required=${JSON.stringify(HOST_BRIDGE_METHODS)},loaded=false;
+function ready(namespace){if(typeof namespace!=='object'||namespace===null)return false;for(var i=0;i<required.length;i++)if(typeof namespace[required[i]]!=='function')return false;return true;}
+function quoted(value){var text=String(value).slice(0,400),out='"';for(var i=0;i<text.length;i++){var c=text.charAt(i),n=text.charCodeAt(i);if(c==='"'||c==='\\')out+='\\'+c;else if(n<32||n===127)out+=' ';else out+=c;}return out+'"';}
+try{var scope=$.global;if(!scope)throw new Error('Premiere did not expose the global script scope.');if(!ready(scope.BetterCaptionsHost)){var file=new File(${file});if(!file.exists)throw new Error('The installed Better Captions host script is missing.');$.evalFile(file);loaded=true;var namespace=typeof BetterCaptionsHost==='undefined'?null:BetterCaptionsHost;if(!ready(namespace))throw new Error('The installed Better Captions host did not expose every required method.');scope.BetterCaptionsHost=namespace;}if(!ready(scope.BetterCaptionsHost))throw new Error('The installed Better Captions host was not published globally.');return '{"version":1,"ok":true,"loaded":'+(loaded?'true':'false')+'}';}
+catch(e){var line=Number(e&&e.line);return '{"version":1,"ok":false,"error":'+quoted(e)+',"line":'+(isFinite(line)&&line>0&&line<=10000000?String(Math.floor(line)):'null')+'}';}
+})()`;
+      // ExtendScript evalFile can place var declarations in the caller's scope.
+      // Verify the published object from a separate evaluation, after the loader
+      // IIFE has returned, before any actual host method is allowed to run.
+      const verifyScript = `(function(){/*better-captions-host-global-v1*/try{var required=${JSON.stringify(HOST_BRIDGE_METHODS)},namespace=$.global.BetterCaptionsHost;if(typeof namespace!=='object'||namespace===null||typeof BetterCaptionsHost==='undefined'||BetterCaptionsHost!==namespace)return 'BC_HOST_GLOBAL_NOT_READY_V1';for(var i=0;i<required.length;i++)if(typeof namespace[required[i]]!=='function')return 'BC_HOST_GLOBAL_NOT_READY_V1';return 'BC_HOST_GLOBAL_READY_V1';}catch(e){return 'BC_HOST_GLOBAL_NOT_READY_V1';}})()`;
+      const verifyGlobal = () => { try { cep.evalScript(verifyScript, (raw: unknown) => {
+        if (raw !== 'BC_HOST_GLOBAL_READY_V1') return reject(responseError('host global readiness', raw, 'global verification'));
+        resolve();
+      }); } catch (error) { reject(responseError('host global readiness', String(error), 'global verification')); } };
+      const bootstrap = () => { try { cep.evalScript(script, (raw: unknown) => {
         let data: any;
-        try { data = JSON.parse(raw); } catch { return reject(new Error('Premiere did not return a valid caption response.')); }
+        try {
+          if (typeof raw !== 'string' || raw.length > 4096) throw new Error();
+          data = JSON.parse(raw);
+        } catch { return reject(responseError('host readiness', raw, 'bootstrap')); }
+        if (!data || typeof data !== 'object' || Array.isArray(data) || data.version !== 1 || typeof data.ok !== 'boolean') return reject(responseError('host readiness', raw, 'bootstrap'));
+        if (data.ok !== true) {
+          if (typeof data.error !== 'string' || data.error.length > 400 || !(data.line === null || Number.isInteger(data.line) && data.line > 0 && data.line <= 10000000)) return reject(responseError('host readiness', raw, 'bootstrap'));
+          const message = data.error.replace(/[\u0000-\u001f\u007f]/g, ' ');
+          return reject(Object.assign(new Error('Premiere could not initialize the Better Captions host: ' + message + (data.line === null ? '' : ' (line ' + data.line + ')')), { details: { phase: 'bootstrap', nativeError: message, line: data.line } }));
+        }
+        if (typeof data.loaded !== 'boolean') return reject(responseError('host readiness', raw, 'bootstrap'));
+        verifyGlobal();
+      }); } catch (error) { reject(responseError('host readiness', String(error), 'bootstrap')); } };
+      // A literal has no dependency on the namespace, File, $, JSON or app.
+      // Distinguish a broken CEP evaluator from failure to load our own JSX.
+      try {
+        cep.evalScript('"BC_NATIVE_EVAL_V1"', (raw: unknown) => {
+          if (raw !== 'BC_NATIVE_EVAL_V1') return reject(responseError('native evaluator', raw, 'evaluator'));
+          bootstrap();
+        });
+      } catch (error) { reject(responseError('native evaluator', String(error), 'evaluator')); }
+    }).catch(error => { hostReadinessFailedAt = Date.now(); throw error; });
+    // A later request may retry readiness after a short cooldown. Never retry
+    // inside the failed request, or reset readiness after a host method ran.
+    return hostReady;
+  }
+  function host(method: string, args: unknown[] = []): Promise<any> {
+    return ensureHostReady().then(() => new Promise((resolve, reject) => {
+      const serialized = args.map(x => JSON.stringify(x).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')).join(',');
+      cep.evalScript('BetterCaptionsHost.' + method + '(' + serialized + ')', (raw: unknown) => {
+        let data: any;
+        try { if (typeof raw !== 'string') throw new Error(); data = JSON.parse(raw); } catch { return reject(responseError(method, raw)); }
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return reject(responseError(method, raw));
         if (data.error) {
           const explanation = data.rolledBack === false ? ' Some changes could not be restored. Use Premiere Undo and review the recovery job: ' + data.recoveryJob : '';
           const error = Object.assign(new Error(data.error + explanation), { details: data });
           reject(error);
         } else resolve(data);
       });
-    });
+    }));
   }
   async function checkSequence(sequenceId: string) {
     const original = captured(sequenceId), live = await host('context', [original.id]);
@@ -58,11 +124,50 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     const stat = runtime.fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || runtime.fs.realpathSync(file) !== file) throw new Error('Caption media must be a generated movie, not a symbolic link.');
   }
-  function timelinePayload(context: CapturedContext, captions: CaptionItem[], track: number, previous: CaptionItem[]) {
-    return { sequenceId: context.id, projectPath: context.projectPath, track, width: context.width, height: context.height, fps: context.fps,
-      cues: captions.map(c => ({ id: c.id, text: c.text, startFrame: Math.round(c.startTime * context.fps), endFrame: Math.round(c.endTime * context.fps), path: c.mediaPath, previousPath: previous.find(old => old.id === c.id)?.mediaPath ?? c.mediaPath, clipNodeId: c.clipNodeId, projectItemId: c.projectItemId,renderBounds:c.renderBounds,previousRenderBounds:previous.find(old=>old.id===c.id)?.renderBounds,motionProfile:c.motionProfile })) };
+  function timelinePayload(context: CapturedContext, captions: CaptionItem[], track: number, previous: CaptionItem[], deletedLinks: DeletedCaptionLink[] = []) {
+    if (!Array.isArray(deletedLinks)) throw new Error('Invalid deleted caption links.');
+    return { sequenceId: context.id, projectPath: context.projectPath, track, width: context.width, height: context.height, fps: context.fps, ...(deletedLinks.length ? { deletedLinks } : {}),
+      cues: captions.map(c => ({ id: c.id, text: c.text, startFrame: Math.round(c.startTime * context.fps), endFrame: Math.round(c.endTime * context.fps), path: c.mediaPath, previousPath: previous.find(old => old.id === c.id)?.mediaPath ?? c.mediaPath, clipNodeId: c.clipNodeId, projectItemId: c.projectItemId,captionBundle:c.captionBundle,renderBounds:c.renderBounds,previousRenderBounds:previous.find(old=>old.id===c.id)?.renderBounds,motionProfile:c.motionProfile })) };
+  }
+  function legacyCues(context: CapturedContext, captions: CaptionItem[]) {
+    if (!Array.isArray(captions) || captions.length < 2 || captions.length > 64) throw new Error('Invalid legacy caption conversion.');
+    return captions.map(c => {
+      generatedMedia(context, c.mediaPath);
+      return { id:c.id, clipNodeId:c.clipNodeId, projectItemId:c.projectItemId, mediaPath:c.mediaPath, startTime:c.startTime, endTime:c.endTime, renderBounds:c.renderBounds, manualSplit:c.manualSplit, captionBundle:c.captionBundle };
+    });
   }
   const api = {
+    async loadStylePresets(): Promise<PresetLibrary> {
+      if (cep) throw new Error('Style presets require the Better Captions UXP panel.');
+      const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+      return raw === null ? emptyPresetLibrary() : validatePresetLibrary(JSON.parse(raw));
+    },
+    async saveStylePresets(library: PresetLibrary): Promise<PresetLibrary> {
+      if (cep) throw new Error('Style presets require the Better Captions UXP panel.');
+      const input = validatePresetLibrary(library);
+      const write = () => {
+        const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+        const current = raw === null ? emptyPresetLibrary() : validatePresetLibrary(JSON.parse(raw));
+        if (input.revision !== current.revision) throw new Error('Presets changed in another tab. Reload presets before saving again.');
+        const next = validatePresetLibrary({ ...input, revision: input.revision + 1 });
+        localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(next));
+        return next;
+      };
+      return window.navigator?.locks ? window.navigator.locks.request(PRESET_STORAGE_KEY, write) : write();
+    },
+    async readCaptionAreaDescriptor(caption:CaptionItem,sequenceId=currentId){
+      const context=await checkSequence(sequenceId);
+      return readJob('readCaptionAreaDescriptor',{sequenceId:context.id,projectPath:context.projectPath,cues:[{id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,captionBundle:caption.captionBundle,renderBounds:caption.renderBounds}]});
+    },
+    async patchCaptionKeyValues(caption:CaptionItem,patch:unknown,sequenceId=currentId){
+      const context=await checkSequence(sequenceId);
+      const file=jobFile(context,'key-value-job',{sequenceId:context.id,projectPath:context.projectPath,cues:[{id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,captionBundle:caption.captionBundle,renderBounds:caption.renderBounds}],patch});
+      const result=await host('patchCaptionKeyValues',[file]);
+      try{runtime.fs.unlinkSync(file);}catch{} // Failed mutations retain their recovery job.
+      return result;
+    },
+    async readCaptionArea(_caption:CaptionItem,_sequenceId:string,_frame:number):Promise<import('./lib/text-area').TextAreaState>{throw new Error('Native text-area editing requires the UXP panel.');},
+    async editCaptionArea(_caption:CaptionItem,_sequenceId:string,_request:import('./lib/text-area').TextAreaEdit):Promise<import('./lib/text-area').TextAreaState>{throw new Error('Native text-area editing requires the UXP panel.');},
     isDemo: !cep,
     async getActiveSequenceInfo(sequenceId?: string): Promise<SequenceInfo | null> {
       if (!cep) return { id: 'demo', name: 'Better Captions · interactive preview', duration: 6, frameRate: 24, frameWidth: 720, frameHeight: 1280, tracks: [] };
@@ -115,27 +220,60 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
       await checkSequence(sequenceId);
       return media;
     },
-    async preflightCaptionClips(captions: CaptionItem[], track: number, sequenceId: string) {
+    async preflightCaptionClips(captions: CaptionItem[], track: number, sequenceId: string, deletedLinks: DeletedCaptionLink[] = []) {
       const context = await checkSequence(sequenceId);
-      return host('preflight', [jobFile(context, 'preflight', timelinePayload(context, captions, track, captions))]);
+      return host('preflight', [jobFile(context, 'preflight', timelinePayload(context, captions, track, captions, deletedLinks))]);
     },
-    async applyCaptionClips(captions: CaptionItem[], track: number, sequenceId: string, previous: CaptionItem[] = captions) {
+    async readCaptionConsolidation(captions: CaptionItem[], sequenceId: string) {
+      const context=await checkSequence(sequenceId);
+      return readJob('readCaptionConsolidation',{sequenceId:context.id,projectPath:context.projectPath,cues:legacyCues(context,captions)});
+    },
+    async stageCaptionConsolidation(caption: CaptionItem, track:number, previous:CaptionItem[], plan:unknown, sequenceId:string) {
+      const context=await checkSequence(sequenceId);generatedMedia(context,caption.mediaPath);
+      return host('stageCaptionConsolidation',[jobFile(context,'consolidation-stage',{...timelinePayload(context,[caption],track,[caption]),legacyCues:legacyCues(context,previous),plan})]);
+    },
+    async verifyCaptionConsolidation(caption:CaptionItem, previous:CaptionItem[], plan:unknown, sequenceId:string) {
+      const context=await checkSequence(sequenceId);generatedMedia(context,caption.mediaPath);
+      return readJob('verifyCaptionConsolidation',{sequenceId:context.id,projectPath:context.projectPath,cues:[caption],legacyCues:legacyCues(context,previous),plan});
+    },
+    async rollbackCaptionConsolidation(caption:CaptionItem, previous:CaptionItem[], plan:unknown, sequenceId:string) {
+      const context=await checkSequence(sequenceId);generatedMedia(context,caption.mediaPath);
+      return host('rollbackCaptionConsolidation',[jobFile(context,'consolidation-rollback',{sequenceId:context.id,projectPath:context.projectPath,cues:[caption],legacyCues:legacyCues(context,previous),plan})]);
+    },
+    async prepareCaptionTrack(captions: CaptionItem[], track: number, sequenceId: string, previous: CaptionItem[] = captions, deletedLinks: DeletedCaptionLink[] = []) {
       const context = await checkSequence(sequenceId);
       captions.forEach(caption => generatedMedia(context, caption.mediaPath));
       previous.filter(caption => caption.clipNodeId).forEach(caption => generatedMedia(context, caption.mediaPath));
-      return host('apply', [jobFile(context, 'timeline-job', timelinePayload(context, captions, track, previous))]);
+      const firstNew = track === -1 ? captions.find(caption => !caption.clipNodeId) : undefined;
+      if (firstNew) {
+        const probe = JSON.parse(await runtime.run(runtime.platform.resolveTool('ffprobe'), ['-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'json', firstNew.mediaPath], { timeout: 15000 }));
+        if (!Array.isArray(probe.streams) || probe.streams.length !== 1 || probe.streams[0]?.codec_type !== 'video') throw new Error('Creating a caption track requires a generated video-only caption movie. No timeline changes were made.');
+        await checkSequence(sequenceId);
+      }
+      const result = await host('prepareCaptionTrack', [jobFile(context, 'caption-track-job', timelinePayload(context, captions, track, previous, deletedLinks))]);
+      if (result.seed) {
+        if (!firstNew || result.seed.id !== firstNew.id || result.seed.path !== firstNew.mediaPath) throw new Error('Premiere returned a different temporary caption source. No track was created.');
+        result.seed.videoOnly = true;
+      }
+      return result;
+    },
+    async applyCaptionClips(captions: CaptionItem[], track: number, sequenceId: string, previous: CaptionItem[] = captions, deletedLinks: DeletedCaptionLink[] = []) {
+      const context = await checkSequence(sequenceId);
+      captions.forEach(caption => generatedMedia(context, caption.mediaPath));
+      previous.filter(caption => caption.clipNodeId).forEach(caption => generatedMedia(context, caption.mediaPath));
+      return host('apply', [jobFile(context, 'timeline-job', timelinePayload(context, captions, track, previous, deletedLinks))]);
     },
     async readTimeline(captions: CaptionItem[], sequenceId = currentId) {
       const context = await checkSequence(sequenceId);
-      return readJob('readTimeline', { sequenceId: context.id, projectPath: context.projectPath, cues: captions.map(c => ({ id: c.id, clipNodeId: c.clipNodeId })) });
+      return readJob('readTimeline', { sequenceId: context.id, projectPath: context.projectPath, cues: captions.map(c => ({ id: c.id, clipNodeId: c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,captionBundle:c.captionBundle })) });
     },
     async readCaptionMotion(captions:CaptionItem[],sequenceId=currentId,options?:{includeDiagnostics?:boolean}){
       const context=await checkSequence(sequenceId);
-      return readJob('readCaptionMotion',{sequenceId:context.id,projectPath:context.projectPath,...(options?.includeDiagnostics===true?{includeDiagnostics:true}:{}),cues:captions.map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,startTime:c.startTime,endTime:c.endTime,renderBounds:c.renderBounds}))});
+      return readJob('readCaptionMotion',{sequenceId:context.id,projectPath:context.projectPath,...(options?.includeDiagnostics===true?{includeDiagnostics:true}:{}),cues:captions.map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,captionBundle:c.captionBundle,startTime:c.startTime,endTime:c.endTime,renderBounds:c.renderBounds}))});
     },
     async readCaptionGeometry(captions:CaptionItem[],sequenceId=currentId){
       const context=await checkSequence(sequenceId);
-      return readJob('readCaptionGeometry',{sequenceId:context.id,projectPath:context.projectPath,cues:captions.map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,startTime:c.startTime,endTime:c.endTime}))});
+      return readJob('readCaptionGeometry',{sequenceId:context.id,projectPath:context.projectPath,cues:captions.map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,captionBundle:c.captionBundle,startTime:c.startTime,endTime:c.endTime}))});
     },
     async selectCaptionClip(caption:CaptionItem,sequenceId=currentId){
       const context=await checkSequence(sequenceId);
@@ -143,7 +281,7 @@ export function createHostAPI(nativeTranscript?: NativeTranscriptProvider) {
     },
     async readCaptionSelection(captions:CaptionItem[],sequenceId=currentId){
       const context=await checkSequence(sequenceId);
-      return readJob('readCaptionSelection',{sequenceId:context.id,projectPath:context.projectPath,cues:captions.filter(c=>c.clipNodeId).map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath}))});
+      return readJob('readCaptionSelection',{sequenceId:context.id,projectPath:context.projectPath,cues:captions.filter(c=>c.clipNodeId).map(c=>({id:c.id,clipNodeId:c.clipNodeId,projectItemId:c.projectItemId,mediaPath:c.mediaPath,captionBundle:c.captionBundle}))});
     },
     async getColorScheme() { return { theme: 'darkest', colors: {} }; },
   };

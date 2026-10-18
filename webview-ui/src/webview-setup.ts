@@ -4,12 +4,12 @@ import type { AgentHandler } from './lib/agent-bridge';
 
 const CHANNEL = 'better-captions';
 const HOST_METHODS = [
-  'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession',
+  'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession', 'loadStylePresets', 'saveStylePresets',
   'transcribeSequence', 'getFonts', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'getColorScheme',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
 ] as const;
-const READ_METHODS = new Set(['getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection']);
+const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation']);
 interface UXPMessageHost {
   postMessage: (message: unknown) => void;
 }
@@ -28,7 +28,7 @@ function nativeTransport(host: UXPMessageHost, webviewAPI: unknown) {
     if(unresolvedRead)return Promise.reject(new Error('A previous Premiere read has not returned. Native requests are paused; its timeout did not cancel the operation.'));
     if(pending.size>=16)return Promise.reject(new Error('The caption panel is busy. Wait for its current operations to finish.'));
     const id = prefix + ++nextId;
-    const timeout = READ_METHODS.has(method)?15000:method === 'transcribeSequence' ? 60 * 60 * 1000 : method === 'finishCaption' || method === 'applyCaptionClips' ? 30 * 60 * 1000 : 60 * 1000;
+    const timeout = READ_METHODS.has(method)?15000:method === 'transcribeSequence' ? 60 * 60 * 1000 : ['finishCaption','applyCaptionClips','applyConsolidatedCaption'].includes(method) ? 30 * 60 * 1000 : 60 * 1000;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { pending.delete(id);if(READ_METHODS.has(method))unresolvedRead=id;reject(new Error('Premiere did not finish the caption operation. Native reads are paused until its response returns; the timeout did not cancel Premiere’s work.')); }, timeout);
       pending.set(id, { resolve, reject, timer });
@@ -68,6 +68,8 @@ function nativeTransport(host: UXPMessageHost, webviewAPI: unknown) {
         case 'agent.setCaptions': if (!handler) throw new Error('The caption editor is not ready.'); result = await handler.setCaptions(args[0] as Parameters<AgentHandler['setCaptions']>[0]); break;
         case 'agent.refresh': if (!handler) throw new Error('The caption editor is not ready.'); result = await handler.refresh(); break;
         case 'agent.apply': if (!handler) throw new Error('The caption editor is not ready.'); result = await handler.apply(); break;
+        case 'agent.readArea': if (!handler?.readArea) throw new Error('Caption area inspection is unavailable.'); result = await handler.readArea(args[0]); break;
+        case 'agent.editArea': if (!handler?.editArea) throw new Error('Caption area editing is unavailable.'); result = await handler.editArea(args[0]); break;
         default: throw new Error('Unsupported caption editor method.');
       }
       if (data.id) send({ id: data.id, result: result === undefined ? null : result });

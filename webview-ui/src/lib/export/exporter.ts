@@ -1,3 +1,4 @@
+import {resolveAppearance} from '../appearance.ts';
 import type { CaptionItem, StyleConfig, AnimationConfig, MotionProfile } from '../types';
 import { CaptionRenderer } from '../canvas/engine';
 import { validateCaptions } from '../transcript/edit';
@@ -74,8 +75,8 @@ export async function exportFrames(
   if (!ctx) throw new Error('Could not create a transparent caption canvas.');
   // Wait for the three requested font variants before measuring or rendering words.
   if (document.fonts) {
-    const variants = [{ fontFamily: style.fontFamily, fontWeight: style.fontWeight, sizeScale: 1 }, style.activeWord, style.spokenWord];
-    await Promise.all(variants.map(v => document.fonts.load(`${v.fontWeight} ${style.fontSize * v.sizeScale}px "${v.fontFamily || style.fontFamily}"`)));
+    const variants = (['upcomingWord','activeWord','spokenWord'] as const).map(key=>resolveAppearance(style,key));
+    await Promise.all(variants.map(v => document.fonts.load(`${v.italic ? "italic " : ""}${v.fontWeight} ${v.fontSize}px "${v.fontFamily}"`)));
     await document.fonts.ready;
   }
   const renderer = new CaptionRenderer(ctx, width, height), total = plan.reduce((sum, cue) => sum + cue.frames, 0);
@@ -90,7 +91,7 @@ export async function exportFrames(
       // A measure-only pass considers every distinct native size sample. It
       // reserves all word states/entrances without storing any image frames.
       for(let frame=0;frame<cue.frames;frame++){
-        const time=(cue.startFrame+frame+.5)/frameRate,{scaleX,scaleY}=motionScaleAt(cue.caption.motionProfile,time),key=scaleX+'|'+scaleY;
+        const time=(cue.startFrame+frame+.5)/frameRate,{scaleX,scaleY}=motionScaleAt(cue.caption.motionProfile,time),segment=cue.caption.renderSegments?.find(group=>time>=group.startTime&&time<group.endTime),key=scaleX+'|'+scaleY+'|'+(segment?.id??cue.caption.id);
         if(!measurements.has(key)){
           renderer.resize(width*scaleX,height*scaleY);
           const layout=renderer.renderFrame(cue.caption,time,style,animation,{width:boxWidth*scaleX,height:height*scaleY,measureOnly:true});

@@ -1,0 +1,409 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-17T06:30:34.843Z",
+  "title": "Design System: Better Captions",
+  "extensions": {
+    "colorMeta": {
+      "panel-bg": {
+        "role": "neutral",
+        "displayName": "Host Charcoal",
+        "tonalRamp": [
+          "oklch(15% 0.0000 260.0)",
+          "oklch(25% 0.0000 260.0)",
+          "oklch(35% 0.0000 260.0)",
+          "oklch(45% 0.0000 260.0)",
+          "oklch(55% 0.0000 260.0)",
+          "oklch(65% 0.0000 260.0)",
+          "oklch(80% 0.0000 260.0)",
+          "oklch(95% 0.0000 260.0)"
+        ]
+      },
+      "panel-text": {
+        "role": "neutral",
+        "displayName": "Host Ink",
+        "tonalRamp": [
+          "oklch(15% 0.0000 260.0)",
+          "oklch(25% 0.0000 260.0)",
+          "oklch(35% 0.0000 260.0)",
+          "oklch(45% 0.0000 260.0)",
+          "oklch(55% 0.0000 260.0)",
+          "oklch(65% 0.0000 260.0)",
+          "oklch(80% 0.0000 260.0)",
+          "oklch(95% 0.0000 260.0)"
+        ]
+      },
+      "panel-border": {
+        "role": "neutral",
+        "displayName": "Host Divider",
+        "tonalRamp": [
+          "oklch(15% 0.0000 260.0)",
+          "oklch(25% 0.0000 260.0)",
+          "oklch(35% 0.0000 260.0)",
+          "oklch(45% 0.0000 260.0)",
+          "oklch(55% 0.0000 260.0)",
+          "oklch(65% 0.0000 260.0)",
+          "oklch(80% 0.0000 260.0)",
+          "oklch(95% 0.0000 260.0)"
+        ]
+      },
+      "panel-secondary": {
+        "role": "neutral",
+        "displayName": "Host Muted",
+        "tonalRamp": [
+          "oklch(15% 0.0000 260.0)",
+          "oklch(25% 0.0000 260.0)",
+          "oklch(35% 0.0000 260.0)",
+          "oklch(45% 0.0000 260.0)",
+          "oklch(55% 0.0000 260.0)",
+          "oklch(65% 0.0000 260.0)",
+          "oklch(80% 0.0000 260.0)",
+          "oklch(95% 0.0000 260.0)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Panel Charcoal",
+        "tonalRamp": [
+          "oklch(15% 0.0000 260.0)",
+          "oklch(25% 0.0000 260.0)",
+          "oklch(35% 0.0000 260.0)",
+          "oklch(45% 0.0000 260.0)",
+          "oklch(55% 0.0000 260.0)",
+          "oklch(65% 0.0000 260.0)",
+          "oklch(80% 0.0000 260.0)",
+          "oklch(95% 0.0000 260.0)"
+        ]
+      },
+      "surface-raised": {
+        "role": "neutral",
+        "displayName": "Raised Charcoal",
+        "tonalRamp": [
+          "oklch(15% 0.0000 260.0)",
+          "oklch(25% 0.0000 260.0)",
+          "oklch(35% 0.0000 260.0)",
+          "oklch(45% 0.0000 260.0)",
+          "oklch(55% 0.0000 260.0)",
+          "oklch(65% 0.0000 260.0)",
+          "oklch(80% 0.0000 260.0)",
+          "oklch(95% 0.0000 260.0)"
+        ]
+      },
+      "surface-overlay": {
+        "role": "neutral",
+        "displayName": "Hover Charcoal",
+        "tonalRamp": [
+          "oklch(15% 0.0000 260.0)",
+          "oklch(25% 0.0000 260.0)",
+          "oklch(35% 0.0000 260.0)",
+          "oklch(45% 0.0000 260.0)",
+          "oklch(55% 0.0000 260.0)",
+          "oklch(65% 0.0000 260.0)",
+          "oklch(80% 0.0000 260.0)",
+          "oklch(95% 0.0000 260.0)"
+        ]
+      },
+      "input": {
+        "role": "neutral",
+        "displayName": "Field Charcoal",
+        "tonalRamp": [
+          "oklch(15% 0.0020 260.0)",
+          "oklch(25% 0.0020 260.0)",
+          "oklch(35% 0.0020 260.0)",
+          "oklch(45% 0.0020 260.0)",
+          "oklch(55% 0.0020 260.0)",
+          "oklch(65% 0.0020 260.0)",
+          "oklch(80% 0.0020 260.0)",
+          "oklch(95% 0.0020 260.0)"
+        ]
+      },
+      "selection": {
+        "role": "primary",
+        "displayName": "Selection Slate",
+        "tonalRamp": [
+          "oklch(15% 0.0430 258.0)",
+          "oklch(25% 0.0430 258.0)",
+          "oklch(35% 0.0430 258.0)",
+          "oklch(45% 0.0430 258.0)",
+          "oklch(55% 0.0430 258.0)",
+          "oklch(65% 0.0430 258.0)",
+          "oklch(80% 0.0430 258.0)",
+          "oklch(95% 0.0430 258.0)"
+        ]
+      },
+      "primary": {
+        "role": "primary",
+        "displayName": "Action Blue",
+        "tonalRamp": [
+          "oklch(15% 0.1500 258.0)",
+          "oklch(25% 0.1500 258.0)",
+          "oklch(35% 0.1500 258.0)",
+          "oklch(45% 0.1500 258.0)",
+          "oklch(55% 0.1500 258.0)",
+          "oklch(65% 0.1500 258.0)",
+          "oklch(80% 0.1500 258.0)",
+          "oklch(95% 0.1500 258.0)"
+        ]
+      },
+      "primary-hover": {
+        "role": "primary",
+        "displayName": "Action Blue Hover",
+        "tonalRamp": [
+          "oklch(15% 0.1500 258.0)",
+          "oklch(25% 0.1500 258.0)",
+          "oklch(35% 0.1500 258.0)",
+          "oklch(45% 0.1500 258.0)",
+          "oklch(55% 0.1500 258.0)",
+          "oklch(65% 0.1500 258.0)",
+          "oklch(80% 0.1500 258.0)",
+          "oklch(95% 0.1500 258.0)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Focus Blue",
+        "tonalRamp": [
+          "oklch(15% 0.1050 258.0)",
+          "oklch(25% 0.1050 258.0)",
+          "oklch(35% 0.1050 258.0)",
+          "oklch(45% 0.1050 258.0)",
+          "oklch(55% 0.1050 258.0)",
+          "oklch(65% 0.1050 258.0)",
+          "oklch(80% 0.1050 258.0)",
+          "oklch(95% 0.1050 258.0)"
+        ]
+      },
+      "success": {
+        "role": "success",
+        "displayName": "Saved Sage",
+        "tonalRamp": [
+          "oklch(15% 0.0717 158.4)",
+          "oklch(25% 0.0717 158.4)",
+          "oklch(35% 0.0717 158.4)",
+          "oklch(45% 0.0717 158.4)",
+          "oklch(55% 0.0717 158.4)",
+          "oklch(65% 0.0717 158.4)",
+          "oklch(80% 0.0717 158.4)",
+          "oklch(95% 0.0717 158.4)"
+        ]
+      },
+      "warning": {
+        "role": "warning",
+        "displayName": "Timing Amber",
+        "tonalRamp": [
+          "oklch(15% 0.0993 83.8)",
+          "oklch(25% 0.0993 83.8)",
+          "oklch(35% 0.0993 83.8)",
+          "oklch(45% 0.0993 83.8)",
+          "oklch(55% 0.0993 83.8)",
+          "oklch(65% 0.0993 83.8)",
+          "oklch(80% 0.0993 83.8)",
+          "oklch(95% 0.0993 83.8)"
+        ]
+      },
+      "error": {
+        "role": "error",
+        "displayName": "Error Peach",
+        "tonalRamp": [
+          "oklch(15% 0.0896 28.4)",
+          "oklch(25% 0.0896 28.4)",
+          "oklch(35% 0.0896 28.4)",
+          "oklch(45% 0.0896 28.4)",
+          "oklch(55% 0.0896 28.4)",
+          "oklch(65% 0.0896 28.4)",
+          "oklch(80% 0.0896 28.4)",
+          "oklch(95% 0.0896 28.4)"
+        ]
+      },
+      "error-bg": {
+        "role": "neutral",
+        "displayName": "Error Charcoal",
+        "tonalRamp": [
+          "oklch(15% 0.0259 26.3)",
+          "oklch(25% 0.0259 26.3)",
+          "oklch(35% 0.0259 26.3)",
+          "oklch(45% 0.0259 26.3)",
+          "oklch(55% 0.0259 26.3)",
+          "oklch(65% 0.0259 26.3)",
+          "oklch(80% 0.0259 26.3)",
+          "oklch(95% 0.0259 26.3)"
+        ]
+      },
+      "white": {
+        "role": "neutral",
+        "displayName": "Action White",
+        "tonalRamp": [
+          "oklch(15% 0.0000 260.0)",
+          "oklch(25% 0.0000 260.0)",
+          "oklch(35% 0.0000 260.0)",
+          "oklch(45% 0.0000 260.0)",
+          "oklch(55% 0.0000 260.0)",
+          "oklch(65% 0.0000 260.0)",
+          "oklch(80% 0.0000 260.0)",
+          "oklch(95% 0.0000 260.0)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Section Title",
+        "purpose": "Larger section and empty-state headings."
+      },
+      "body": {
+        "displayName": "Editor Body",
+        "purpose": "Caption text, sequence identity and workspace tabs; semibold where the component requires it."
+      },
+      "label": {
+        "displayName": "Control Label",
+        "purpose": "Compact field labels, controls and disclosure headings."
+      },
+      "caption": {
+        "displayName": "Metadata & Help",
+        "purpose": "Timecodes, secondary information and help."
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "transcript-expanded-container",
+        "value": "48rem"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Neutral Button",
+      "kind": "button",
+      "refersTo": "button-default",
+      "description": "Compact secondary action with immediate hover, press and keyboard feedback.",
+      "html": "<button class=\"ds-button\">Save text</button>",
+      "css": ".ds-button{display:inline-flex;align-items:center;justify-content:center;gap:var(--caption-space-s, .5rem);min-block-size:2.25rem;border:1px solid var(--color-panel-border, #414141);border-radius:var(--caption-radius, .25rem);padding:.4rem .75rem;background:var(--color-surface-raised, #363636);color:var(--color-panel-text, #ededed);font-family:\"Segoe UI\", -apple-system, BlinkMacSystemFont, sans-serif;font-size:var(--caption-type-s,.923rem);font-weight:400;line-height:1.4;cursor:pointer;}.ds-button:active:enabled{background:var(--color-input, oklch(23% .002 260));}.ds-button:hover:enabled{background:var(--color-surface-overlay, #454545);border-color:var(--color-panel-secondary, #b0b0b0);}.ds-button:focus-visible{outline:2px solid var(--color-accent, oklch(80% .105 258));outline-offset:2px;}.ds-button:disabled{opacity:.5;cursor:default;}"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The main apply action; the installed output area raises its minimum height to 2.5rem.",
+      "html": "<button class=\"ds-primary\">Apply to Program Monitor</button>",
+      "css": ".ds-primary{display:inline-flex;align-items:center;justify-content:center;gap:var(--caption-space-s, .5rem);min-block-size:2.25rem;border:1px solid transparent;border-radius:var(--caption-radius, .25rem);padding:.4rem .75rem;background:var(--color-primary, oklch(49% .15 258));color:#fff;font-family:\"Segoe UI\", -apple-system, BlinkMacSystemFont, sans-serif;font-size:var(--caption-type-s,.923rem);font-weight:600;line-height:1.4;cursor:pointer;}.ds-primary:active:enabled{background:var(--color-input, oklch(23% .002 260));}.ds-primary:hover:enabled{background:var(--color-primary-hover, oklch(55% .15 258));border-color:transparent;}.ds-primary:focus-visible{outline:2px solid var(--color-accent, oklch(80% .105 258));outline-offset:2px;}.ds-primary:disabled{opacity:.5;cursor:default;}"
+    },
+    {
+      "name": "Icon Button",
+      "kind": "button",
+      "refersTo": "button-icon",
+      "description": "Transparent square action for refresh or dismiss controls.",
+      "html": "<button class=\"ds-icon\" aria-label=\"Refresh sequence\"><svg viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M16 7a6.5 6.5 0 1 0 .3 5M16 3v4h-4\"/></svg></button>",
+      "css": ".ds-icon{display:inline-flex;align-items:center;justify-content:center;gap:var(--caption-space-s, .5rem);min-block-size:2.25rem;inline-size:2.25rem;border:1px solid transparent;border-radius:var(--caption-radius, .25rem);padding:.4rem;background:transparent;color:var(--color-panel-text, #ededed);font-family:\"Segoe UI\", -apple-system, BlinkMacSystemFont, sans-serif;font-size:var(--caption-type-s,.923rem);font-weight:400;line-height:1.4;cursor:pointer;}.ds-icon:active:enabled{background:var(--color-input, oklch(23% .002 260));}.ds-icon:hover:enabled{background:var(--color-surface-overlay, #454545);border-color:var(--color-panel-secondary, #b0b0b0);}.ds-icon:focus-visible{outline:2px solid var(--color-accent, oklch(80% .105 258));outline-offset:2px;}.ds-icon:disabled{opacity:.5;cursor:default;}.ds-icon svg{inline-size:1.25rem;block-size:1.25rem;}"
+    },
+    {
+      "name": "Labeled Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Explicit label, recessed field and shared focus outline.",
+      "html": "<label class=\"ds-field\"><span>Font size, px</span><input type=\"number\" min=\"8\" max=\"1200\" value=\"72\"/></label>",
+      "css": ".ds-field{display:flex;flex-direction:column;gap:.375rem;min-inline-size:0;color:var(--color-panel-secondary, #b0b0b0);font-family:\"Segoe UI\", -apple-system, BlinkMacSystemFont, sans-serif;font-size:var(--caption-type-s,.923rem);line-height:1.45;}.ds-field input{inline-size:100%;min-inline-size:0;min-block-size:2.25rem;border:1px solid var(--color-panel-border, #414141);border-radius:var(--caption-radius, .25rem);color:var(--color-panel-text, #ededed);background:var(--color-input, oklch(23% .002 260));padding:.4rem .55rem;font:inherit;font-variant-numeric:tabular-nums;caret-color:var(--color-accent, oklch(80% .105 258));}.ds-field input:hover{border-color:var(--color-panel-secondary, #b0b0b0);}.ds-field input:focus-visible{outline:2px solid var(--color-accent, oklch(80% .105 258));outline-offset:2px;}"
+    },
+    {
+      "name": "Workspace Navigation",
+      "kind": "nav",
+      "refersTo": "workspace-tab",
+      "description": "The production panel has exactly two workspace tabs: Transcript and Styling; selection stays visible through a blue underline.",
+      "html": "<div class=\"ds-tabs\" role=\"tablist\" aria-label=\"Caption workspace\"><button class=\"ds-tab\" role=\"tab\" aria-selected=\"true\">Transcript</button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\" tabindex=\"-1\">Styling</button></div>",
+      "css": ".ds-tabs{display:flex;gap:var(--caption-space-l, 1.125rem);padding-inline:var(--caption-space-l, 1.125rem);border-block-end:1px solid var(--color-panel-border, #414141);background:var(--color-surface, #292929);font-family:\"Segoe UI\", -apple-system, BlinkMacSystemFont, sans-serif;font-size:1rem;line-height:1.45;}.ds-tab{padding:.8rem .15rem;border:0;border-block-end:2px solid transparent;background:transparent;color:var(--color-panel-secondary, #b0b0b0);font:inherit;font-weight:600;cursor:pointer;}.ds-tab:hover{color:var(--color-panel-text, #ededed);}.ds-tab[aria-selected=\"true\"]{color:var(--color-accent, oklch(80% .105 258));border-block-end-color:var(--color-accent, oklch(80% .105 258));}.ds-tab:focus-visible{outline:2px solid var(--color-accent, oklch(80% .105 258));outline-offset:2px;}"
+    },
+    {
+      "name": "Word Appearance Selection",
+      "kind": "nav",
+      "refersTo": "word-state-selected",
+      "description": "Three pressed-state buttons select independent past, current and next word appearances; the scope remains all captions.",
+      "html": "<div class=\"ds-states\" role=\"group\" aria-label=\"Word appearance state\"><button class=\"ds-state\" aria-pressed=\"false\">Past words</button><button class=\"ds-state\" aria-pressed=\"true\">Current word</button><button class=\"ds-state\" aria-pressed=\"false\">Next words</button></div>",
+      "css": ".ds-states{display:flex;gap:.4rem;padding:var(--caption-space-m,.875rem) var(--caption-space-l,1.125rem);font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;}.ds-state{flex:1;min-inline-size:0;min-block-size:2.25rem;padding:.4rem .3rem;border:1px solid var(--color-panel-border,#414141);border-radius:var(--caption-radius,.25rem);background:var(--color-surface-raised,#363636);color:var(--color-panel-text,#ededed);font-family:inherit;font-size:var(--caption-type-xs,.846rem);font-weight:400;line-height:1.4;cursor:pointer;}.ds-state[aria-pressed=\"true\"]{background:var(--color-selection,oklch(38% .043 258));border-color:var(--color-accent,oklch(80% .105 258));color:var(--color-accent,oklch(80% .105 258));}.ds-state:hover:enabled{background:var(--color-surface-overlay,#454545);border-color:var(--color-panel-secondary,#b0b0b0);}.ds-state:active:enabled{background:var(--color-input,oklch(23% .002 260));}.ds-state:focus-visible{outline:2px solid var(--color-accent,oklch(80% .105 258));outline-offset:2px;}.ds-state:disabled{opacity:.5;cursor:default;}"
+    },
+    {
+      "name": "Fixture Status Tag",
+      "kind": "chip",
+      "refersTo": "status-tag",
+      "description": "Noninteractive outlined tag used only for the browser demo state.",
+      "html": "<span class=\"ds-tag\">Browser demo</span>",
+      "css": ".ds-tag{display:inline-block;font-family:\"Segoe UI\", -apple-system, BlinkMacSystemFont, sans-serif;font-size:var(--caption-type-xs,.846rem);line-height:1.45;color:var(--color-panel-secondary, #b0b0b0);border:1px solid var(--color-panel-border, #414141);border-radius:var(--caption-radius, .25rem);padding:.1rem .4rem;}"
+    },
+    {
+      "name": "Selected Sentence Word Lane",
+      "kind": "custom",
+      "refersTo": "word-timing-block-selected",
+      "description": "Selected cue and one time-proportional word lane. The production editor also provides zoom, numeric bounds, frame nudges and playhead controls; connected edges cannot overlap.",
+      "html": "<button class=\"ds-cue\" aria-pressed=\"true\"><span class=\"ds-cue-number\">01</span><span class=\"ds-cue-body\"><span class=\"ds-cue-time\">00:00.00 — 00:02.52</span><span class=\"ds-cue-text\">Every word has its own style.</span></span></button><div class=\"ds-word-editor\"><div class=\"ds-word-toolbar\"><span>Words · one lane</span><label>Zoom <select aria-label=\"Word timeline zoom\"><option>100%</option><option>150%</option><option>200%</option></select></label></div><div class=\"ds-word-scroll\" role=\"region\" aria-label=\"Word timeline; scroll horizontally\"><div class=\"ds-word-lane\"><div class=\"ds-word-ruler\"><span>0.000s</span><span>1.260s</span><span>2.520s</span></div><button class=\"ds-word-block\" style=\"left:0%;width:15%\" aria-pressed=\"false\">Every</button><button class=\"ds-word-block\" style=\"left:16.67%;width:15%\" aria-pressed=\"true\">word</button><button class=\"ds-word-block\" style=\"left:33.34%;width:15%\" aria-pressed=\"false\">has</button><button class=\"ds-word-block\" style=\"left:50.01%;width:15%\" aria-pressed=\"false\">its</button><button class=\"ds-word-block\" style=\"left:66.68%;width:15%\" aria-pressed=\"false\">own</button><button class=\"ds-word-block\" style=\"left:83.35%;width:15%\" aria-pressed=\"false\">style.</button><div class=\"ds-word-edge\" style=\"left:16.67%\" role=\"slider\" tabindex=\"0\" aria-label=\"Start boundary for word\" aria-valuemin=\"1\" aria-valuemax=\"18\" aria-valuenow=\"10\" aria-valuetext=\"0.417 seconds\"></div><div class=\"ds-word-edge\" style=\"left:31.67%\" role=\"slider\" tabindex=\"0\" aria-label=\"End boundary for word\" aria-valuemin=\"11\" aria-valuemax=\"20\" aria-valuenow=\"19\" aria-valuetext=\"0.792 seconds\"></div></div></div><p class=\"ds-word-help\">Drag edges or use arrows to move one frame. Connected edges cannot overlap.</p></div>",
+      "css": ".ds-cue{display:flex;align-items:flex-start;inline-size:100%;gap:var(--caption-space-m, .875rem);text-align:start;background:var(--color-selection, oklch(38% .043 258));color:var(--color-panel-text, #ededed);padding:var(--caption-space-m, .875rem) var(--caption-space-l, 1.125rem);border:0;border-block-end:1px solid var(--color-panel-border, #414141);font-family:\"Segoe UI\", -apple-system, BlinkMacSystemFont, sans-serif;cursor:pointer;}.ds-cue:hover{background:var(--color-surface-raised, #363636);}.ds-cue:focus-visible{outline:2px solid var(--color-accent, oklch(80% .105 258));outline-offset:-2px;}.ds-cue-number{color:var(--color-panel-secondary, #b0b0b0);font-variant-numeric:tabular-nums;font-size:var(--caption-type-xs,.846rem);line-height:1.45;padding-block-start:.1rem;}.ds-cue-body{flex:1;min-inline-size:0;}.ds-cue-time{display:block;font-variant-numeric:tabular-nums;color:var(--color-panel-secondary, #b0b0b0);font-size:var(--caption-type-xs,.846rem);line-height:1.45;margin-block-end:.3rem;}.ds-cue-text{display:block;font-size:var(--caption-type-m,1rem);line-height:1.5;overflow-wrap:anywhere;}.ds-word-editor{display:flex;flex-direction:column;gap:var(--caption-space-s,.5rem);padding:var(--caption-space-l,1.125rem);min-inline-size:0;color:var(--color-panel-text,#ededed);font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:1rem;line-height:1.45;}.ds-word-toolbar{display:flex;justify-content:space-between;align-items:center;gap:.5rem;font-size:var(--caption-type-xs,.846rem);}.ds-word-toolbar select{background:var(--color-input,oklch(23% .002 260));color:var(--color-panel-text,#ededed);border:1px solid var(--color-panel-border,#414141);padding:.2rem;font:inherit;}.ds-word-scroll{overflow-x:auto;border:1px solid var(--color-panel-border,#414141);padding:0 .45rem;}.ds-word-lane{position:relative;block-size:5rem;inline-size:372px;min-inline-size:100%;}.ds-word-ruler{display:flex;justify-content:space-between;padding-block:.4rem;font-size:var(--caption-type-xs,.846rem);color:var(--color-panel-secondary,#b0b0b0);font-variant-numeric:tabular-nums;}.ds-word-block{position:absolute;top:1.8rem;height:2.3rem;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;background:var(--color-surface-raised,#363636);border:1px solid var(--color-panel-border,#414141);color:var(--color-panel-text,#ededed);padding:.3rem;font:inherit;cursor:pointer;}.ds-word-block[aria-pressed=\"true\"]{background:var(--color-selection,oklch(38% .043 258));border-color:var(--color-accent,oklch(80% .105 258));}.ds-word-block:hover{filter:brightness(1.15);}.ds-word-block:focus-visible,.ds-word-toolbar select:focus-visible{outline:2px solid var(--color-accent,oklch(80% .105 258));outline-offset:2px;}.ds-word-edge{position:absolute;top:1.55rem;height:2.8rem;width:10px;margin-left:-5px;cursor:ew-resize;touch-action:none;border-inline:3px solid transparent;background:var(--color-accent,oklch(80% .105 258));background-clip:content-box;}.ds-word-help{margin:0;font-size:var(--caption-type-xs,.846rem);line-height:1.5;color:var(--color-panel-secondary,#b0b0b0);}"
+    },
+    {
+      "name": "Settings Section",
+      "kind": "card",
+      "refersTo": "settings-section",
+      "description": "Flat native disclosure for secondary settings. Appearance effects show their enabled state in the summary.",
+      "html": "<details class=\"ds-section\"><summary class=\"ds-section-heading\">Stroke · Off</summary><div class=\"ds-section-body\"><p class=\"ds-help\">Enable stroke to edit its color, width and opacity.</p></div></details>",
+      "css": ".ds-section{border-block-end:1px solid var(--color-panel-border, #414141);color:var(--color-panel-text, #ededed);background:transparent;font-family:\"Segoe UI\", -apple-system, BlinkMacSystemFont, sans-serif;line-height:1.45;}.ds-section-heading{cursor:pointer;padding:var(--caption-space-m, .875rem) var(--caption-space-l, 1.125rem);font-size:var(--caption-type-s,.923rem);font-weight:600;}.ds-section-heading::marker{color:var(--color-panel-secondary, #b0b0b0);font-size:.8em;}.ds-section-heading:focus-visible{outline:2px solid var(--color-accent, oklch(80% .105 258));outline-offset:2px;}.ds-section-body{display:flex;flex-direction:column;gap:var(--caption-space-m, .875rem);padding:var(--caption-space-s, .5rem) var(--caption-space-l, 1.125rem) var(--caption-space-l, 1.125rem);}.ds-help{margin:0;font-size:var(--caption-type-xs,.846rem);line-height:1.5;color:var(--color-panel-secondary, #b0b0b0);}"
+    },
+    {
+      "name": "Native Geometry Track",
+      "kind": "custom",
+      "refersTo": "text-area-key-selected",
+      "description": "One width track from selected-caption Position & size. Position uses paired X/Y fields; width and height are independent tracks with stopwatches, key navigation and interpolation.",
+      "html": "<section class=\"ds-area\" aria-label=\"Position and size for selected caption\"><div class=\"ds-area-heading\"><strong>Position &amp; size</strong><span>Selected caption</span></div><div class=\"ds-area-track\"><div class=\"ds-area-track-heading\"><button class=\"ds-area-icon\" aria-label=\"Width keyframes\" aria-pressed=\"true\"><svg viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><circle cx=\"10\" cy=\"11\" r=\"6.3\"/><path d=\"M7 2h6M10 2v2M10 7v4l2 1M15 5l2-2\"/></svg></button><strong>Width</strong><span>2 keys</span><button class=\"ds-area-icon\" aria-label=\"Previous width keyframe\"><svg viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"m12 5-5 5 5 5\"/></svg></button><button class=\"ds-area-icon\" aria-label=\"Add or remove width keyframe\" aria-pressed=\"true\"><svg viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"m10 3 7 7-7 7-7-7z\"/></svg></button><button class=\"ds-area-icon\" aria-label=\"Next width keyframe\" disabled><svg viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"m8 5 5 5-5 5\"/></svg></button></div><label class=\"ds-area-field\"><span>Size, px</span><input type=\"number\" step=\"1\" value=\"536\" aria-label=\"Width size, px\"/></label><label class=\"ds-area-field\"><span>Keyframe interpolation</span><select aria-label=\"Width keyframe interpolation\"><option>Linear</option><option>Bezier</option><option>Hold</option></select></label></div><p class=\"ds-area-help\">Width reflows text at the same font size; height is independent.</p></section>",
+      "css": ".ds-area{padding:var(--caption-space-l,1.125rem);color:var(--color-panel-text,#ededed);font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:var(--caption-type-s,.923rem);line-height:1.45;}.ds-area-heading{display:flex;justify-content:space-between;gap:var(--caption-space-s,.5rem);}.ds-area-heading span{color:var(--color-panel-secondary,#b0b0b0);font-size:var(--caption-type-xs,.846rem);}.ds-area-track{border-block-start:1px solid var(--color-panel-border,#414141);margin-block-start:var(--caption-space-m,.875rem);padding-block-start:var(--caption-space-s,.5rem);}.ds-area-track-heading{display:flex;align-items:center;gap:.25rem;margin-block-end:var(--caption-space-s,.5rem);}.ds-area-track-heading span{margin-inline-start:auto;font-size:var(--caption-type-xs,.846rem);color:var(--color-panel-secondary,#b0b0b0);}.ds-area-icon{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;inline-size:1.8rem;min-block-size:1.8rem;padding:.25rem;border:1px solid transparent;border-radius:var(--caption-radius,.25rem);background:transparent;color:var(--color-panel-text,#ededed);cursor:pointer;}.ds-area-icon svg{inline-size:1.1rem;block-size:1.1rem;flex-shrink:0;}.ds-area-icon[aria-pressed=\"true\"]{background:var(--color-selection,oklch(38% .043 258));color:var(--color-accent,oklch(80% .105 258));}.ds-area-icon:hover:enabled{background:var(--color-surface-overlay,#454545);border-color:var(--color-panel-secondary,#b0b0b0);}.ds-area-icon:active:enabled{background:var(--color-input,oklch(23% .002 260));}.ds-area-icon:disabled{opacity:.5;cursor:default;}.ds-area-field{display:flex;flex-direction:column;gap:.375rem;min-inline-size:0;color:var(--color-panel-secondary,#b0b0b0);margin-block-end:var(--caption-space-m,.875rem);}.ds-area-field input,.ds-area-field select{inline-size:100%;min-inline-size:0;min-block-size:2.25rem;border:1px solid var(--color-panel-border,#414141);border-radius:var(--caption-radius,.25rem);color:var(--color-panel-text,#ededed);background:var(--color-input,oklch(23% .002 260));padding:.4rem .55rem;font:inherit;font-variant-numeric:tabular-nums;caret-color:var(--color-accent,oklch(80% .105 258));}.ds-area-field input:hover,.ds-area-field select:hover{border-color:var(--color-panel-secondary,#b0b0b0);}.ds-area-icon:focus-visible,.ds-area-field input:focus-visible,.ds-area-field select:focus-visible{outline:2px solid var(--color-accent,oklch(80% .105 258));outline-offset:2px;}.ds-area-help{margin:0;font-size:var(--caption-type-xs,.846rem);line-height:1.5;color:var(--color-panel-secondary,#b0b0b0);}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Premiere Native Workspace",
+    "overview": "Better Captions belongs beside footage in Premiere: calm charcoal surfaces, compact system typography and familiar rectangular controls. Blue identifies selection, focus and the main action; neutral hierarchy keeps the transcript readable under controlled ambient light.\n\nThe interface is dense without hiding state. Labels stay explicit, timing uses tabular figures, and supporting detail opens through native disclosures. Selection connects sentence timing, word appearance and caption placement without adding a video canvas. The browser review shell remains a fixture around the installed panel’s visual system.",
+    "keyCharacteristics": [
+      "Host-aware charcoal hierarchy.",
+      "Compact, familiar rectangular controls.",
+      "Restrained blue action and selection.",
+      "Flat surfaces with visible keyboard states.",
+      "Explicit selection and editing scope."
+    ],
+    "rules": [
+      {
+        "name": "The Host Palette Rule",
+        "body": "Honor the host’s background, text, border and secondary-text overrides. The documented fallbacks describe the browser fixture; they must not replace host theme values.",
+        "section": "colors"
+      },
+      {
+        "name": "The Steady Type Rule",
+        "body": "Keep interface text on the system stack. Fonts selected for rendered captions are content settings, not UI typography.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Surface Rule",
+        "body": "Use tonal changes and thin separators for hierarchy. The panel has no box-shadow vocabulary; the focus outline communicates interaction, not elevation.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Single Lane Rule",
+        "body": "Keep the selected sentence’s words on one time-based lane. Edges snap to sequence frames, stop at adjacent boundaries, and move together where connected. Preserve both draggable handles and explicit numeric/frame controls.",
+        "section": "components"
+      },
+      {
+        "name": "The Explicit Scope Rule",
+        "body": "Label all-caption appearance controls separately from selected-caption Position & size controls. Keep the selected sentence visible in Styling and retain its selection when changing workspaces.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do honor host background, text, border and secondary-text overrides.",
+      "Do use the shared spacing, corner and type scales for new controls.",
+      "Do preserve visible keyboard focus, explicit field labels and tabular timing.",
+      "Do use muted semantic status colors with actionable text.",
+      "Do keep details in named disclosures when they would crowd a narrow panel.",
+      "Do expose selected-caption geometry separately from the three all-caption word appearances.",
+      "Do keep the word lane horizontally scrollable and provide numeric and frame-step timing controls."
+    ],
+    "donts": [
+      "Don't replace system UI typography with decorative display lettering.",
+      "Don't add ornamental shadows or motion to the flat host controls.",
+      "Don't use selection blue as a general container background.",
+      "Don't confuse user-configurable caption output styling with panel UI tokens.",
+      "Don't carry the browser review toolbar or synthetic fixture labels into native chrome."
+    ]
+  }
+}

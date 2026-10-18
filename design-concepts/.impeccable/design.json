@@ -1,0 +1,352 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-17T05:42:45Z",
+  "title": "Design System: Better Captions combined interface (non-shipping review)",
+  "extensions": {
+    "colorMeta": {
+      "page": {
+        "role": "neutral",
+        "displayName": "Review Charcoal",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(25% 0.0000 0.0)",
+          "oklch(35% 0.0000 0.0)",
+          "oklch(45% 0.0000 0.0)",
+          "oklch(55% 0.0000 0.0)",
+          "oklch(65% 0.0000 0.0)",
+          "oklch(80% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel Charcoal",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(25% 0.0000 0.0)",
+          "oklch(35% 0.0000 0.0)",
+          "oklch(45% 0.0000 0.0)",
+          "oklch(55% 0.0000 0.0)",
+          "oklch(65% 0.0000 0.0)",
+          "oklch(80% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Section Charcoal",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(25% 0.0000 0.0)",
+          "oklch(35% 0.0000 0.0)",
+          "oklch(45% 0.0000 0.0)",
+          "oklch(55% 0.0000 0.0)",
+          "oklch(65% 0.0000 0.0)",
+          "oklch(80% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "Raised Charcoal",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(25% 0.0000 0.0)",
+          "oklch(35% 0.0000 0.0)",
+          "oklch(45% 0.0000 0.0)",
+          "oklch(55% 0.0000 0.0)",
+          "oklch(65% 0.0000 0.0)",
+          "oklch(80% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "input": {
+        "role": "neutral",
+        "displayName": "Field Charcoal",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(25% 0.0000 0.0)",
+          "oklch(35% 0.0000 0.0)",
+          "oklch(45% 0.0000 0.0)",
+          "oklch(55% 0.0000 0.0)",
+          "oklch(65% 0.0000 0.0)",
+          "oklch(80% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Divider Gray",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(25% 0.0000 0.0)",
+          "oklch(35% 0.0000 0.0)",
+          "oklch(45% 0.0000 0.0)",
+          "oklch(55% 0.0000 0.0)",
+          "oklch(65% 0.0000 0.0)",
+          "oklch(80% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Panel Ink",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(25% 0.0000 0.0)",
+          "oklch(35% 0.0000 0.0)",
+          "oklch(45% 0.0000 0.0)",
+          "oklch(55% 0.0000 0.0)",
+          "oklch(65% 0.0000 0.0)",
+          "oklch(80% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(25% 0.0000 0.0)",
+          "oklch(35% 0.0000 0.0)",
+          "oklch(45% 0.0000 0.0)",
+          "oklch(55% 0.0000 0.0)",
+          "oklch(65% 0.0000 0.0)",
+          "oklch(80% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Focus Blue",
+        "tonalRamp": [
+          "oklch(15% 0.0893 260.0)",
+          "oklch(25% 0.0893 260.0)",
+          "oklch(35% 0.0893 260.0)",
+          "oklch(45% 0.0893 260.0)",
+          "oklch(55% 0.0893 260.0)",
+          "oklch(65% 0.0893 260.0)",
+          "oklch(80% 0.0893 260.0)",
+          "oklch(95% 0.0893 260.0)"
+        ]
+      },
+      "selection": {
+        "role": "primary",
+        "displayName": "Selection Slate",
+        "tonalRamp": [
+          "oklch(15% 0.0481 253.4)",
+          "oklch(25% 0.0481 253.4)",
+          "oklch(35% 0.0481 253.4)",
+          "oklch(45% 0.0481 253.4)",
+          "oklch(55% 0.0481 253.4)",
+          "oklch(65% 0.0481 253.4)",
+          "oklch(80% 0.0481 253.4)",
+          "oklch(95% 0.0481 253.4)"
+        ]
+      },
+      "error": {
+        "role": "semantic",
+        "displayName": "Error Peach",
+        "tonalRamp": [
+          "oklch(15% 0.0896 28.4)",
+          "oklch(25% 0.0896 28.4)",
+          "oklch(35% 0.0896 28.4)",
+          "oklch(45% 0.0896 28.4)",
+          "oklch(55% 0.0896 28.4)",
+          "oklch(65% 0.0896 28.4)",
+          "oklch(80% 0.0896 28.4)",
+          "oklch(95% 0.0896 28.4)"
+        ]
+      },
+      "quiet": {
+        "role": "neutral",
+        "displayName": "Quiet Divider",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(25% 0.0000 0.0)",
+          "oklch(35% 0.0000 0.0)",
+          "oklch(45% 0.0000 0.0)",
+          "oklch(55% 0.0000 0.0)",
+          "oklch(65% 0.0000 0.0)",
+          "oklch(80% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "body": {
+        "displayName": "Panel body",
+        "purpose": "Review-panel base only; production keeps its own host-aware design system."
+      },
+      "label": {
+        "displayName": "Field label",
+        "purpose": "Explicit labels and secondary panel controls."
+      },
+      "metadata": {
+        "displayName": "Panel metadata",
+        "purpose": "Sequence context, timecodes and concise supporting labels."
+      },
+      "word": {
+        "displayName": "Transcript word",
+        "purpose": "Selectable words in the selected sentence, sharing selection with its timeline."
+      },
+      "word-title": {
+        "displayName": "Selected word",
+        "purpose": "Selected-word heading above Start/End fields and frame controls."
+      },
+      "review-body": {
+        "displayName": "Review page body",
+        "purpose": "Browser explanation and review copy outside plugin chrome."
+      },
+      "review-title": {
+        "displayName": "Review page title",
+        "purpose": "Single combined-interface page heading, reduced at the mobile breakpoint."
+      },
+      "sentence": {
+        "displayName": "Transcript sentence",
+        "purpose": "Full-width sentence rows that select the horizontal word timeline."
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "compact-workbench-max",
+        "value": "850px"
+      },
+      {
+        "name": "stacked-workbench-max",
+        "value": "680px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Neutral button",
+      "kind": "button",
+      "refersTo": "button-default",
+      "description": "Compact enabled action using the combined review panel's base control treatment.",
+      "html": "<button class=\"ds-button\">Copy style</button>",
+      "css": ".ds-button{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:12px;font-weight:500;line-height:1.45;color:var(--text,#ededed);background:var(--raised,#363636);border:1px solid var(--line,#454545);border-radius:3px;min-height:30px;padding:5px 9px;cursor:pointer}.ds-button:hover:not(:disabled){background:#454545;border-color:#737373}.ds-button:active:not(:disabled){background:var(--input,#1d1d1d)}.ds-button:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}.ds-button:disabled{cursor:default;color:#9b9b9b;background:#303030;border-color:#414141}"
+    },
+    {
+      "name": "Text-area keyframe tracks",
+      "kind": "custom",
+      "refersTo": "button-keyframe",
+      "description": "Selected-caption Position, Width and Height share a sample playhead and affect all word states. This static specimen shows existing keys; editor.js and geometry.mjs supply interpolation, add/remove, numeric upserts and Undo. Native Motion bridge integration is pending.",
+      "html": "<details class=\"ds-area\" open><summary>Position &amp; size<span class=\"ds-area-summary\">Selected caption</span></summary><div class=\"ds-area-body\"><div class=\"ds-area-scope\">Sentence 2 · All word states<span>1920 × 1080 px</span></div><div class=\"ds-area-transport\"><div><label>Playhead <input type=\"number\" min=\"0\" max=\"71\" step=\"1\" value=\"0\" aria-label=\"Text area playhead frame\"><span>f</span></label><output>00:00:03:00</output></div><input type=\"range\" min=\"72\" max=\"143\" step=\"1\" value=\"72\" aria-label=\"Text area playhead\"></div><div class=\"ds-area-track\"><div class=\"ds-area-track-head\"><button class=\"ds-key-button\" aria-label=\"Position keyframes\" aria-pressed=\"true\" title=\"Disable position animation\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><circle cx=\"10\" cy=\"11\" r=\"6\"/><path d=\"M8 2h4m-2 3v6l3 2m2-8 2 2\"/></svg></button><strong>Position</strong><span class=\"ds-key-count\">2 keys</span><div class=\"ds-key-nav\"><button class=\"ds-key-button\" aria-label=\"Previous position keyframe\" title=\"Previous keyframe\" disabled><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><path d=\"m12 5-5 5 5 5\"/></svg></button><button class=\"ds-key-button ds-diamond\" aria-label=\"Add or remove position keyframe\" aria-pressed=\"true\" title=\"Remove keyframe\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><path d=\"m10 3 7 7-7 7-7-7z\"/></svg></button><button class=\"ds-key-button\" aria-label=\"Next position keyframe\" title=\"Next keyframe\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><path d=\"m8 5 5 5-5 5\"/></svg></button></div></div><div class=\"ds-area-values ds-position-values\"><label class=\"ds-area-field\"><span>X <span class=\"ds-area-muted\">px</span></span><input type=\"number\" min=\"-1920\" max=\"3840\" step=\"1\" value=\"960\" aria-label=\"Position X, px\"></label><label class=\"ds-area-field\"><span>Y <span class=\"ds-area-muted\">px</span></span><input type=\"number\" min=\"-1080\" max=\"2160\" step=\"1\" value=\"918\" aria-label=\"Position Y, px\"></label><label class=\"ds-area-field ds-area-easing\"><span>After keyframe</span><select aria-label=\"Position keyframe interpolation\"><option value=\"linear\">Linear</option><option value=\"ease\">Ease in/out</option><option value=\"hold\" selected>Hold</option></select></label></div></div><div class=\"ds-area-track\"><div class=\"ds-area-track-head\"><button class=\"ds-key-button\" aria-label=\"Width keyframes\" aria-pressed=\"true\" title=\"Disable width animation\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><circle cx=\"10\" cy=\"11\" r=\"6\"/><path d=\"M8 2h4m-2 3v6l3 2m2-8 2 2\"/></svg></button><strong>Width</strong><span class=\"ds-key-count\">2 keys</span><div class=\"ds-key-nav\"><button class=\"ds-key-button\" aria-label=\"Previous width keyframe\" title=\"Previous keyframe\" disabled><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><path d=\"m12 5-5 5 5 5\"/></svg></button><button class=\"ds-key-button ds-diamond\" aria-label=\"Add or remove width keyframe\" aria-pressed=\"true\" title=\"Remove keyframe\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><path d=\"m10 3 7 7-7 7-7-7z\"/></svg></button><button class=\"ds-key-button\" aria-label=\"Next width keyframe\" title=\"Next keyframe\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><path d=\"m8 5 5 5-5 5\"/></svg></button></div></div><div class=\"ds-area-values\"><label class=\"ds-area-field\"><span>Size <span class=\"ds-area-muted\">px</span></span><input type=\"number\" min=\"96\" max=\"3840\" step=\"1\" value=\"1536\" aria-label=\"Text area width, px\"></label><label class=\"ds-area-field ds-area-easing\"><span>After keyframe</span><select aria-label=\"Width keyframe interpolation\"><option value=\"linear\" selected>Linear</option><option value=\"ease\">Ease in/out</option><option value=\"hold\">Hold</option></select></label></div></div><div class=\"ds-area-track\"><div class=\"ds-area-track-head\"><button class=\"ds-key-button\" aria-label=\"Height keyframes\" aria-pressed=\"true\" title=\"Disable height animation\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><circle cx=\"10\" cy=\"11\" r=\"6\"/><path d=\"M8 2h4m-2 3v6l3 2m2-8 2 2\"/></svg></button><strong>Height</strong><span class=\"ds-key-count\">2 keys</span><div class=\"ds-key-nav\"><button class=\"ds-key-button\" aria-label=\"Previous height keyframe\" title=\"Previous keyframe\" disabled><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><path d=\"m12 5-5 5 5 5\"/></svg></button><button class=\"ds-key-button ds-diamond\" aria-label=\"Add or remove height keyframe\" aria-pressed=\"true\" title=\"Remove keyframe\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><path d=\"m10 3 7 7-7 7-7-7z\"/></svg></button><button class=\"ds-key-button\" aria-label=\"Next height keyframe\" title=\"Next keyframe\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.3\" aria-hidden=\"true\"><path d=\"m8 5 5 5-5 5\"/></svg></button></div></div><div class=\"ds-area-values\"><label class=\"ds-area-field\"><span>Size <span class=\"ds-area-muted\">px</span></span><input type=\"number\" min=\"24\" max=\"2160\" step=\"1\" value=\"216\" aria-label=\"Text area height, px\"></label><label class=\"ds-area-field ds-area-easing\"><span>After keyframe</span><select aria-label=\"Height keyframe interpolation\"><option value=\"linear\" selected>Linear</option><option value=\"ease\">Ease in/out</option><option value=\"hold\">Hold</option></select></label></div></div><p class=\"ds-area-hint\">Enable a stopwatch, move the playhead, then change a value to add a keyframe. X / Y locate the center; width reflows text at a fixed font size, and height stays independent.</p><p class=\"ds-area-native\">Sample controls · On-video handles and native keyframes use Premiere’s Program Monitor and Effect Controls.</p></div></details>",
+      "css": ".ds-area{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:12px;line-height:1.45;color:var(--text,#ededed);background:var(--panel,#252525);border-top:1px solid var(--quiet,#363636)}.ds-area summary{cursor:pointer;padding:10px 12px;font-size:11px;font-weight:550}.ds-area summary::marker{color:var(--muted,#b8b8b8)}.ds-area-summary{float:right;color:var(--muted,#b8b8b8);font-size:10px;font-weight:400;max-width:44%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-area-body{padding:0 12px 10px}.ds-area-scope{font-size:10px;color:var(--muted,#b8b8b8);display:flex;justify-content:space-between;gap:7px;flex-wrap:wrap;margin-bottom:9px}.ds-area-transport{padding-bottom:8px;border-bottom:1px solid var(--quiet,#363636)}.ds-area-transport>div{display:flex;justify-content:space-between;align-items:center;gap:8px}.ds-area-transport label{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted,#b8b8b8)}.ds-area input,.ds-area select{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:12px;line-height:1.45;color:var(--text,#ededed);background:var(--input,#1d1d1d);border:1px solid var(--line,#454545);border-radius:3px;padding:5px 7px;width:100%;box-sizing:border-box;min-width:0;min-height:30px}.ds-area-transport label input{width:54px;min-height:26px;padding:3px 5px;font-variant-numeric:tabular-nums}.ds-area-transport output{font-size:11px;color:var(--accent,#a3c6ff);font-variant-numeric:tabular-nums}.ds-area-transport input[type=range]{height:24px;min-height:24px;margin-top:5px;padding:0;border:0;background:transparent;accent-color:var(--accent,#a3c6ff)}.ds-area-track{padding:9px 0;border-bottom:1px solid var(--quiet,#363636)}.ds-area-track-head{display:flex;align-items:center;gap:7px;margin-bottom:7px}.ds-area-track-head strong{font-size:11px;font-weight:550}.ds-key-count{font-size:10px;color:var(--muted,#b8b8b8);margin-left:auto;white-space:nowrap}.ds-key-nav{display:flex;gap:2px}.ds-key-button{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;display:grid;place-items:center;width:27px;height:28px;box-sizing:border-box;min-height:28px;padding:3px;background:transparent;border:1px solid transparent;border-radius:3px;color:var(--text,#ededed);cursor:pointer}.ds-key-button[aria-pressed=true]{color:var(--accent,#a3c6ff);background:var(--selection,#344860);border-color:#6b8dbb}.ds-diamond[aria-pressed=true] svg{fill:currentColor}.ds-key-button svg{display:block;flex-shrink:0}.ds-key-button:hover:not(:disabled){background:#454545;border-color:#737373}.ds-key-button:active:not(:disabled){background:var(--input,#1d1d1d)}.ds-key-button:disabled{color:#9b9b9b;cursor:default}.ds-area-values{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}.ds-area-field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--muted,#b8b8b8);min-width:0}.ds-area-values input{font-variant-numeric:tabular-nums}.ds-position-values .ds-area-easing{grid-column:1/-1;display:flex;flex-direction:row;align-items:center;justify-content:space-between}.ds-position-values .ds-area-easing select{width:50%}.ds-area-values select:disabled{opacity:.55}.ds-area-muted{color:var(--muted,#b8b8b8)}.ds-area-hint{font-size:10px;color:var(--muted,#b8b8b8);margin:9px 0 0}.ds-area-native{font-size:10px;color:var(--muted,#b8b8b8);margin:8px 0 0;line-height:1.5}.ds-area :is(button,input,select,summary):focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}"
+    },
+    {
+      "name": "Unavailable native update",
+      "kind": "button",
+      "refersTo": "button-native-unavailable",
+      "description": "Disabled mockup action; native integration is not connected.",
+      "html": "<button class=\"ds-native-update\" disabled title=\"Available in the installed Premiere panel\">Update Program Monitor</button>",
+      "css": ".ds-native-update{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:12px;font-weight:550;line-height:1.45;width:100%;box-sizing:border-box;min-height:30px;padding:5px 9px;border:1px solid #486482;border-radius:3px;background:#2c4667;color:#b9cbe1;cursor:default}.ds-native-update:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}"
+    },
+    {
+      "name": "Labeled numeric field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Current state font size is entered in pixels; caption values are scaled only for the type sample.",
+      "html": "<label class=\"ds-field\">Font size, px<input type=\"number\" min=\"12\" max=\"160\" step=\"1\" value=\"54\"></label>",
+      "css": ".ds-field{display:flex;flex-direction:column;gap:5px;font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:11px;line-height:1.45;color:var(--muted,#b8b8b8);min-width:0}.ds-field input{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:12px;line-height:1.45;color:var(--text,#ededed);width:100%;box-sizing:border-box;min-height:30px;background:var(--input,#1d1d1d);border:1px solid var(--line,#454545);border-radius:3px;padding:5px 7px;caret-color:var(--accent,#a3c6ff)}.ds-field input:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}"
+    },
+    {
+      "name": "Two workspace tabs",
+      "kind": "nav",
+      "refersTo": "workspace-tab",
+      "description": "Transcript and Styling use ARIA tab semantics and roving focus. The application supplies Left/Right and Home/End navigation while retaining selection and edits.",
+      "html": "<div class=\"ds-tabs\" role=\"tablist\" aria-label=\"Caption workspace\"><button role=\"tab\" id=\"ds-tab-edit\" aria-controls=\"ds-workspace\" aria-selected=\"true\" tabindex=\"0\">Transcript</button><button role=\"tab\" id=\"ds-tab-style\" aria-controls=\"ds-workspace\" aria-selected=\"false\" tabindex=\"-1\">Styling</button></div><div role=\"tabpanel\" id=\"ds-workspace\" aria-labelledby=\"ds-tab-edit\"></div>",
+      "css": ".ds-tabs{display:flex;gap:22px;padding:0 12px;border-bottom:1px solid var(--line,#454545);background:var(--panel,#252525)}.ds-tabs button{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:12px;font-weight:500;line-height:1.45;min-height:30px;background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--muted,#b8b8b8);padding:10px 0;cursor:pointer}.ds-tabs button[aria-selected=true]{color:var(--accent,#a3c6ff);border-bottom-color:var(--accent,#a3c6ff)}.ds-tabs button:hover:not(:disabled){background:#454545;border-color:#737373}.ds-tabs button:active:not(:disabled){background:var(--input,#1d1d1d)}.ds-tabs button:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}"
+    },
+    {
+      "name": "Selected sentence",
+      "kind": "custom",
+      "refersTo": "sentence-selected",
+      "description": "Full-width sentence row selects its sentence and replaces the single horizontal word lane. The selected word is emphasized in the text.",
+      "html": "<button class=\"ds-sentence\" aria-pressed=\"true\" aria-label=\"Sentence 2: Every word deserves a little space.\"><span class=\"ds-sentence-meta\"><span>02</span><span>00:00:03:00 – 00:00:06:00</span></span><span class=\"ds-sentence-text\">Every word deserves a <strong>little</strong> space.</span></button>",
+      "css": ".ds-sentence{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;display:block;width:100%;text-align:left;border:0;border-top:1px solid var(--quiet,#363636);border-radius:0;padding:10px 12px;background:var(--panel,#252525);color:var(--text,#ededed);line-height:1.5;cursor:pointer}.ds-sentence[aria-pressed=true]{background:#2d3c4e}.ds-sentence-meta{display:flex;gap:9px;color:var(--muted,#b8b8b8);font-size:10px;font-weight:500;margin-bottom:5px;font-variant-numeric:tabular-nums}.ds-sentence[aria-pressed=true] .ds-sentence-meta{color:#bdd4ef}.ds-sentence-text{font-size:13px;font-weight:400}.ds-sentence strong{font-weight:600;color:#d6e6ff}.ds-sentence:hover:not(:disabled){background:#454545;border-color:#737373}.ds-sentence:active:not(:disabled){background:var(--input,#1d1d1d)}.ds-sentence:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}"
+    },
+    {
+      "name": "Selected phrase word",
+      "kind": "custom",
+      "refersTo": "word-selected",
+      "description": "Phrase selection and lane selection address the same word and contextual timing inspector.",
+      "html": "<button class=\"ds-word\" aria-pressed=\"true\" title=\"Select little\">little</button>",
+      "css": ".ds-word{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:13px;font-weight:400;line-height:1.6;background:transparent;color:var(--text,#ededed);border:1px solid transparent;border-radius:3px;min-height:25px;padding:1px 3px;cursor:pointer}.ds-word[aria-pressed=true]{color:#f0f6ff;background:var(--selection,#344860);border-color:#7fa3d2}.ds-word:hover:not(:disabled){background:#454545;border-color:#737373}.ds-word:active:not(:disabled){background:var(--input,#1d1d1d)}.ds-word:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}"
+    },
+    {
+      "name": "Independent appearance states",
+      "kind": "custom",
+      "refersTo": "state-option",
+      "description": "Past words, Current word and Next words own independent styles. Arial, yellow bubbles and swatch values are editable caption content. State labels are panel typography.",
+      "html": "<div class=\"ds-state-grid\" role=\"group\" aria-label=\"Word appearance state\"><button class=\"ds-state\" aria-pressed=\"false\"><span class=\"ds-swatch ds-past\">Aa</span><span class=\"ds-state-label\">Past words</span></button><button class=\"ds-state\" aria-pressed=\"true\"><span class=\"ds-swatch ds-current\">Aa</span><span class=\"ds-state-label\">Current word</span></button><button class=\"ds-state\" aria-pressed=\"false\"><span class=\"ds-swatch ds-next\">Aa</span><span class=\"ds-state-label\">Next words</span></button></div>",
+      "css": ".ds-state-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:10px 12px 8px;background:var(--panel,#252525)}.ds-state{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:12px;font-weight:500;line-height:1.45;background:transparent;border:1px solid var(--line,#454545);border-radius:3px;padding:7px 2px;display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0;min-height:30px;cursor:pointer}.ds-state[aria-pressed=true]{border-color:var(--accent,#a3c6ff);background:#303e4f}.ds-state-label{font-size:10px;color:var(--muted,#b8b8b8)}.ds-state[aria-pressed=true] .ds-state-label{color:var(--accent,#a3c6ff)}.ds-swatch{font-family:Arial,sans-serif;font-weight:700;line-height:1.4;max-width:100%;overflow:hidden;letter-spacing:0;text-transform:none}.ds-past{font-size:14.4px;color:#b2b2b2;opacity:.75;background:transparent;border-radius:0;padding:1px 3px}.ds-current{font-size:16.2px;color:#171717;opacity:1;background:#ffd84d;border-radius:3.6px;padding:3px}.ds-next{font-size:14.4px;color:#eeeeee;opacity:1;background:transparent;border-radius:0;padding:1px 3px}.ds-state:hover:not(:disabled){background:#454545;border-color:#737373}.ds-state:active:not(:disabled){background:var(--input,#1d1d1d)}.ds-state:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}"
+    },
+    {
+      "name": "Shared caption layout disclosure",
+      "kind": "custom",
+      "description": "Native details/summary retains shared caption settings inside Styling. Stroke, Shadow and Word bubble use parallel disclosures scoped to the selected state.",
+      "html": "<details class=\"ds-disclosure\" open><summary>Caption layout<span class=\"ds-summary-value\">All word states</span></summary><div class=\"ds-disclosure-body\"><label class=\"ds-layout-field\">Alignment<select><option>Left</option><option selected>Center</option><option>Right</option></select></label><p>Caption background and layout apply to the entire sentence. Use Position &amp; size above for the text area. Final placement appears in Premiere’s Program Monitor.</p></div></details>",
+      "css": ".ds-disclosure{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;color:var(--text,#ededed);background:var(--panel,#252525);border-top:1px solid var(--quiet,#363636)}.ds-disclosure summary{padding:10px 12px;cursor:pointer;font-weight:550;font-size:11px;line-height:1.45}.ds-disclosure summary::marker{color:var(--muted,#b8b8b8)}.ds-summary-value{float:right;color:var(--muted,#b8b8b8);font-size:10px;font-weight:400;max-width:44%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-disclosure-body{padding:0 12px 12px}.ds-layout-field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--muted,#b8b8b8);min-width:0}.ds-layout-field select{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;font-size:12px;line-height:1.45;width:100%;box-sizing:border-box;min-height:30px;color:var(--text,#ededed);background:var(--input,#1d1d1d);border:1px solid var(--line,#454545);border-radius:3px;padding:5px 7px}.ds-disclosure-body p{font-size:10px;line-height:1.45;color:var(--muted,#b8b8b8);margin:9px 0 0}.ds-disclosure summary:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}.ds-layout-field select:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}"
+    },
+    {
+      "name": "One word lane with boundary handles",
+      "kind": "custom",
+      "refersTo": "timing-block",
+      "description": "Single horizontal lane at 24fps. This specimen shows the selected word's slider handles; editor.js and timing.mjs implement pointer/keyboard edits, shared adjacent edges, clamping and the one-frame minimum.",
+      "html": "<div class=\"ds-lane-scroll\" tabindex=\"0\" aria-label=\"Word timeline; scroll horizontally to see the sentence\"><div class=\"ds-lane\"><div class=\"ds-ruler\"><span style=\"left:0%\">3.000s</span><span style=\"left:25%\">3.750s</span><span style=\"left:50%\">4.500s</span><span style=\"left:75%\">5.250s</span><span style=\"left:100%\">6.000s</span></div><button class=\"ds-block\" aria-pressed=\"false\" aria-label=\"Every, 3.000 to 3.500 seconds\" style=\"left:0%;width:16.6666666667%\">Every</button><button class=\"ds-block\" aria-pressed=\"false\" aria-label=\"word, 3.500 to 4.000 seconds\" style=\"left:16.6666666667%;width:16.6666666666%\">word</button><button class=\"ds-block\" aria-pressed=\"false\" aria-label=\"deserves, 4.000 to 4.583 seconds\" style=\"left:33.3333333333%;width:19.4444444445%\">deserves</button><button class=\"ds-block\" aria-pressed=\"false\" aria-label=\"a, 4.583 to 4.875 seconds\" style=\"left:52.7777777778%;width:9.7222222222%\">a</button><button class=\"ds-block\" aria-pressed=\"true\" aria-label=\"little, 4.875 to 5.375 seconds\" style=\"left:62.5%;width:16.6666666667%\">little</button><button class=\"ds-block\" aria-pressed=\"false\" aria-label=\"space., 5.375 to 6.000 seconds\" style=\"left:79.1666666667%;width:20.8333333333%\">space.</button><button class=\"ds-trim\" role=\"slider\" aria-label=\"Start boundary for little\" aria-valuemin=\"111\" aria-valuemax=\"128\" aria-valuenow=\"117\" aria-valuetext=\"4.875 seconds\" title=\"Drag start; arrow keys adjust one frame\" style=\"left:62.5%\"></button><button class=\"ds-trim\" role=\"slider\" aria-label=\"End boundary for little\" aria-valuemin=\"118\" aria-valuemax=\"143\" aria-valuenow=\"129\" aria-valuetext=\"5.375 seconds\" title=\"Drag end; arrow keys adjust one frame\" style=\"left:79.1666666667%\"></button></div></div>",
+      "css": ".ds-lane-scroll{overflow-x:auto;overflow-y:hidden;padding:2px 7px 7px;background:#202020;overscroll-behavior-x:contain;scrollbar-color:#6b6b6b var(--input,#1d1d1d)}.ds-lane{width:100%;min-width:339px;position:relative;padding-top:26px;height:75px;box-sizing:border-box}.ds-ruler{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;position:absolute;top:0;height:22px;left:0;right:0;border-bottom:1px solid #5a5a5a;color:var(--muted,#b8b8b8);font-size:9px;line-height:1.45;font-variant-numeric:tabular-nums}.ds-ruler span{position:absolute;transform:translateX(-50%);top:2px}.ds-ruler span:first-child{transform:none}.ds-ruler span:last-child{transform:translateX(-100%)}.ds-block{font-family:\"Segoe UI\",-apple-system,BlinkMacSystemFont,sans-serif;position:absolute;top:29px;height:38px;box-sizing:border-box;min-height:38px;padding:4px 5px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border-radius:1px;border:1px solid #737b86;background:#414a56;color:var(--text,#ededed);font-size:11px;font-weight:500;min-width:0;line-height:1.2;cursor:pointer}.ds-block[aria-pressed=true]{background:#4b6b92;border-color:#c1dbff;color:#fff}.ds-trim{position:absolute;top:26px;transform:translateX(-50%);width:11px;box-sizing:border-box;min-width:11px;padding:0;height:44px;min-height:44px;background:#d1e3ff;border:2px solid #293a50;border-radius:2px;z-index:3;cursor:ew-resize;touch-action:none}.ds-trim::after{content:\"\";display:block;height:16px;width:1px;background:#374b65;margin:auto}.ds-trim:hover{background:#fff}.ds-trim:active{background:var(--input,#1d1d1d)}.ds-block:hover:not(:disabled){background:#454545;border-color:#737373}.ds-block:active:not(:disabled){background:var(--input,#1d1d1d)}.ds-block:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}.ds-lane-scroll:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}.ds-trim:focus-visible{outline:2px solid var(--accent,#a3c6ff);outline-offset:2px}.ds-trim:focus-visible{outline-offset:0}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Premiere Native Workspace",
+    "overview": "**Non-shipping review scope.** This record describes design-concepts/index.html, editor.css, editor.js, timing.mjs and geometry.mjs. The user selected one combined panel with exactly two tabs: Transcript joins the continuous sentence list to the selected sentence's horizontal word timeline; Styling holds independent Past words, Current word and Next words settings, plus the selected caption's Position & size keyframes. The original three proposals remain at explorations/ as decision history.\n\nFlat charcoal surfaces, compact system text, rectangular controls and restrained blue selection retain the established Premiere-native direction. The surrounding browser page supplies width controls, explanation and local review notes. The panel is explicitly labeled as a synthetic mockup with no Premiere connection. [The root DESIGN.md](../DESIGN.md) and its sidecar remain the production design authority; this local record does not alter the installed Svelte panel, native services or renderer/schema.",
+    "keyCharacteristics": [
+      "Exactly two tabs with shared sentence and word selection.",
+      "A continuous transcript together with its selected sentence's single horizontal word lane.",
+      "Shared adjacent boundaries, frame precision and no word overlap.",
+      "Independent past/current/next appearance with shared caption layout and animation.",
+      "Selected-caption center, width and height keyframes with explicit sample/native boundaries.",
+      "Flat tonal hierarchy, explicit labels and visible keyboard focus.",
+      "Browser review furniture and labeled caption type samples outside native output claims."
+    ],
+    "rules": [
+      {
+        "name": "The Sample Color Rule",
+        "body": "Yellow bubbles, selected caption fonts and state opacity belong to the editable caption samples. They are not panel accents or UI typography.",
+        "section": "colors"
+      },
+      {
+        "name": "The UI Type Rule",
+        "body": "Keep panel controls on the system stack. Editable caption fonts remain content settings.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Surface Rule",
+        "body": "Use tone and separators for the review panel; focus outlines identify interaction rather than elevation.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** keep exactly two plugin tabs, with the selected sentence and its word lane together in Transcript.",
+      "**Do** route every timing edit through shared frame boundaries and preserve at least one frame per word.",
+      "**Do** preserve visible focus, explicit labels, tabular timing and contextual validation.",
+      "**Do** keep independent state effects separate from shared caption layout and animation settings.",
+      "**Do** keep Position & size scoped to the selected caption across all states, with font size independent of geometry.",
+      "**Do** retain narrow-panel scrolling and clearly label sample data, type samples and unavailable native actions.",
+      "**Do** use the root design system when implementing this direction in the production panel."
+    ],
+    "donts": [
+      "**Don't** treat review-only tokens or per-state effects as an already shipped renderer/schema change.",
+      "**Don't** introduce a third plugin tab for timing or animation in this selected combination.",
+      "**Don't** allow word edits to overlap, reorder words or collapse a word below one frame.",
+      "**Don't** add a fake Program Monitor or imply direct word clicking inside Premiere's monitor.",
+      "**Don't** present evaluated sample geometry as a completed native Motion bridge integration.",
+      "**Don't** imply that sample edits or browser notes synchronize between devices.",
+      "**Don't** promote editable caption colors, fonts, bubbles or text shadows into panel UI styling."
+    ]
+  }
+}

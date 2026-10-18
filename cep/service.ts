@@ -2,26 +2,32 @@ import { createHostAPI } from '../webview-ui/src/cep-api';
 
 /** Local-only transport for the single visible UXP Better Captions panel. */
 export const SERVICE_ACTIONS = [
+  'readCaptionConsolidation', 'stageCaptionConsolidation', 'verifyCaptionConsolidation', 'rollbackCaptionConsolidation',
   'getFonts', 'beginCaption', 'saveCaptionFrames', 'finishCaption',
-  'preflightCaptionClips', 'applyCaptionClips', 'readTimeline', 'showInPremiere',
-  'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection',
+  'preflightCaptionClips', 'prepareCaptionTrack', 'applyCaptionClips', 'readTimeline', 'showInPremiere',
+  'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'patchCaptionKeyValues',
 ] as const;
-const READ_ACTIONS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection']);
+const READ_ACTIONS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 const ARG_COUNTS: Record<string, number[]> = {
+  readCaptionConsolidation:[1], stageCaptionConsolidation:[4], verifyCaptionConsolidation:[3], rollbackCaptionConsolidation:[3],
   getFonts: [0], beginCaption: [1], saveCaptionFrames: [3], finishCaption: [3, 4],
-  preflightCaptionClips: [2], applyCaptionClips: [2, 3], readTimeline: [1], showInPremiere: [1],
-  selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1],
+  preflightCaptionClips: [2, 3], prepareCaptionTrack: [2, 3, 4], applyCaptionClips: [2, 3, 4], readTimeline: [1], showInPremiere: [1],
+  selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1], readCaptionAreaDescriptor: [1], patchCaptionKeyValues: [2],
 };
 interface Request { version: number; id: string; createdAt: number; expiresAt?: number; sequenceId: string; projectPath: string; action: string; args: any[]; }
-interface ServiceOptions { api?: any; fs?: any; path?: any; os?: any; crypto?: any; process?: any; root?: string; intervalMs?: number; maxRequestsPerPoll?: number; }
+interface ServiceOptions { api?: any; fs?: any; path?: any; os?: any; crypto?: any; process?: any; platform?: any; root?: string; intervalMs?: number; maxRequestsPerPoll?: number; }
 
 export function validateServiceRequest(value: unknown, filename: string, now = Date.now()): Request {
   const request = value as Request;
   if (!request || typeof request !== 'object' || Array.isArray(request) || request.version !== 1 || !/^[a-f0-9]{32}$/.test(request.id) || filename !== request.id + '.json') throw new Error('Invalid caption service request identity.');
   if (!Number.isFinite(request.createdAt) || Math.abs(now - request.createdAt) > 120000) throw new Error('Caption service request expired.');
-  if (typeof request.sequenceId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(request.sequenceId) || typeof request.projectPath !== 'string' || !request.projectPath.startsWith('/') || request.projectPath.length > 4096) throw new Error('Invalid captured Premiere sequence or project.');
+  const project = request.projectPath;
+  const localProject = typeof project === 'string' && (/^\/(?!\/)/.test(project) || /^[a-z]:[\\/]/i.test(project)) && !/[\u0000-\u001f]/.test(project) && !project.split(/[\\/]/).some(part => part === '.' || part === '..');
+  if (typeof request.sequenceId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(request.sequenceId) || !localProject || project.length > 4096) throw new Error('Invalid captured Premiere sequence or project.');
   if (!SERVICE_ACTIONS.includes(request.action as typeof SERVICE_ACTIONS[number])) throw new Error('Unsupported caption service action.');
   if (!Array.isArray(request.args) || !ARG_COUNTS[request.action].includes(request.args.length)) throw new Error('Invalid caption service arguments.');
+  const deletionIndex = request.action === 'preflightCaptionClips' ? 2 : ['prepareCaptionTrack', 'applyCaptionClips'].includes(request.action) ? 3 : -1;
+  if (deletionIndex >= 0 && request.args.length > deletionIndex && !Array.isArray(request.args[deletionIndex])) throw new Error('Invalid caption service arguments.');
   if(request.action==='readCaptionMotion'&&request.args.length===2){
     const options=request.args[1];
     if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).length!==1||options.includeDiagnostics!==true)throw new Error('Invalid caption service arguments.');
@@ -39,17 +45,24 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
   if (!info || info.id !== request.sequenceId || info.projectPath !== request.projectPath) throw new Error('The active Premiere sequence or project changed. Refresh Better Captions.');
   const [a, b, c, d] = request.args, id = info.id;
   switch (request.action) {
+    case 'readCaptionConsolidation': return api.readCaptionConsolidation(a,id);
+    case 'stageCaptionConsolidation': return api.stageCaptionConsolidation(a,b,c,d,id);
+    case 'verifyCaptionConsolidation': return api.verifyCaptionConsolidation(a,b,c,id);
+    case 'rollbackCaptionConsolidation': return api.rollbackCaptionConsolidation(a,b,c,id);
     case 'getFonts': return api.getFonts();
     case 'beginCaption': return api.beginCaption(a, id);
     case 'saveCaptionFrames': return api.saveCaptionFrames(a, b, c, id);
     case 'finishCaption': return api.finishCaption(a, b, c, id, d);
-    case 'preflightCaptionClips': return api.preflightCaptionClips(a, b, id);
-    case 'applyCaptionClips': return api.applyCaptionClips(a, b, id, c);
+    case 'preflightCaptionClips': return api.preflightCaptionClips(a, b, id, ...(request.args.length > 2 ? [c] : []));
+    case 'prepareCaptionTrack': return api.prepareCaptionTrack(a, b, id, c, ...(request.args.length > 3 ? [d] : []));
+    case 'applyCaptionClips': return api.applyCaptionClips(a, b, id, c, ...(request.args.length > 3 ? [d] : []));
     case 'readTimeline': return api.readTimeline(a, id);
     case 'showInPremiere': return api.showInPremiere(a, id);
     case 'selectCaptionClip': return api.selectCaptionClip(a, id);
     case 'readCaptionMotion': return b === undefined ? api.readCaptionMotion(a, id) : api.readCaptionMotion(a, id, b);
     case 'readCaptionGeometry': return api.readCaptionGeometry(a, id);
+    case 'readCaptionAreaDescriptor': return api.readCaptionAreaDescriptor(a, id);
+    case 'patchCaptionKeyValues': return api.patchCaptionKeyValues(a, b, id);
     case 'readCaptionSelection': return api.readCaptionSelection(a, id);
     default: throw new Error('Unsupported caption service action.');
   }
@@ -61,15 +74,15 @@ export function startBackendService(options: ServiceOptions = {}) {
   if (!options.api && (!win?.__adobe_cep__ || typeof requireNode !== 'function')) throw new Error('The caption background service must run in Premiere CEP.');
   const api = options.api ?? createHostAPI();
   const fs = options.fs ?? requireNode('node:fs'), path = options.path ?? requireNode('node:path');
-  const os = options.os ?? requireNode('node:os'), crypto = options.crypto ?? requireNode('node:crypto');
+  const crypto = options.crypto ?? requireNode('node:crypto');
   const processAPI = options.process ?? requireNode('node:process');
-  const base = options.root ?? path.join(os.homedir(), 'Library', 'Application Support', 'Better Captions', 'service');
+  const extension = win?.__adobe_cep__?.getSystemPath('extension');
+  const extensionRoot = extension?.startsWith('file:') ? requireNode('node:url').fileURLToPath(extension) : extension;
+  const platform = options.platform ?? requireNode(path.join(extensionRoot, 'platform.cjs'));
+  const base = options.root ?? path.join(platform.dataRoot(), 'service');
   const instanceId = crypto.randomBytes(12).toString('hex');
   for (const folder of [path.dirname(base), base, path.join(base, 'requests'), path.join(base, 'responses')]) {
-    fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-    const stat = fs.lstatSync(folder);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('The caption service folder must be a real private directory.');
-    fs.chmodSync(folder, 0o700);
+    platform.secureDirectory(folder);
   }
   const requests = path.join(base, 'requests'), responses = path.join(base, 'responses'), heartbeat = path.join(base, 'service.json');
   const lock = path.join(base, 'worker.lock.json'), recoveryLock = path.join(base, 'worker-recovery.lock.json');

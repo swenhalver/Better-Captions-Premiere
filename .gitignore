@@ -43,3 +43,8 @@ cep/service-client/
 uxp/client/
 artifacts/
 .upstream-watch-state.json
+
+# Local interface review, hosting checkout and synthetic host harness
+work/
+webview-ui/.qa/
+.impeccable/review/

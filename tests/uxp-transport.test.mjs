@@ -84,11 +84,33 @@ function harness(t, nativeOverrides = {}) {
   const stop = api.startAgentBridge(handler);
   t.after(async () => { stop(); await setup.plugin.destroy(); for (const timer of timers.keys()) clearTimeout(timer); });
   return { api, frame, status, setup, state, calls, replies, logs, hostWindow, uiWindow, sequenceEvents,
-    proxy: () => proxy, stops: () => stops, counters: () => ({ activated, closed, theme }), stop,
+    handler, proxy: () => proxy, stops: () => stops, counters: () => ({ activated, closed, theme }), stop,
     fireTimeout(ms) { const found=[...timers].find(([,value])=>value.ms===ms);assert.ok(found,'expected timeout '+ms);cancel(found[0]);found[1].callback(); },
     runBootstrap() { vm.runInNewContext(source('webview-ui/public/bootstrap.js'), { window: uiWindow, Date }); },
   };
 }
+
+test('preset library reads and writes round trip through the bounded UXP allowlist', async t => {
+  const library = { version: 1, revision: 3, presets: [] };
+  const app = harness(t, { async loadStylePresets() { return library; }, async saveStylePresets(value) { assert.equal(value.revision, 3); return { ...value, revision: 4 }; } });
+  assert.deepEqual(await app.api.loadStylePresets(), library);
+  assert.equal((await app.api.saveStylePresets(library)).revision, 4);
+});
+
+test('legacy conversion round trips through the panel while internal stage and removal endpoints remain private',async t=>{
+ const previous=[{id:'old-a'},{id:'old-b'}],caption={id:'bundle'},plan={ok:true,version:1,signature:'native-proof'};
+ const app=harness(t,{
+  async readCaptionConsolidation(captions,id){assert.deepEqual(captions,previous);assert.equal(id,'native-sequence');return plan;},
+  async applyConsolidatedCaption(c,old,proof,id){assert.deepEqual(c,caption);assert.deepEqual(old,previous);assert.deepEqual(proof,plan);assert.equal(id,'native-sequence');return {ok:true,cues:[{id:'bundle'}]};},
+ });
+ assert.deepEqual(await app.api.readCaptionConsolidation(previous,'native-sequence'),plan);
+ assert.equal((await app.api.applyConsolidatedCaption(caption,previous,plan,'native-sequence')).ok,true);
+ for(const method of ['stageCaptionConsolidation','rollbackCaptionConsolidation','verifyCaptionConsolidation']){
+  assert.equal(typeof app.api[method],'undefined');
+  const id='ui-blocked-'+method;app.hostWindow.emit('message',{data:{channel:'better-captions',id,method,args:[]},source:app.frame});await tick();
+  assert.match(app.replies.find(reply=>reply.id===id)?.error?.message,/Unsupported/i);
+ }
+});
 
 test('native UXP transport runs with only uxpHost.postMessage and preserves request arguments/errors', async t => {
   const app = harness(t);
@@ -184,4 +206,19 @@ test('a lost frontend read response trips a circuit instead of issuing overlappi
   await assert.rejects(read,/timeout did not cancel/);const calls=app.calls.length;
   await assert.rejects(app.api.getActiveSequenceInfo(),/previous Premiere read has not returned/);assert.equal(app.calls.length,calls);
   finish({ok:true,cues:[]});await tick();assert.equal((await app.api.getActiveSequenceInfo()).id,'native-sequence');
+});
+
+test('fixed area agent requests round trip as data while the internal CEP patch stays private', async t => {
+  const app = harness(t); await tick();
+  const calls = [], caption = { captionId: 'cue' }, edit = { captionId: 'cue', operation: 'set', track: 'width', value: [65] };
+  app.handler.readArea = async payload => { calls.push(['read', payload]); return { signature: 'native-read' }; };
+  app.handler.editArea = async payload => { calls.push(['edit', payload]); return { signature: 'native-edited' }; };
+  assert.equal((await app.proxy().readArea(caption)).signature, 'native-read');
+  assert.equal((await app.proxy().editArea(edit)).signature, 'native-edited');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['read', caption], ['edit', edit]]);
+  assert.equal(app.api.patchCaptionKeyValues, undefined, 'The mutation helper is not a public webview host API');
+  app.hostWindow.emit('message', { source: app.frame, data: { channel: 'better-captions', id: 'ui-private-patch', method: 'patchCaptionKeyValues', args: [] } });
+  await tick(); assert.match(app.replies.find(reply => reply.id === 'ui-private-patch').error.message, /Unsupported Premiere caption method/);
+  delete app.handler.editArea;
+  await assert.rejects(app.proxy().editArea(edit), /Caption area editing is unavailable/);
 });

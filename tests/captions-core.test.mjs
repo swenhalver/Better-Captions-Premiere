@@ -31,13 +31,23 @@ class CanvasRecorder {
   closePath(){}
   fill(){this.paints.push({kind:'bubble',fill:this.fillStyle,alpha:this.globalAlpha,bounds:this.bounds(this.points)});}
   bounds(points){return {left:Math.min(...points.map(p=>p[0])),right:Math.max(...points.map(p=>p[0])),top:Math.min(...points.map(p=>p[1])),bottom:Math.max(...points.map(p=>p[1]))};}
-  drawText(kind,text,x,y){const width=this.measureText(text).width,size=Number(this.font.match(/([\d.]+)px/)[1]);this.paints.push({kind,text,font:this.font,fill:this.fillStyle,stroke:this.strokeStyle,alpha:this.globalAlpha,bounds:this.bounds([this.point(x,y-size*.6),this.point(x+width,y+size*.6)])});}
+  drawText(kind,text,x,y){const width=this.measureText(text).width,size=Number(this.font.match(/([\d.]+)px/)[1]);this.paints.push({kind,text,font:this.font,fill:this.fillStyle,stroke:this.strokeStyle,alpha:this.globalAlpha,shadow:this.shadowColor,lineWidth:this.lineWidth,bounds:this.bounds([this.point(x,y-size*.6),this.point(x+width,y+size*.6)])});}
   fillText(text,x,y){this.drawText('text',text,x,y);}
   strokeText(text,x,y){this.drawText('stroke',text,x,y);}
 }
 function render(c,time,s=style(),width=1080,height=1920,a=animation){const ctx=new CanvasRecorder();new CaptionRenderer(ctx,width,height).renderFrame(c,time,s,a);assert.equal(ctx.stack.length,0,'canvas state is balanced');return ctx.paints;}
 const texts = paints => paints.filter(p=>p.kind==='text');
 const center = p => (p.bounds.left+p.bounds.right)/2;
+test('all three word appearances render their own typography, case, stroke and shadow',()=>{
+ const s=style();s.strokeEnabled=false;s.shadowEnabled=false;
+ s.spokenWord={...s.spokenWord,fontSize:52,textTransform:'uppercase',strokeEnabled:true,strokeColor:'#ff0000',strokeOpacity:.5,strokeWidth:4,shadowEnabled:false};
+ s.activeWord={...s.activeWord,fontSize:80,italic:true,strokeEnabled:false,shadowEnabled:true,shadowColor:'#00ff00',shadowOpacity:.6};
+ s.upcomingWord={fontFamily:'Next',fontSize:40,color:'#0000ff',opacity:.7,strokeEnabled:true,strokeColor:'#0000ff',strokeWidth:2,shadowEnabled:false};
+ const paints=render(caption([word('past',0,.3),word('now',.5,.9),word('next',1.1,1.5)]),.7,s);
+ const [past,now,next]=texts(paints);assert.equal(past.text,'PAST');assert.match(past.font,/52px/);assert.match(now.font,/italic.*80px/);assert.match(next.font,/40px "Next"/);assert.equal(next.fill,'#0000ff');
+ assert.equal(now.shadow,'rgba(0,255,0,0.6)');assert.equal(next.shadow,'transparent');
+ assert.deepEqual(paints.filter(p=>p.kind==='stroke').map(p=>[p.text,p.stroke,p.lineWidth]),[['PAST','rgba(255,0,0,0.5)',8],['next','rgba(0,0,255,1)',4]]);
+});
 
 test('active word has exact half-open boundaries and remains spoken through a pause',()=>{
   const w=word('hello',1,1.4);
@@ -152,7 +162,7 @@ test('transcripts split at sentence punctuation, pauses and limits without capti
   ]]));
   assert.deepEqual(parsed.map(c=>c.text),['Dr. Smith speaks.','Then waits','Again now!']);
   validateCaptions(parsed);
-  const limited=parseTranscript(transcript([Array.from({length:7},(_,i)=>sourceWord(`w${i}`,i*.3))]),2);
+  const limited=parseTranscript(transcript([Array.from({length:7},(_,i)=>sourceWord(`w${i}`,i*.3))]),5);
   assert.deepEqual(limited.map(c=>c.words.length),[2,2,2,1]);validateCaptions(limited);
   for(let i=0;i<limited.length-1;i++)assert.equal(getCaptionAtTime(limited,limited[i+1].startTime),limited[i+1]);
 });
@@ -178,7 +188,7 @@ test('punctuation stays with its segment and opening quotes are retained',()=>{
 test('transcript sentence flags and readable character/duration limits split caption blocks',()=>{
   const first=sourceWord('without punctuation',0);first.eos=true;
   assert.deepEqual(parseTranscript(transcript([[first,sourceWord('new sentence',.3)]])).map(c=>c.text),['without punctuation','new sentence']);
-  const chars=groupCaptionWords([word('long',0,.3),word('enough',.4,.7),word('sentence',.8,1.1)],6,12);
+  const chars=groupCaptionWords([word('long',0,.3),word('enough',.4,.7),word('sentence',.8,1.1)],12);
   assert.deepEqual(chars.map(c=>c.text),['long enough','sentence']);validateCaptions(chars);
   const duration=groupCaptionWords([word('slow',0,3),word('speech',3.1,6.2)]);
   assert.deepEqual(duration.map(c=>c.text),['slow','speech']);validateCaptions(duration);

@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url), ts = require('../webview-ui/node_modules/typescript');
+const platform = require('../cep/platform.cjs');
 const source = fs.readFileSync(new URL('../cep/service.ts', import.meta.url), 'utf8');
 function loadService() {
   const exports = {}, code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
@@ -15,7 +16,7 @@ function loadService() {
 }
 const service = loadService();
 const request = (action = 'getFonts', args = []) => ({ version: 1, id: crypto.randomBytes(16).toString('hex'), createdAt: Date.now(), sequenceId: 'seq-a', projectPath: '/project/test.prproj', action, args });
-function options(t, api) { const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'better-captions-service-'))); t.after(() => fs.rmSync(temporary, { recursive: true, force: true })); return { api, fs, path, os, crypto, process, root: path.join(temporary, 'service'), intervalMs: 60000 }; }
+function options(t, api) { const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'better-captions-service-'))); t.after(() => fs.rmSync(temporary, { recursive: true, force: true })); return { api, fs, path, os, crypto, process, platform, root: path.join(temporary, 'service'), intervalMs: 60000 }; }
 function writeRequest(root, data) { const file = path.join(root, 'requests', data.id + '.json'); fs.writeFileSync(file, JSON.stringify(data)); return file; }
 const info = async id => ({ id, projectPath: '/project/test.prproj' });
 
@@ -27,11 +28,51 @@ test('service rejects arbitrary execution actions, stale timestamps and malforme
   const invalidTime = request(); delete invalidTime.createdAt; assert.throws(() => service.validateServiceRequest(invalidTime, invalidTime.id + '.json'), /expired/);
   const invalidArgs = request('beginCaption', ['caption', 'injected-sequence']); assert.throws(() => service.validateServiceRequest(invalidArgs, invalidArgs.id + '.json'), /arguments/);
 });
+
+test('service accepts Windows drive paths while rejecting relative, network and traversal paths', () => {
+  for(const projectPath of ['C:\\Project Data\\edit.prproj','D:/Café/edit.prproj','/Users/editor/edit.prproj']) { const data={...request(),projectPath};assert.equal(service.validateServiceRequest(data,data.id+'.json').projectPath,projectPath); }
+  for(const projectPath of ['C:edit.prproj','relative','\\\\server\\share\\edit.prproj','//server/edit.prproj','C:/folder/../edit.prproj','/a/./edit.prproj']) { const data={...request(),projectPath};assert.throws(()=>service.validateServiceRequest(data,data.id+'.json'),/Invalid captured/); }
+});
 test('service inserts captured sequence identity and preserves previous-caption arguments', async () => {
   const calls = [], api = { getActiveSequenceInfo: info, applyCaptionClips: (...args) => calls.push(args) };
   const data = request('applyCaptionClips', [[{ id: 'cue' }], 2, [{ id: 'old' }]]);
   await service.dispatchServiceRequest(api, data);
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[[{ id: 'cue' }], 2, 'seq-a', [{ id: 'old' }]]]);
+});
+test('track preparation uses the captured identity and automatic sentinel without accepting another sequence argument', async () => {
+  const calls=[],api={getActiveSequenceInfo:info,prepareCaptionTrack:(...args)=>calls.push(args)},captions=[{id:'bundle'}],previous=[{id:'old'}];
+  const data=request('prepareCaptionTrack',[captions,-1,previous]);
+  assert.equal(service.validateServiceRequest(data,data.id+'.json').action,'prepareCaptionTrack');
+  await service.dispatchServiceRequest(api,data);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)),[[captions,-1,'seq-a',previous]]);
+  const injected=request('prepareCaptionTrack',[captions,-1,previous,'other-sequence']);
+  assert.throws(()=>service.validateServiceRequest(injected,injected.id+'.json'),/arguments/);
+  const stale={...data,projectPath:'/different.prproj'};
+  await assert.rejects(service.dispatchServiceRequest(api,stale),/changed/);assert.equal(calls.length,1);
+});
+
+test('legacy conversion service endpoints preserve the captured sequence and bounded argument contracts',async()=>{
+ const old=[{id:'old-a'},{id:'old-b'}],caption={id:'bundle'},plan={version:1,signature:'native-proof'},calls=[];
+ const examples=[['readCaptionConsolidation',[old]],['stageCaptionConsolidation',[caption,2,old,plan]],['verifyCaptionConsolidation',[caption,old,plan]],['rollbackCaptionConsolidation',[caption,old,plan]]];
+ const api={getActiveSequenceInfo:info,...Object.fromEntries(examples.map(([name])=>[name,(...args)=>calls.push([name,...args])]))};
+ for(const [action,args] of examples){
+  const data=request(action,args);service.validateServiceRequest(data,data.id+'.json');await service.dispatchServiceRequest(api,data);
+  assert.deepEqual(calls.at(-1),[action,...args,'seq-a']);
+  const injected=request(action,[...args,'other-sequence']);assert.throws(()=>service.validateServiceRequest(injected,injected.id+'.json'),/arguments/);
+  await assert.rejects(service.dispatchServiceRequest(api,{...data,projectPath:'/other.prproj'}),/changed/);
+ }
+ assert.equal(calls.length,4);
+ for(const action of ['readCaptionConsolidation','verifyCaptionConsolidation']){const data=request(action,examples.find(([name])=>name===action)[1]);data.expiresAt=data.createdAt+11000;assert.throws(()=>service.validateServiceRequest(data,data.id+'.json'),/expired/);}
+});
+test('deletion receipts cross fixed service endpoints without becoming injected sequence arguments',async()=>{
+ const captions=[{id:'bundle'}],previous=[{id:'before'}],deleted=[{id:'bundle',clipNodeId:'old-node',projectItemId:'old-item',mediaPath:'/generated/old.mov'}],calls=[];
+ const api={getActiveSequenceInfo:info,...Object.fromEntries(['preflightCaptionClips','prepareCaptionTrack','applyCaptionClips'].map(name=>[name,(...args)=>calls.push([name,...args])]))};
+ for(const action of ['preflightCaptionClips','prepareCaptionTrack','applyCaptionClips']){
+  const args=action==='preflightCaptionClips'?[captions,-1,deleted]:[captions,-1,previous,deleted],data=request(action,args);service.validateServiceRequest(data,data.id+'.json');await service.dispatchServiceRequest(api,data);
+  assert.deepEqual(calls.at(-1),[action,captions,-1,'seq-a',...(action==='preflightCaptionClips'?[]:[previous]),deleted]);
+  for(const injected of ['other-sequence',{},null]){const bad=request(action,[...args.slice(0,-1),injected]);assert.throws(()=>service.validateServiceRequest(bad,bad.id+'.json'),/arguments/);}
+  const extra=request(action,[...args,'other-sequence']);assert.throws(()=>service.validateServiceRequest(extra,extra.id+'.json'),/arguments/);
+ }
 });
 test('text-box rendering and selection use captured identity without accepting a caller-supplied sequence', async () => {
   const calls = [], caption = { id: 'cue', clipNodeId: 'node', projectItemId: 'item', mediaPath: '/generated/caption.mov' };
@@ -69,11 +110,11 @@ test('queue claims requests atomically and writes matching private responses', a
   release(); await running; assert.equal(calls, 1);
   const output = path.join(worker.root, 'responses', data.id + '.json'), result = JSON.parse(fs.readFileSync(output, 'utf8'));
   assert.equal(result.id, data.id); assert.equal(result.sequenceId, 'seq-a'); assert.equal(result.projectPath, '/project/test.prproj'); assert.deepEqual(result.result, ['Arial']);
-  assert.equal(fs.statSync(output).mode & 0o777, 0o600); assert.equal(fs.statSync(worker.root).mode & 0o777, 0o700);
+  if (process.platform !== 'win32') { assert.equal(fs.statSync(output).mode & 0o777, 0o600); assert.equal(fs.statSync(worker.root).mode & 0o777, 0o700); }
   writeRequest(worker.root, data); await worker.poll(); assert.equal(calls, 1, 'replay uses completed response without executing again');
 });
 test('symbolic-link queue roots are rejected', t => {
-  const configuration = options(t, {}), target = path.join(path.dirname(configuration.root), 'elsewhere'); fs.mkdirSync(target); fs.symlinkSync(target, configuration.root);
+  const configuration = options(t, {}), target = path.join(path.dirname(configuration.root), 'elsewhere'); fs.mkdirSync(target); fs.symlinkSync(target, configuration.root, process.platform === 'win32' ? 'junction' : 'dir');
   assert.throws(() => service.startBackendService(configuration), /real private directory/);
 });
 test('an expired queued read is discarded before any native context or geometry call',async t=>{
@@ -113,4 +154,16 @@ test('geometry and opt-in diagnostics preserve captured sequence identity and re
   assert.deepEqual(JSON.parse(JSON.stringify(calls)),[['geometry',[{id:'cue'}],'seq-a'],['motion',[{id:'cue'}],'seq-a',{includeDiagnostics:true}]]);
   const data=request('readCaptionGeometry',[[]]);data.expiresAt=data.createdAt+11000;
   assert.throws(()=>service.validateServiceRequest(data,data.id+'.json'),/expired before execution/);
+});
+
+test('existing-key patch transport preserves bounded payload and inserts only the captured sequence identity', async () => {
+  const caption = { id: 'cue', clipNodeId: 'node', projectItemId: 'item', mediaPath: '/caption.mov' };
+  const patch = { version: 1, descriptor: { nativeMotion: {} }, updates: [{ property: 'width', ticks: '0', expectedValue: 100, value: 65 }] };
+  const calls = [], api = { getActiveSequenceInfo: info, patchCaptionKeyValues: (...args) => { calls.push(args); return { ok: true }; } };
+  const data = request('patchCaptionKeyValues', [caption, patch]);
+  assert.equal(service.validateServiceRequest(data, data.id + '.json').action, 'patchCaptionKeyValues');
+  await service.dispatchServiceRequest(api, data);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[caption, patch, 'seq-a']]);
+  const injected = request('patchCaptionKeyValues', [caption, patch, 'other-sequence']);
+  assert.throws(() => service.validateServiceRequest(injected, injected.id + '.json'), /arguments/);
 });

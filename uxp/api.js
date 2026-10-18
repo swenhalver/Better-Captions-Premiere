@@ -3,16 +3,21 @@ const ppro = require('premierepro');
 const fs = require('uxp').storage.localFileSystem;
 const { ensureFolder, privateRoot, readJSON, writeJSON, randomId } = require('./storage.js');
 const native = require('./transcript.js');
+const { localPath, parentPath } = require('./paths.js');
 const key = id => String(id).replace(/[{}]/g, '').toLowerCase();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
-const READ_METHODS = new Set(['getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection']);
-const SERVICE_READS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection']);
+const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation']);
+const SERVICE_READS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 
 function createHostAPI(options = {}) {
   const contexts = new Map();
+  let presetStore;
+  function presets() { return presetStore ?? (presetStore = require('./style-presets.js').createPresetStore({ getFolder: () => fs.getDataFolder(), readJSON, writeJSON })); }
   let currentId = '';
   const readTimeout = options.readTimeoutMs ?? 12000;
+  const startupGrace = Math.min(5000, Math.max(0, Number.isFinite(options.serviceStartupGraceMs) ? options.serviceStartupGraceMs : 5000));
+  const startupPoll = Math.min(250, Math.max(1, Number.isFinite(options.serviceStartupPollMs) ? options.serviceStartupPollMs : 150));
   const waiting = [];
   let active = null, unresolved = null, disposed = false;
   function drain() {
@@ -28,9 +33,9 @@ function createHostAPI(options = {}) {
     if (disposed) return Promise.reject(new Error('The Better Captions plugin is closed.'));
     if (unresolved) return Promise.reject(new Error('A previous Premiere read has not finished. Native requests are paused until it returns; the timeout did not cancel that operation.'));
     if (waiting.length >= 8) return Promise.reject(new Error('Better Captions is busy. Wait for the current operation before requesting more native work.'));
-    const timeout = READ_METHODS.has(method) ? readTimeout : method === 'transcribeSequence' ? 60 * 60 * 1000 : method === 'finishCaption' || method === 'applyCaptionClips' ? 30 * 60 * 1000 : 60000;
+    const timeout = READ_METHODS.has(method) ? readTimeout : method === 'transcribeSequence' ? 60 * 60 * 1000 : ['finishCaption','applyCaptionClips','applyConsolidatedCaption'].includes(method) ? 30 * 60 * 1000 : 60000;
     return new Promise((resolve, reject) => {
-      const job = { run, resolve, reject, timer: null };
+      const job = { run, resolve, reject, timer: null, deadline: Date.now() + timeout };
       job.timer = setTimeout(() => {
         if (active === job) {
           unresolved = job;
@@ -60,15 +65,36 @@ function createHostAPI(options = {}) {
   }
   async function sessionFolder(id) {
     const context = captured(id);
-    if (!context.projectPath || !context.projectPath.startsWith('/')) throw new Error('Save the Premiere project first so caption assets have a permanent home.');
-    return ensureFolder(context.projectPath.replace(/\/[^/]+$/, '') + '/Better Captions/' + context.id);
+    let parent;
+    try { parent = parentPath(localPath(context.projectPath)); } catch {}
+    if (!parent) throw new Error('Save the Premiere project first so caption assets have a permanent home.');
+    return ensureFolder(parent.replace(/\/$/, '') + '/Better Captions/' + context.id);
   }
   async function requireService(root, action) {
-    let status;
-    try { status = await readJSON(await root.getEntry('service.json'), 16384); } catch {}
-    const age = Date.now() - status?.updatedAt;
-    if (!record(status) || status.version !== 1 || !/^[a-f0-9]{24}$/.test(status.instanceId) || !Number.isFinite(status.updatedAt) || age < -5000 || age > 10000 || !Array.isArray(status.actions) || !status.actions.includes(action)) {
-      throw new Error('The Better Captions background renderer is unavailable or out of date. Save your work, restart Premiere, then reopen Better Captions to start it.');
+    const unavailable = () => new Error('The Better Captions background renderer is unavailable or out of date. Save your work, restart Premiere, then reopen Better Captions to start it.');
+    // Startup checks read only the private heartbeat. Leave time for the serial
+    // deadline to reject a missing renderer normally, before any request exists.
+    const reserve = Math.min(1000, Math.max(0, readTimeout / 2));
+    const grace = Math.max(0, Math.min(startupGrace, (active?.deadline ?? Date.now() + readTimeout) - Date.now() - reserve));
+    const deadline = Date.now() + grace;
+    let remaining = grace;
+    while (true) {
+      if (disposed) throw new Error('The Better Captions plugin was closed.');
+      let status;
+      try { status = await readJSON(await root.getEntry('service.json'), 16384); } catch {}
+      if (disposed) throw new Error('The Better Captions plugin was closed.');
+      const age = Date.now() - status?.updatedAt;
+      const fresh = record(status) && Number.isFinite(status.updatedAt) && age >= -5000 && age <= 10000;
+      if (fresh) {
+        if (status.version !== 1 || !/^[a-f0-9]{24}$/.test(status.instanceId) || !Array.isArray(status.actions) || !status.actions.includes(action)) throw unavailable();
+        return;
+      }
+      remaining = Math.min(remaining, deadline - Date.now());
+      if (remaining <= 0) throw unavailable();
+      const wait = Math.min(startupPoll, remaining);
+      await sleep(wait);
+      // A wall-clock adjustment cannot extend the bounded startup grace.
+      remaining -= wait;
     }
   }
   async function backend(action, args, sequenceId = currentId) {
@@ -102,6 +128,17 @@ function createHostAPI(options = {}) {
       for (const file of [input, output]) if (file) try { await file.delete(); } catch {}
     }
   }
+  async function captionDestination(captions, track, id, previous, deletedLinks = []) {
+    if(track!==-1 || !captions.some(caption=>!caption.clipNodeId))return track;
+    const prepared=await backend('prepareCaptionTrack',[captions,track,previous,...(deletedLinks.length?[deletedLinks]:[])],id),context=captured(id);
+    if(!record(prepared) || prepared.ok!==true || !record(prepared.destination) || prepared.sequenceId!==context.id || prepared.projectPath!==context.projectPath)throw new Error('Premiere could not confirm the automatic caption track for this project and sequence.');
+    if(prepared.destination.mode==='create'){
+      const {project,sequence}=await sequenceContext(id);
+      return require('./caption-track.js').createCaptionTrack(ppro,project,sequence,prepared);
+    }
+    if(prepared.destination.mode==='reuse' && Number.isInteger(prepared.destination.trackIndex) && prepared.destination.trackIndex>=0)return prepared.destination.trackIndex;
+    throw new Error('Premiere did not confirm a safe automatic caption track.');
+  }
   const nativeAPI = {
     isDemo: false,
     async getActiveSequenceInfo() {
@@ -125,6 +162,8 @@ function createHostAPI(options = {}) {
       contexts.set(id, info); currentId = id;
       return info;
     },
+    async loadStylePresets() { return presets().load(); },
+    async saveStylePresets(library) { return presets().save(library); },
     async fetchTranscriptJSON(id = currentId) { const { sequence } = await sequenceContext(id); return native.fetchTranscript(sequence); },
     async transcribeSequence(id = currentId) { const { sequence } = await sequenceContext(id); return native.transcribe(sequence); },
     async loadSession(id = currentId) {
@@ -147,13 +186,64 @@ function createHostAPI(options = {}) {
     async beginCaption(captionId, id) { return backend('beginCaption', [captionId], id); },
     async saveCaptionFrames(folder, frames, start, id) { return backend('saveCaptionFrames', [folder, frames, start], id); },
     async finishCaption(folder, fps, count, id, bounds) { return backend('finishCaption', bounds ? [folder, fps, count, bounds] : [folder, fps, count], id); },
-    async preflightCaptionClips(captions, track, id) { return backend('preflightCaptionClips', [captions, track], id); },
-    async applyCaptionClips(captions, track, id, previous = captions) { return backend('applyCaptionClips', [captions, track, previous], id); },
+    async preflightCaptionClips(captions, track, id, deletedLinks = []) {
+      if(!Array.isArray(deletedLinks))throw new Error('Invalid deleted caption links.');
+      return backend('preflightCaptionClips', [captions, track, ...(deletedLinks.length?[deletedLinks]:[])], id);
+    },
+    async applyCaptionClips(captions, track, id, previous = captions, deletedLinks = []) {
+      if(!Array.isArray(deletedLinks))throw new Error('Invalid deleted caption links.');
+      [captions,previous,deletedLinks]=JSON.parse(JSON.stringify([captions,previous,deletedLinks]));
+      const destination=await captionDestination(captions,track,id,previous,deletedLinks);
+      return backend('applyCaptionClips', [captions, destination, previous, ...(deletedLinks.length?[deletedLinks]:[])], id);
+    },
+    async readCaptionConsolidation(captions,id) { return backend('readCaptionConsolidation',[captions],id); },
+    async applyConsolidatedCaption(caption,previous,plan,id) {
+      // Freeze the identities used by this multi-step native operation. Later
+      // editor changes must not redirect verification or cleanup to other clips.
+      [caption,previous,plan]=JSON.parse(JSON.stringify([caption,previous,plan]));
+      const fresh=await backend('readCaptionConsolidation',[previous],id);
+      if(!plan || JSON.stringify(fresh)!==JSON.stringify(plan))throw new Error('Legacy caption geometry changed while rendering. Apply again.');
+      const destination=await captionDestination([caption],-1,id,[caption]);
+      const result=await backend('stageCaptionConsolidation',[caption,destination,previous,plan],id);
+      if(!result?.ok || result.cues?.length!==1)throw new Error('Premiere did not confirm the combined caption replacement.');
+      const cue=result.cues[0],linked={...caption,clipNodeId:cue.clipNodeId,projectItemId:cue.projectItemId,mediaPath:cue.path,startTime:cue.start,endTime:cue.end};
+      const verify=()=>backend('verifyCaptionConsolidation',[linked,previous,plan],id);
+      try {
+        const {project,sequence}=await sequenceContext(id);
+        await require('./consolidation.js').removeLegacyClips(ppro,project,sequence,plan,verify);
+      } catch (error) {
+        // A host transaction can return an uncertain result after committing.
+        // Preserve the replacement when all originals were actually removed.
+        const status=await verify();
+        if(status?.ok && status.complete===true)return result;
+        if(status?.ok && status.complete===false){
+          await backend('rollbackCaptionConsolidation',[linked,previous,plan],id);
+          throw new Error(String(error.message||error)+' Original clips were preserved.');
+        }
+        throw error;
+      }
+      return result;
+    },
     async readTimeline(captions, id = currentId) { return backend('readTimeline', [captions], id); },
     async selectCaptionClip(caption, id = currentId) { return backend('selectCaptionClip', [caption], id); },
     async readCaptionMotion(captions, id = currentId, options) { return backend('readCaptionMotion', options?.includeDiagnostics === true ? [captions, { includeDiagnostics: true }] : [captions], id); },
     async readCaptionGeometry(captions, id = currentId) { return backend('readCaptionGeometry', [captions], id); },
     async readCaptionSelection(captions, id = currentId) { return backend('readCaptionSelection', [captions], id); },
+    async readCaptionArea(caption,id=currentId,frame=0) {
+      const link={id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,...(caption.captionBundle===true?{captionBundle:true}:{}),renderBounds:caption.renderBounds?JSON.parse(JSON.stringify(caption.renderBounds)):undefined};
+      const revalidate=()=>backend('readCaptionAreaDescriptor',[link],id);
+      const descriptor=await revalidate(), {sequence}=await sequenceContext(id);
+      return require('./text-area.js').readArea(ppro,sequence,descriptor,frame,revalidate);
+    },
+    async editCaptionArea(caption,id=currentId,request) {
+      const link={id:caption.id,clipNodeId:caption.clipNodeId,projectItemId:caption.projectItemId,mediaPath:caption.mediaPath,...(caption.captionBundle===true?{captionBundle:true}:{}),renderBounds:caption.renderBounds?JSON.parse(JSON.stringify(caption.renderBounds)):undefined};
+      const revalidate=()=>backend('readCaptionAreaDescriptor',[link],id);
+      const descriptor=await revalidate(), {project,sequence}=await sequenceContext(id);
+      // Call the internal backend directly while this native lane is occupied.
+      // Re-entering the public serialized API here would deadlock the edit.
+      const patchKeyValues=patch=>backend('patchCaptionKeyValues',[link,patch],id);
+      return require('./text-area.js').editArea(ppro,project,sequence,descriptor,request,revalidate,{patchKeyValues});
+    },
     async getColorScheme() { return { theme: 'darkest', colors: {} }; },
     async startAgentBridge(proxy) { return require('./agent.js').startAgentBridge(proxy); },
   };
@@ -163,7 +253,7 @@ function createHostAPI(options = {}) {
       // Resolve implicit identities when requested, before a queued refresh
       // can change currentId. File saves already carry their own identity.
       if (['fetchTranscriptJSON', 'transcribeSequence', 'loadSession'].includes(method) && args[0] === undefined) args[0] = currentId;
-      if (['showInPremiere', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'selectCaptionClip'].includes(method) && args[1] === undefined) args[1] = currentId;
+      if (['showInPremiere', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'selectCaptionClip', 'readCaptionArea', 'editCaptionArea'].includes(method) && args[1] === undefined) args[1] = currentId;
       return serial(method, () => nativeAPI[method](...args));
     };
   }

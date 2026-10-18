@@ -141,15 +141,79 @@ var BetterCaptionsHost = (function () {
         return findClip(s, node, 2000);
     }
     function referenceCount(itemId) {
-        var count = 0, seqs = app.project.sequences;
+        var count = 0, inspected = 0, seqs = app.project.sequences;
+        if (seqs.numSequences > 256) throw new Error('This project is too large to verify caption media references.');
         for (var s = 0; s < seqs.numSequences; s++) {
             var sets = [seqs[s].videoTracks, seqs[s].audioTracks];
+            if (sets[0].numTracks > 256 || sets[1].numTracks > 256) throw new Error('This project has too many tracks to verify caption media references.');
             for (var k = 0; k < sets.length; k++) for (var t = 0; t < sets[k].numTracks; t++) for (var c = 0; c < sets[k][t].clips.numItems; c++) {
+                if (++inspected > 2000) throw new Error('This project is too large to verify caption media references automatically.');
                 var item = sets[k][t].clips[c].projectItem;
                 if (item && String(item.nodeId) === String(itemId)) count++;
             }
         }
         return count;
+    }
+    function fragmentReceipt(parts) {
+        var out = [];
+        for (var i = 0; i < parts.length; i++) {
+            var c = parts[i].clip;
+            out.push({ clipNodeId: String(c.nodeId), track: parts[i].track, startTicks: String(c.start.ticks), endTicks: String(c.end.ticks), inTicks: String(c.inPoint.ticks), outTicks: String(c.outPoint.ticks) });
+        }
+        return out;
+    }
+    function captionFragments(s, caption, path, found) {
+        if (caption.captionBundle !== true) return null;
+        var parts = [], inspected = 0, seqs = app.project.sequences;
+        if (seqs.numSequences > 256) throw new Error('This project is too large to verify native caption splits safely.');
+        for (var q = 0; q < seqs.numSequences; q++) {
+            var sets = [seqs[q].videoTracks, seqs[q].audioTracks];
+            for (var g = 0; g < sets.length; g++) {
+                if (sets[g].numTracks > 256) throw new Error('This project has too many tracks to verify native caption splits safely.');
+                for (var t = 0; t < sets[g].numTracks; t++) for (var i = 0; i < sets[g][t].clips.numItems; i++) {
+                    if (++inspected > 2000) throw new Error('This project is too large to verify native caption splits automatically.');
+                    var clip = sets[g][t].clips[i];
+                    if (!clip.projectItem || !sameNode(clip.projectItem.nodeId, found.clip.projectItem.nodeId)) continue;
+                    if (g !== 0 || !sameNode(seqs[q].sequenceID, s.sequenceID) || clip.projectItem.getMediaPath() !== path) throw new Error('Caption bundle media is used outside its native video splits. Make the other copy independent before updating captions.');
+                    if (parts.length >= 64) throw new Error('A caption bundle supports at most 64 native split fragments.');
+                    parts.push({ clip: clip, track: t });
+                }
+            }
+        }
+        if (!parts.length) throw new Error('The caption bundle timeline link changed.');
+        if (parts.length === 1) return null;
+        parts.sort(function (a, b) { return Number(a.clip.start.ticks) - Number(b.clip.start.ticks); });
+        for (var n = 0; n < parts.length; n++) {
+            var c = parts[n].clip, start = Number(c.start.ticks), end = Number(c.end.ticks), sourceIn = Number(c.inPoint.ticks), sourceOut = Number(c.outPoint.ticks);
+            assertNormalSpeed(c);
+            var clocks = [start, end, sourceIn, sourceOut], tpf = Number(s.timebase);
+            for (var clock = 0; clock < clocks.length; clock++) if (!isFinite(clocks[clock]) || Math.abs(clocks[clock] - Math.round(clocks[clock] / tpf) * tpf) > 2) throw new Error('Native caption split boundaries must align to sequence video frames.');
+            if (!isFinite(start) || !isFinite(end) || !isFinite(sourceIn) || !isFinite(sourceOut) || start < 0 || sourceIn < 0 || end <= start || Math.abs(sourceOut - sourceIn - (end - start)) > 2
+                || parts[n].track !== parts[0].track || n === 0 && Math.abs(sourceIn) > 2
+                || n > 0 && (Math.abs(start - Number(parts[n - 1].clip.end.ticks)) > 2 || Math.abs(sourceIn - Number(parts[n - 1].clip.outPoint.ticks)) > 2)) {
+                throw new Error('Caption bundle fragments must stay in their original source order with contiguous timeline and source timing. Reordered, duplicated, trimmed or moved splits are protected.');
+            }
+        }
+        return parts;
+    }
+    function assertFragmentRange(parts, firstFrame, count, tpf) {
+        if (Math.abs(Number(parts[0].clip.start.ticks) - firstFrame * tpf) > 2 || Math.abs(Number(parts[parts.length - 1].clip.end.ticks) - (firstFrame + count) * tpf) > 2) throw new Error('Keep the native split caption bundle timing unchanged. Sync timing from Premiere before applying.');
+    }
+    function verifyBundleReferences(s, entry) {
+        if (!entry.bundleReceipt) return;
+        var found = findClip(s, entry.cue.clipNodeId);
+        if (!found || !sameNode(found.clip.projectItem.nodeId, entry.item.nodeId) || found.clip.projectItem.getMediaPath() !== entry.cue.path) throw new Error('The caption bundle link changed while refreshing media.');
+        var parts = captionFragments(s, entry.cue, entry.cue.path, found) || [found];
+        if (stringify(fragmentReceipt(parts)) !== stringify(entry.bundleReceipt)) throw new Error('Native caption splits or references changed while refreshing media.');
+    }
+    function preferredFragment(s, parts, fallback) {
+        var current = Number(s.getPlayerPosition().ticks), selected = null, selectedCount = 0, at = null;
+        for (var i = 0; i < parts.length; i++) {
+            var c = parts[i].clip;
+            if (typeof c.isSelected === 'function' && c.isSelected()) { selected = parts[i]; selectedCount++; }
+            if (current >= Number(c.start.ticks) && current < Number(c.end.ticks)) at = parts[i];
+        }
+        return selectedCount === 1 ? selected : at || fallback;
     }
     function readPayload(file) {
         var f = new File(file); f.encoding = 'UTF-8';
@@ -199,6 +263,8 @@ var BetterCaptionsHost = (function () {
             s = sequence(p.sequenceId, p.projectPath);
             var found = findClip(s, caption.clipNodeId);
             if (!found || !sameNode(found.clip.projectItem.nodeId, caption.projectItemId) || found.clip.projectItem.getMediaPath() !== caption.mediaPath) throw new Error('The caption timeline link changed. Sync timing from Premiere before selecting it.');
+            var fragments = captionFragments(s, caption, caption.mediaPath, found);
+            if (fragments) found = preferredFragment(s, fragments, found);
             var track = s.videoTracks[found.track], clip = found.clip;
             if (track.isLocked()) throw new Error('Unlock video track ' + (found.track + 1) + ' to move or resize this caption.');
             if (typeof track.isMuted === 'function' && track.isMuted()) throw new Error('Enable video track ' + (found.track + 1) + ' output to see this caption in the Program Monitor.');
@@ -225,7 +291,7 @@ var BetterCaptionsHost = (function () {
         try {
             var p = readPayload(file);
             if (!p.sequenceId || !p.projectPath || !p.cues || p.cues.length > 10000) throw new Error('Invalid caption selection request.');
-            var s = sequence(p.sequenceId, p.projectPath), selected = null, count = 0, captionId = null;
+            var s = sequence(p.sequenceId, p.projectPath), selected = null, count = 0, captionId = null, logicalNode = null;
             var nativeSelection = null, nativeUsable = false;
             try {
                 if (typeof s.getSelection === 'function') {
@@ -252,29 +318,40 @@ var BetterCaptionsHost = (function () {
             }
             if (count === 1) for (var i = 0; i < p.cues.length; i++) {
                 var cue = p.cues[i];
-                if (cue.id && cue.clipNodeId && cue.projectItemId && cue.mediaPath && sameNode(cue.clipNodeId, selected.nodeId) && sameNode(cue.projectItemId, selected.projectItem.nodeId) && cue.mediaPath === selected.projectItem.getMediaPath()) {
-                    if (captionId !== null) { captionId = null; break; }
-                    captionId = cue.id;
+                var matches = cue.id && cue.clipNodeId && cue.projectItemId && cue.mediaPath && sameNode(cue.projectItemId, selected.projectItem.nodeId) && cue.mediaPath === selected.projectItem.getMediaPath() && sameNode(cue.clipNodeId, selected.nodeId);
+                if (!matches && cue.captionBundle === true && cue.id && cue.clipNodeId && cue.projectItemId && sameNode(cue.projectItemId, selected.projectItem.nodeId) && cue.mediaPath === selected.projectItem.getMediaPath()) {
+                    var canonical = findClip(s, cue.clipNodeId, 2000), fragments = canonical ? captionFragments(s, cue, cue.mediaPath, canonical) : null;
+                    for (var f = 0; fragments && f < fragments.length; f++) if (sameNode(fragments[f].clip.nodeId, selected.nodeId)) matches = true;
+                }
+                if (matches) {
+                    if (captionId !== null) { captionId = null; logicalNode = null; break; }
+                    captionId = cue.id; logicalNode = String(cue.clipNodeId);
                 }
             }
-            return reply({ ok: true, captionId: captionId, clipNodeId: captionId === null ? null : String(selected.nodeId), time: s.getPlayerPosition().seconds });
+            var result = { ok: true, captionId: captionId, clipNodeId: captionId === null ? null : logicalNode, time: s.getPlayerPosition().seconds };
+            if (captionId !== null && !sameNode(logicalNode, selected.nodeId)) result.nativeClipNodeId = String(selected.nodeId);
+            return reply(result);
         } catch (e) { return reply({ error: e.toString() }); }
     }
-    function motionParameters(clip) {
+    function motionParameters(clip, binding) {
         var motion = null;
         for (var i = 0; clip.components && i < clip.components.numItems; i++) {
             var component = clip.components[i];
             if (component.matchName === 'AE.ADBE Motion' || component.matchName === 'ADBE Motion') { motion = component; break; }
         }
         if (!motion) throw new Error('Premiere did not expose the caption Motion controls.');
+        if (binding) {
+            if (motion.properties.numItems < 1 || motion.properties.numItems > 64) throw new Error('Premiere returned an invalid Motion parameter count.');
+            binding.version = 1; binding.componentMatchName = String(motion.matchName); binding.parameterCount = motion.properties.numItems;
+        }
         var out = {};
         for (i = 0; i < motion.properties.numItems; i++) {
             var param = motion.properties[i], name = param.displayName;
             if (name === 'Position') out.position = param;
             else if (name === 'Scale' || name === 'Scale (Height)' || name === 'Scale Height') out.height = param;
-            else if (name === 'Scale Width' || name === 'Scale (Width)') out.width = param;
-            else if (name === 'Uniform Scale') out.uniform = param;
-            else if (name === 'Rotation') out.rotation = param;
+            else if (name === 'Scale Width' || name === 'Scale (Width)') { out.width = param; if (binding) binding.widthIndex = typeof binding.widthIndex === 'number' ? -1 : i; }
+            else if (name === 'Uniform Scale') { out.uniform = param; if (binding) binding.uniformIndex = typeof binding.uniformIndex === 'number' ? -1 : i; }
+            else if (name === 'Rotation') { out.rotation = param; if (binding) binding.rotationIndex = typeof binding.rotationIndex === 'number' ? -1 : i; }
             else if (name === 'Anchor Point') out.anchor = param;
         }
         if (!out.height || !out.width || !out.uniform) throw new Error('Premiere did not expose separate caption width and height controls.');
@@ -339,27 +416,93 @@ var BetterCaptionsHost = (function () {
         }
         return curveSignature({ sourceIn: String(sourceIn), ticksPerFrame: String(tpf), count: count, curves: curves, probes: sampled }).replace('motion-v1-', 'geometry-v1-');
     }
-    function motionProfile(clip, firstFrame, count, tpf) {
+    function controlRevision(clip, firstFrame, count, tpf, params, sizeSignature) {
+        var curve = copyCurve(parameterCurve(params.position, 256), 'position'), probes = [], sourceIn = Number(clip.inPoint.ticks);
+        if (curve.animated) {
+            var times = [], seen = {}, end = sourceIn + count * tpf;
+            function add(ticks) { ticks = Math.round(ticks); if (ticks >= sourceIn && ticks < end && !seen[String(ticks)]) { seen[String(ticks)] = true; times.push(ticks); } }
+            add(sourceIn + tpf / 2); add(end - tpf / 2); add(sourceIn + count * tpf / 2);
+            for (var i = 0; i + 1 < curve.keys.length; i++) {
+                var lo = Math.max(sourceIn, Number(curve.keys[i].ticks)), hi = Math.min(end, Number(curve.keys[i + 1].ticks));
+                if (hi > lo) { add(lo + (hi - lo) / 4); add(lo + (hi - lo) / 2); add(lo + 3 * (hi - lo) / 4); }
+            }
+            times.sort(function (a, b) { return a - b; });
+            var limit = Math.min(24, times.length);
+            for (var n = 0; n < limit; n++) { var at = times.length <= limit ? times[n] : times[Math.round(n * (times.length - 1) / (limit - 1))]; probes.push({ ticks: String(at), value: motionValue(params.position.getValueAtTime(ticksTime(at)), 'position') }); }
+        }
+        return curveSignature({ size: sizeSignature, position: curve, probes: probes }).replace('motion-v1-', 'controls-v1-');
+    }
+    function motionPhase(trace, phase, frame) {
+        if (trace) { trace.phase = phase; trace.frame = typeof frame === 'number' ? frame : null; }
+    }
+    function motionProfile(clip, firstFrame, count, tpf, trace) {
+        motionPhase(trace, 'Motion playback speed');
         assertNormalSpeed(clip);
-        var params = motionParameters(clip), height = copyCurve(parameterCurve(params.height), 'height'), width = copyCurve(parameterCurve(params.width), 'width'), uniform = copyCurve(parameterCurve(params.uniform), 'uniform'), samples = [], values = [], fps = TICKS / tpf;
+        motionPhase(trace, 'Motion parameters');
+        var params = motionParameters(clip);
+        motionPhase(trace, 'height curve');
+        var height = copyCurve(parameterCurve(params.height), 'height');
+        motionPhase(trace, 'width curve');
+        var width = copyCurve(parameterCurve(params.width), 'width');
+        motionPhase(trace, 'Uniform Scale curve');
+        var uniform = copyCurve(parameterCurve(params.uniform), 'uniform'), samples = [], values = [], fps = TICKS / tpf;
+        motionPhase(trace, 'Motion source timing');
         var sourceIn = Number(clip.inPoint.ticks);
         if (!isFinite(sourceIn) || sourceIn < 0) throw new Error('The caption has an invalid source in point.');
         for (var frame = 0; frame < count; frame++) {
             // Effect keys use the clip's source clock, independent of its
             // position on the sequence or the current playhead.
+            motionPhase(trace, 'Motion sample time', frame);
             var at = height.animated || width.animated || uniform.animated ? ticksTime(Math.round(sourceIn + (frame + 0.5) * tpf)) : null;
-            var locked = parameterAt(params.uniform, uniform, at), sy = Number(parameterAt(params.height, height, at)) / 100;
+            motionPhase(trace, 'Uniform Scale sample', frame);
+            var locked = parameterAt(params.uniform, uniform, at);
+            motionPhase(trace, 'height sample', frame);
+            var sy = Number(parameterAt(params.height, height, at)) / 100;
             if (!(locked === true || locked === false || locked === 0 || locked === 1)) throw new Error('Premiere returned an invalid Uniform Scale value.');
+            motionPhase(trace, 'width sample', frame);
             var sx = locked ? sy : Number(parameterAt(params.width, width, at)) / 100;
             if (!isFinite(sx) || !isFinite(sy) || sx < 0.01 || sy < 0.01 || sx > 100 || sy > 100) throw new Error('Caption box width and height must remain between 1% and 10000%.');
             samples.push({ time: (firstFrame + frame + 0.5) / fps, scaleX: sx, scaleY: sy }); values.push([sx, sy]);
         }
         // ExtendScript has no interpolation-mode getter. Evaluating every
         // output frame captures interpolation changes affecting the video.
+        motionPhase(trace, 'Motion profile signature');
         var profile = { signature: curveSignature({ sourceIn: String(sourceIn), count: count, height: height, width: width, uniform: uniform, values: values }), samples: samples };
         try { profile.watchSignature = geometrySignature(clip, firstFrame, count, tpf, params, { height: height, width: width, uniform: uniform }); }
         catch (watchError) { profile.watchError = watchError.toString().slice(0, 300); }
         return profile;
+    }
+    function fragmentGeometry(parts, tpf) {
+        var sizes = [], controls = [], keys = 0;
+        for (var i = 0; i < parts.length; i++) {
+            var clip = parts[i].clip, params = motionParameters(clip), first = Math.round(Number(clip.start.ticks) / tpf), count = Math.round((Number(clip.end.ticks) - Number(clip.start.ticks)) / tpf);
+            // One aggregate key budget bounds automatic polling even after
+            // a user makes many Razor cuts of a keyed caption asset.
+            var names = ['height', 'width', 'uniform', 'position'];
+            for (var k = 0; k < names.length; k++) if (params[names[k]].isTimeVarying()) {
+                var nativeKeys = params[names[k]].getKeys(); keys += nativeKeys ? nativeKeys.length : 0;
+                if (keys > 256) throw new Error('This split caption has too many Motion keys for automatic reflow. Use Update Program Monitor.');
+            }
+            var size = geometrySignature(clip, first, count, tpf, params);
+            sizes.push(size); controls.push(controlRevision(clip, first, count, tpf, params, size));
+        }
+        var receipt = fragmentReceipt(parts);
+        return { watchSignature: curveSignature({ fragments: receipt, sizes: sizes }).replace('motion-v1-', 'geometry-bundle-v1-'), controlRevision: curveSignature({ fragments: receipt, controls: controls }).replace('motion-v1-', 'controls-bundle-v1-') };
+    }
+    function fragmentProfile(parts, firstFrame, count, tpf, trace) {
+        assertFragmentRange(parts, firstFrame, count, tpf);
+        var samples = [], signatures = [];
+        for (var i = 0; i < parts.length; i++) {
+            if (trace) trace.fragment = i;
+            var clip = parts[i].clip, first = Math.round(Number(clip.start.ticks) / tpf), frames = Math.round((Number(clip.end.ticks) - Number(clip.start.ticks)) / tpf), profile = motionProfile(clip, first, frames, tpf, trace);
+            signatures.push(profile.signature);
+            for (var frame = 0; frame < profile.samples.length; frame++) samples.push(profile.samples[frame]);
+        }
+        if (samples.length !== count) throw new Error('The native split caption frames do not match their source timing.');
+        var result = { signature: curveSignature({ fragments: fragmentReceipt(parts), profiles: signatures }), samples: samples };
+        try { result.watchSignature = fragmentGeometry(parts, tpf).watchSignature; }
+        catch (watchError) { result.watchError = watchError.toString().slice(0, 300); }
+        return result;
     }
     function readMediaDiagnostics(item, diagnostic) {
         var methods = ['getProjectMetadata', 'getXMPMetadata'], fields = ['projectMetadata', 'xmpMetadata'];
@@ -373,6 +516,19 @@ var BetterCaptionsHost = (function () {
             } catch (e) { diagnostic[fields[i] + 'Error'] = e.toString().slice(0, 300); }
         }
     }
+    function requestedCaptionRange(caption, clip, fragments) {
+        // Keep nullable native fallbacks in explicit branches. Premiere's
+        // ExtendScript evaluator failed on the previous nested conditional
+        // even when the caller supplied numeric start/end values.
+        var start, end;
+        if (typeof caption.startTime === 'number') start = caption.startTime;
+        else if (fragments) start = fragments[0].clip.start.seconds;
+        else start = clip.start.seconds;
+        if (typeof caption.endTime === 'number') end = caption.endTime;
+        else if (fragments) end = fragments[fragments.length - 1].clip.end.seconds;
+        else end = clip.end.seconds;
+        return { start: start, end: end };
+    }
     function readCaptionGeometry(file) {
         try {
             var p = readPayload(file);
@@ -382,35 +538,128 @@ var BetterCaptionsHost = (function () {
             for (var i = 0; i < p.cues.length; i++) {
                 var caption = p.cues[i], found = caption.clipNodeId ? geometryClip(s, caption.clipNodeId) : null;
                 if (!found || !caption.id || !caption.projectItemId || !sameNode(found.clip.projectItem.nodeId, caption.projectItemId) || found.clip.projectItem.getMediaPath() !== caption.mediaPath) throw new Error('The caption timeline link changed. Sync timing from Premiere before reading its box size.');
-                var clip = found.clip;
+                var clip = found.clip, fragments = captionFragments(s, caption, caption.mediaPath, found);
                 assertNormalSpeed(clip);
-                var requestedStart = typeof caption.startTime === 'number' ? caption.startTime : clip.start.seconds, requestedEnd = typeof caption.endTime === 'number' ? caption.endTime : clip.end.seconds;
+                var requested = requestedCaptionRange(caption, clip, fragments), requestedStart = requested.start, requestedEnd = requested.end;
                 if (!isFinite(requestedStart) || !isFinite(requestedEnd) || requestedStart < 0 || requestedEnd <= requestedStart) throw new Error('The caption has invalid box-animation timing.');
                 var firstFrame = Math.floor(requestedStart * fps + 0.0000001), endFrame = Math.ceil(requestedEnd * fps - 0.0000001), count = endFrame - firstFrame;
                 if (count < 1 || count > 100000000) throw new Error('The caption has invalid automatic-reflow timing.');
-                var signature = geometrySignature(clip, firstFrame, count, tpf, motionParameters(clip));
-                out.push({ id: caption.id, clipNodeId: String(clip.nodeId), projectItemId: String(clip.projectItem.nodeId), path: clip.projectItem.getMediaPath(), watchSignature: signature });
+                var params, signature, controls;
+                if (fragments) { assertFragmentRange(fragments, firstFrame, count, tpf); var geometry = fragmentGeometry(fragments, tpf); signature = geometry.watchSignature; controls = geometry.controlRevision; }
+                else { params = motionParameters(clip); signature = geometrySignature(clip, firstFrame, count, tpf, params); controls = controlRevision(clip, firstFrame, count, tpf, params, signature); }
+                out.push({ id: caption.id, clipNodeId: String(clip.nodeId), projectItemId: String(clip.projectItem.nodeId), path: clip.projectItem.getMediaPath(), watchSignature: signature, controlRevision: controls });
             }
             return reply({ ok: true, cues: out });
         } catch (e) { return reply({ error: e.toString() }); }
     }
+    function areaDescriptor(p) {
+        var c = p.cues && p.cues.length === 1 ? p.cues[0] : null;
+        if (!p.sequenceId || !p.projectPath || !c || !c.id || !c.clipNodeId || !c.projectItemId || !c.mediaPath) throw new Error('Apply this caption before editing native keyframes.');
+        var s = sequence(p.sequenceId, p.projectPath), found = findClip(s, c.clipNodeId);
+        if (!found || !sameNode(found.clip.projectItem.nodeId, c.projectItemId) || found.clip.projectItem.getMediaPath() !== c.mediaPath) throw new Error('The caption timeline link changed. Sync timing from Premiere.');
+        var fragments = captionFragments(s, c, c.mediaPath, found);
+        if (fragments) found = preferredFragment(s, fragments, found);
+        var clip = found.clip, track = s.videoTracks[found.track];
+        if (track.isLocked()) throw new Error('Unlock the caption video track before editing its text area.');
+        assertNormalSpeed(clip);
+        var b = renderBounds(c.renderBounds, s), binding = {}, params = motionParameters(clip, binding), uniformAnimated = !!params.uniform.isTimeVarying();
+        binding.uniform = { animated: uniformAnimated, value: uniformAnimated ? null : !!motionValue(params.uniform.getValue(), 'uniform') };
+        var nativeMotion = {}, total = 0;
+        for (var i = 0; i < motionNames.length; i++) {
+            var name = motionNames[i]; nativeMotion[name] = copyCurve(parameterCurve(params[name], 256), name); total += nativeMotion[name].keys.length;
+        }
+        if (total > 1536) throw new Error('The caption has too many Motion keys for a bounded text-area edit.');
+        var descriptor = {ok:true,sequenceId:p.sequenceId,projectPath:p.projectPath,clipNodeId:String(clip.nodeId),projectItemId:String(clip.projectItem.nodeId),path:c.mediaPath,track:found.track,startTicks:String(clip.start.ticks),endTicks:String(clip.end.ticks),inTicks:String(clip.inPoint.ticks),outTicks:String(clip.outPoint.ticks),ticksPerFrame:Number(s.timebase),frameWidth:s.frameSizeHorizontal,frameHeight:s.frameSizeVertical,bounds:b,motionBinding:binding,nativeMotion:nativeMotion};
+        if (fragments) { descriptor.bundleSourceContiguous = true; descriptor.bundleFragments = fragmentReceipt(fragments); }
+        return { clip: clip, params: params, descriptor: descriptor };
+    }
+    function readCaptionAreaDescriptor(file) {
+        try { return reply(areaDescriptor(readPayload(file)).descriptor); }
+        catch (e) { return reply({error:e.toString()}); }
+    }
+    function sameAreaIdentity(expected, actual) {
+        if (!expected || expected.ok !== true) return false;
+        var names = ['sequenceId','projectPath','clipNodeId','projectItemId','path','track','startTicks','endTicks','inTicks','outTicks','ticksPerFrame','frameWidth','frameHeight'];
+        for (var i = 0; i < names.length; i++) if (expected[names[i]] !== actual[names[i]]) return false;
+        return stringify(expected.bounds) === stringify(actual.bounds) && stringify(expected.motionBinding) === stringify(actual.motionBinding) && expected.bundleSourceContiguous === actual.bundleSourceContiguous && stringify(expected.bundleFragments) === stringify(actual.bundleFragments);
+    }
+    function sameMotion(expected, actual) {
+        if (!expected || !actual) return false;
+        for (var i = 0; i < motionNames.length; i++) {
+            var name = motionNames[i], a = expected[name], b = actual[name];
+            if (!a || typeof a.animated !== 'boolean' || !(a.keys instanceof Array) || a.keys.length > 256 || a.animated !== b.animated || a.keys.length !== b.keys.length) return false;
+            if (!a.animated && !sameValue(a.value, b.value) || a.animated && a.value !== null) return false;
+            for (var k = 0; k < a.keys.length; k++) if (!a.keys[k] || typeof a.keys[k].ticks !== 'string' || a.keys[k].ticks !== b.keys[k].ticks || !sameValue(a.keys[k].value, b.keys[k].value)) return false;
+        }
+        return true;
+    }
+    function patchCaptionKeyValues(file) {
+        var attempted = [], before, p, info, rollbackErrors = [];
+        try {
+            p = readPayload(file); var patch = p.patch;
+            if (!patch || patch.version !== 1 || !(patch.updates instanceof Array) || patch.updates.length < 1 || patch.updates.length > 32) throw new Error('Invalid existing-key value patch.');
+            for (var patchKey in patch) if (Object.prototype.hasOwnProperty.call(patch, patchKey) && patchKey !== 'version' && patchKey !== 'descriptor' && patchKey !== 'updates') throw new Error('Unknown existing-key patch property.');
+            info = areaDescriptor(p); before = info.descriptor;
+            if (!sameAreaIdentity(patch.descriptor, before) || !sameMotion(patch.descriptor.nativeMotion, before.nativeMotion)) throw new Error('Motion or the caption timeline identity changed before the key edit. Refresh and try again.');
+            var desired = parseJSON(stringify(before.nativeMotion)), planned = [], seen = {};
+            for (var i = 0; i < patch.updates.length; i++) {
+                var update = patch.updates[i];
+                if (!update || (update.property !== 'position' && update.property !== 'width' && update.property !== 'height') || typeof update.ticks !== 'string' || !/^\d+$/.test(update.ticks) || !isFinite(Number(update.ticks))) throw new Error('Invalid existing-key property or time.');
+                for (var updateKey in update) if (Object.prototype.hasOwnProperty.call(update, updateKey) && updateKey !== 'property' && updateKey !== 'ticks' && updateKey !== 'expectedValue' && updateKey !== 'value') throw new Error('Unknown existing-key update property.');
+                var keyId = update.property + ':' + update.ticks;
+                if (seen[keyId]) throw new Error('Duplicate existing-key update.'); seen[keyId] = true;
+                var curve = desired[update.property], found = null;
+                for (var k = 0; k < curve.keys.length; k++) if (curve.keys[k].ticks === update.ticks) found = curve.keys[k];
+                if (!curve.animated || !found || Number(update.ticks) < Number(before.inTicks) || Number(update.ticks) >= Number(before.outTicks)) throw new Error('Choose an existing key inside this caption. No key was added.');
+                if (!sameValue(found.value, update.expectedValue)) throw new Error('The existing key value changed. Refresh before editing it.');
+                var value = motionValue(update.value, update.property);
+                if (update.property === 'position' && (value[0] < -2 || value[0] > 3 || value[1] < -2 || value[1] > 3)) throw new Error('Caption Position must stay within the supported frame range.');
+                if (typeof info.params[update.property].setValueAtKey !== 'function') throw new Error('Premiere did not expose an in-place key value setter.');
+                planned.push({ property: update.property, ticks: update.ticks, previous: motionValue(found.value, update.property), value: value }); found.value = value;
+            }
+            // Every identity, key and old value is checked before the first write.
+            for (i = 0; i < planned.length; i++) {
+                var entry = planned[i]; attempted.push(entry);
+                var status = info.params[entry.property].setValueAtKey(ticksTime(entry.ticks), entry.value, 1);
+                if (status === false || !sameValue(info.params[entry.property].getValueAtKey(ticksTime(entry.ticks)), entry.value)) throw new Error('Premiere did not keep the existing key value.');
+            }
+            var after = areaDescriptor(p).descriptor;
+            if (!sameAreaIdentity(before, after) || !sameMotion(desired, after.nativeMotion)) throw new Error('Premiere changed another Motion value while applying the key patch.');
+            return reply({ok:true,descriptor:after,updates:planned});
+        } catch (e) {
+            for (var r = attempted.length - 1; r >= 0; r--) try {
+                var old = attempted[r]; info.params[old.property].setValueAtKey(ticksTime(old.ticks), old.previous, 1);
+                if (!sameValue(info.params[old.property].getValueAtKey(ticksTime(old.ticks)), old.previous)) throw new Error('The previous key value was not restored.');
+            } catch (restoreError) { rollbackErrors.push(restoreError.toString()); }
+            if (attempted.length && before) try { var restored = areaDescriptor(p).descriptor; if (!sameAreaIdentity(before, restored) || !sameMotion(before.nativeMotion, restored.nativeMotion)) throw new Error('The original Motion state could not be fully verified.'); } catch (verifyError) { rollbackErrors.push(verifyError.toString()); }
+            return reply({error:e.toString(),rolledBack:rollbackErrors.length===0,rollbackErrors:rollbackErrors,recoveryJob:file});
+        }
+    }
     function readCaptionMotion(file) {
+        var trace = { phase: 'caption job', frame: null, fragment: null };
         try {
             var p = readPayload(file);
             if (!p.sequenceId || !p.projectPath || !p.cues || !p.cues.length || p.cues.length > 10000) throw new Error('Invalid caption Motion request.');
+            trace.phase = 'sequence context';
             var s = sequence(p.sequenceId, p.projectPath), tpf = Number(s.timebase), fps = TICKS / tpf, out = [], totalFrames = 0;
             if (!isFinite(tpf) || tpf <= 0) throw new Error('The sequence has an invalid frame rate.');
             for (var i = 0; i < p.cues.length; i++) {
+                motionPhase(trace, 'caption clip lookup'); trace.fragment = null;
                 var caption = p.cues[i], found = caption.clipNodeId ? findClip(s, caption.clipNodeId) : null;
                 if (!found || !caption.id || !caption.projectItemId || !sameNode(found.clip.projectItem.nodeId, caption.projectItemId) || found.clip.projectItem.getMediaPath() !== caption.mediaPath) throw new Error('The caption timeline link changed. Sync timing from Premiere before reading its box size.');
-                var clip = found.clip;
-                var requestedStart = typeof caption.startTime === 'number' ? caption.startTime : clip.start.seconds, requestedEnd = typeof caption.endTime === 'number' ? caption.endTime : clip.end.seconds;
+                motionPhase(trace, 'caption split references');
+                var clip = found.clip, fragments = captionFragments(s, caption, caption.mediaPath, found);
+                motionPhase(trace, 'caption frame timing');
+                var requested = requestedCaptionRange(caption, clip, fragments), requestedStart = requested.start, requestedEnd = requested.end;
                 if (!isFinite(requestedStart) || !isFinite(requestedEnd) || requestedStart < 0 || requestedEnd <= requestedStart) throw new Error('The caption has invalid box-animation timing.');
                 var firstFrame = Math.floor(requestedStart * fps + 0.0000001), endFrame = Math.ceil(requestedEnd * fps - 0.0000001), count = endFrame - firstFrame;
                 totalFrames += count;
                 if (count < 1 || totalFrames > 100000) throw new Error('Read caption box animation in smaller batches of at most 100000 frames.');
-                var result = { id: caption.id, clipNodeId: String(clip.nodeId), projectItemId: String(clip.projectItem.nodeId), path: clip.projectItem.getMediaPath(), motionProfile: motionProfile(clip, firstFrame, count, tpf) };
+                motionPhase(trace, 'caption Motion profile');
+                var result = { id: caption.id, clipNodeId: String(clip.nodeId), projectItemId: String(clip.projectItem.nodeId), path: clip.projectItem.getMediaPath(), motionProfile: fragments ? fragmentProfile(fragments, firstFrame, count, tpf, trace) : motionProfile(clip, firstFrame, count, tpf, trace) };
+                if (fragments) result.bundleFragments = fragmentReceipt(fragments);
                 if (p.includeDiagnostics === true) {
+                    motionPhase(trace, 'optional Motion diagnostics');
                     var params = motionParameters(clip), diagnosticTime = ticksTime(Math.round(Number(clip.inPoint.ticks) + tpf / 2));
                     // Native metadata/Position/Anchor probing is explicit and
                     // never part of the automatic geometry watch path.
@@ -422,8 +671,17 @@ var BetterCaptionsHost = (function () {
                 }
                 out.push(result);
             }
+            motionPhase(trace, 'Motion response encoding');
             return reply({ ok: true, cues: out });
-        } catch (e) { return reply({ error: e.toString() }); }
+        } catch (e) {
+            // Preserve bounded native line/phase details through the fixed
+            // service error string; never return media text or raw parameters.
+            var line = null, detail = 'Unknown native Motion error.';
+            try { var candidateLine = Number(e && e.line); if (isFinite(candidateLine) && candidateLine > 0 && candidateLine <= 10000000) line = Math.floor(candidateLine); } catch (lineError) {}
+            try { detail = String(e).slice(0, 400); } catch (detailError) {}
+            var phase = String(trace.phase).slice(0, 80), frame = typeof trace.frame === 'number' && trace.frame >= 0 && trace.frame < 100000 ? trace.frame : null;
+            return reply({ error: 'Premiere caption Motion read failed during ' + phase + (frame === null ? '' : ' at output frame ' + frame) + (line === null ? '' : ' (line ' + line + ')') + ': ' + detail, phase: phase, nativeLine: line, frame: frame, fragment: trace.fragment });
+        }
     }
     function overlaps(a, b) { return a.startFrame < b.endFrame && a.endFrame > b.startFrame; }
     function frameTime(frame, ticksPerFrame) { var t = new Time(); t.ticks = String(Math.round(frame * ticksPerFrame)); return t; }
@@ -500,14 +758,14 @@ var BetterCaptionsHost = (function () {
         if (value.width < 1 || value.height < 1 || value.width > value.frameWidth || value.height > value.frameHeight) throw new Error('The caption text box must fit within the sequence dimensions.');
         return { x: value.x, y: value.y, width: value.width, height: value.height, frameWidth: value.frameWidth, frameHeight: value.frameHeight };
     }
-    function geometryPlan(clip, cue, s) {
+    function geometryPlan(clip, cue, s, verifiedSplit) {
         var bounds = renderBounds(cue.renderBounds, s), before = motionState(clip), target = {}, animated = false;
         if (typeof clip.projectItem.refreshMedia !== 'function') throw new Error('Premiere cannot refresh the caption source geometry. Update Premiere before changing this caption text box.');
         assertNormalSpeed(clip);
         for (var i = 0; i < motionNames.length; i++) {
             var name = motionNames[i]; target[name] = copyCurve(before[name], name); animated = animated || before[name].animated;
         }
-        if (animated && Math.abs(Number(clip.inPoint.ticks)) > 2) throw new Error('Caption box reflow cannot preserve animated Motion on a trimmed source. Restore the caption source in point to zero before applying.');
+        if (animated && Math.abs(Number(clip.inPoint.ticks)) > 2 && !verifiedSplit) throw new Error('Caption box reflow cannot preserve animated Motion on a trimmed source. Restore the caption source in point to zero before applying.');
         if (before.uniform.animated || before.uniform.value && (before.height.animated || before.width.animated)) throw new Error('Turn off Uniform Scale and create independent width and height keyframes before applying this caption box.');
         if (before.uniform.value) target.width = scalarCurve(before.height.value);
         target.uniform = scalarCurve(false);
@@ -550,11 +808,250 @@ var BetterCaptionsHost = (function () {
     function assertTiming(clip, cue, ticksPerFrame) {
         if (Math.abs(Number(clip.start.ticks) - cue.startFrame * ticksPerFrame) > 2 || Math.abs(Number(clip.end.ticks) - cue.endFrame * ticksPerFrame) > 2) throw new Error('Premiere did not keep the requested caption timing.');
     }
+    function captionDestination(s, requested) {
+        var count = s.videoTracks.numTracks;
+        if (typeof count !== 'number' || count !== Math.floor(count) || count < 0 || count > 256) throw new Error('Automatic captions support sequences with at most 256 video tracks.');
+        if (requested !== -1) {
+            if (requested !== Math.floor(requested) || requested < 0 || !s.videoTracks[requested]) throw new Error('Choose an existing video track or Automatic for captions.');
+            return { mode: 'explicit', trackIndex: requested, expectedVideoTrackCount: count, newCaptionCount: 0 };
+        }
+        var top = count ? s.videoTracks[count - 1] : null;
+        if (top && !top.isLocked() && !(typeof top.isMuted === 'function' && top.isMuted()) && top.clips.numItems === 0) return { mode: 'reuse', trackIndex: count - 1, expectedVideoTrackCount: count, newCaptionCount: 0 };
+        return { mode: 'create', trackIndex: count, expectedVideoTrackCount: count, newCaptionCount: 0 };
+    }
+    function otherEffects(clip) {
+        var result = [], components = clip.components;
+        if (!components || components.numItems > 32) throw new Error('This legacy caption has unsupported effects. Its existing clip was preserved.');
+        for (var i = 0; i < components.numItems; i++) {
+            var c = components[i];
+            if (c.matchName === 'AE.ADBE Motion' || c.matchName === 'ADBE Motion') continue;
+            if (c.matchName !== 'AE.ADBE Opacity' && c.matchName !== 'ADBE Opacity' && c.matchName !== 'AE.ADBE Time Remapping' && c.matchName !== 'ADBE Time Remapping') throw new Error('Remove custom effects from legacy captions before combining them. Existing clips were preserved.');
+            if (!c.properties || c.properties.numItems > 32) throw new Error('Premiere could not verify legacy caption effects.');
+            var properties = [];
+            for (var j = 0; j < c.properties.numItems; j++) {
+                var prop = c.properties[j];
+                if (typeof prop.isTimeVarying !== 'function' || prop.isTimeVarying()) throw new Error('Animated legacy caption effects cannot be combined without losing their native keys. Existing clips were preserved.');
+                var value = prop.getValue();
+                if (typeof value !== 'number' && typeof value !== 'boolean' && typeof value !== 'string') throw new Error('Premiere could not verify a legacy caption effect value.');
+                properties.push({ name: prop.displayName, value: value });
+            }
+            result.push({ matchName: c.matchName, properties: properties });
+        }
+        return result;
+    }
+    function legacyPlan(p) {
+        var cues = p.legacyCues || p.cues, s = sequence(p.sequenceId, p.projectPath), tpf = Number(s.timebase), clips = [], samples = [], ids = {}, bounds = null;
+        if (!cues || cues.length < 2 || cues.length > 64) throw new Error('Combine between two and 64 legacy caption clips at once.');
+        for (var i = 0; i < cues.length; i++) {
+            var cue = cues[i], found = cue.clipNodeId ? findClip(s, cue.clipNodeId, 2000) : null;
+            if (cue.manualSplit || cue.captionBundle || !cue.id || !cue.projectItemId || !found || !sameNode(found.clip.projectItem.nodeId, cue.projectItemId) || found.clip.projectItem.getMediaPath() !== cue.mediaPath || ids[String(found.clip.nodeId)]) throw new Error('A legacy caption link changed or contains a deliberate split. Existing clips were preserved.');
+            var clip = found.clip, track = s.videoTracks[found.track];
+            if (clip.disabled || typeof track.isMuted === 'function' && track.isMuted()) throw new Error('Enable every legacy caption clip and its video track before combining captions. Existing clips were preserved.');
+            var b = renderBounds(cue.renderBounds, s), motion = motionState(clip);
+            ids[String(clip.nodeId)] = true; assertNormalSpeed(clip);
+            if (track.isLocked() || track.transitions && track.transitions.numItems) throw new Error('Unlock the legacy caption track and remove its transitions before combining clips.');
+            if (referenceCount(clip.projectItem.nodeId) !== 1) throw new Error('Legacy caption media is reused. Make copied captions independent before combining them.');
+            for (var m = 0; m < motionNames.length; m++) if (motion[motionNames[m]].animated) throw new Error('Legacy captions with native animation are preserved as separate clips. Use one new caption clip or keep their existing keys.');
+            if (!sameValue(motion.anchor.value, [0.5, 0.5]) || !sameValue(motion.rotation.value, 0)) throw new Error('Legacy captions with a custom anchor or rotation are preserved as separate clips.');
+            if (!bounds) bounds = b;
+            if (stringify(b) !== stringify(bounds)) throw new Error('Legacy captions with different source text-box bounds are preserved as separate clips.');
+            var start = Number(clip.start.ticks), end = Number(clip.end.ticks), first = Math.round(start / tpf), last = Math.round(end / tpf);
+            if (Math.abs(start - first * tpf) > 2 || Math.abs(end - last * tpf) > 2 || end <= start || Number(clip.inPoint.ticks) !== 0 || Math.abs(Number(clip.outPoint.ticks) - (end - start)) > 2 || Math.abs(cue.startTime * TICKS - start) > 2 || Math.abs(cue.endTime * TICKS - end) > 2) throw new Error('Sync legacy caption timing from Premiere before combining untrimmed clips.');
+            if (i && (found.track !== clips[0].track || String(clip.start.ticks) !== clips[i - 1].endTicks)) throw new Error('Legacy caption clips must be adjacent on one track before combining.');
+            if (samples.length + last - first > 100000) throw new Error('Combine legacy captions in a smaller sequence.');
+            var effects = otherEffects(clip), receipt = fragmentReceipt([found])[0];
+            receipt.id = cue.id; receipt.projectItemId = String(clip.projectItem.nodeId); receipt.path = cue.mediaPath; receipt.bounds = b; receipt.motion = motion; receipt.effects = effects;
+            if (i && stringify(effects) !== stringify(clips[0].effects)) throw new Error('Legacy captions have different effects. Their existing clips were preserved.');
+            clips.push(receipt);
+            var sx = (motion.uniform.value ? motion.height.value : motion.width.value) / 100, sy = motion.height.value / 100;
+            for (var frame = first; frame < last; frame++) samples.push({ time: (frame + 0.5) * tpf / TICKS, scaleX: sx, scaleY: sy });
+        }
+        var result = { ok: true, version: 1, sequenceId: p.sequenceId, projectPath: p.projectPath, clips: clips, bounds: bounds, ticksPerFrame: tpf };
+        result.signature = curveSignature(result); result.motionProfile = { signature: result.signature, samples: samples };
+        return result;
+    }
+    function readCaptionConsolidation(file) { try { return reply(legacyPlan(readPayload(file))); } catch (e) { return reply({ error: e.toString() }); } }
+    function confirmLegacyPlan(p) {
+        var actual = legacyPlan(p);
+        if (!p.plan || p.plan.version !== 1 || p.plan.signature !== actual.signature || stringify(p.plan.clips) !== stringify(actual.clips) || stringify(p.plan.bounds) !== stringify(actual.bounds)) throw new Error('Legacy caption geometry or timing changed while rendering. No original clips were removed.');
+        return actual;
+    }
+    function consolidationValues(plan, name) {
+        var values = [];
+        for (var i = 0; i < plan.clips.length; i++) {
+            var m = plan.clips[i].motion, value = name === 'width' && m.uniform.value ? m.height.value : m[name].value;
+            values.push({ ticks: String(Number(plan.clips[i].startTicks) - Number(plan.clips[0].startTicks)), value: value });
+        }
+        return values;
+    }
+    function verifyConsolidatedMotion(clip, plan) {
+        var params = motionParameters(clip), names = ['position', 'width', 'height'];
+        if (stringify(otherEffects(clip)) !== stringify(plan.clips[0].effects)) throw new Error('The combined clip cannot preserve the legacy effects exactly.');
+        if (params.uniform.isTimeVarying() || !!params.uniform.getValue() || params.rotation.isTimeVarying() || !sameValue(params.rotation.getValue(), 0) || params.anchor.isTimeVarying() || !sameValue(params.anchor.getValue(), [0.5, 0.5])) throw new Error('The combined caption Motion changed.');
+        for (var n = 0; n < names.length; n++) {
+            var name = names[n], expected = consolidationValues(plan, name), curve = copyCurve(parameterCurve(params[name], 64), name);
+            if (!curve.animated || curve.keys.length !== expected.length) throw new Error('Premiere did not retain every legacy caption hold key.');
+            for (var i = 0; i < expected.length; i++) if (curve.keys[i].ticks !== expected[i].ticks || !sameValue(curve.keys[i].value, expected[i].value)) throw new Error('Premiere changed a legacy caption position or size key.');
+            // CEP has no interpolation getter. Sample every visible frame to
+            // prove these newly created hold curves without flattening old keys.
+            for (i = 0; i < plan.clips.length; i++) {
+                var first = Number(expected[i].ticks), end = Number(plan.clips[i].endTicks) - Number(plan.clips[0].startTicks);
+                for (var at = first; at < end; at += plan.ticksPerFrame) if (!sameValue(params[name].getValueAtTime(ticksTime(at)), expected[i].value)) throw new Error('Premiere did not preserve the legacy caption hold geometry.');
+            }
+        }
+    }
+    function consolidatedClip(p) {
+        var s = sequence(p.sequenceId, p.projectPath), cue = p.cues && p.cues.length === 1 && p.cues[0], found = cue && findClip(s, cue.clipNodeId, 2000);
+        if (!found || !sameNode(found.clip.projectItem.nodeId, cue.projectItemId) || found.clip.projectItem.getMediaPath() !== cue.mediaPath || referenceCount(found.clip.projectItem.nodeId) !== 1) throw new Error('The combined caption link changed. No original clips were removed.');
+        var clip = found.clip, plan = p.plan;
+        validateConsolidationPlan(plan, s, p);
+        if (!plan || !plan.clips || plan.clips.length < 2 || plan.clips.length > 64 || String(clip.start.ticks) !== plan.clips[0].startTicks || String(clip.end.ticks) !== plan.clips[plan.clips.length - 1].endTicks || String(clip.inPoint.ticks) !== '0' || Number(clip.outPoint.ticks) !== Number(clip.end.ticks) - Number(clip.start.ticks) || s.videoTracks[found.track].isLocked()) throw new Error('The combined caption timing changed.');
+        assertNormalSpeed(clip); verifyConsolidatedMotion(clip, plan);
+        return found;
+    }
+    function validateConsolidationPlan(plan, s, p) {
+        if (!plan || plan.version !== 1 || plan.sequenceId !== p.sequenceId || plan.projectPath !== p.projectPath || plan.ticksPerFrame !== Number(s.timebase) || !isFinite(plan.ticksPerFrame) || plan.ticksPerFrame <= 0 || !plan.clips || plan.clips.length < 2 || plan.clips.length > 64) throw new Error('Invalid legacy conversion proof.');
+        renderBounds(plan.bounds, s);
+        var nodes = {}, frames = 0;
+        for (var i = 0; i < plan.clips.length; i++) {
+            var c = plan.clips[i];
+            if (!c || typeof c.clipNodeId !== 'string' || !c.clipNodeId || nodes[c.clipNodeId] || c.track !== plan.clips[0].track || !isFinite(c.track) || c.track < 0 || c.track !== Math.floor(c.track) || !c.motion || !c.effects || c.effects.length > 32 || stringify(c.effects).length > 20000) throw new Error('Invalid legacy conversion proof.');
+            nodes[c.clipNodeId] = true;
+            var names = ['startTicks', 'endTicks', 'inTicks', 'outTicks'];
+            for (var j = 0; j < names.length; j++) if (typeof c[names[j]] !== 'string' || !/^(0|[1-9]\d{0,19})$/.test(c[names[j]])) throw new Error('Invalid legacy conversion timing.');
+            var start = Number(c.startTicks), end = Number(c.endTicks), count = (end - start) / plan.ticksPerFrame;
+            if (count <= 0 || count !== Math.floor(count) || start / plan.ticksPerFrame > 100000000 || start / plan.ticksPerFrame !== Math.floor(start / plan.ticksPerFrame) || c.inTicks !== '0' || Number(c.outTicks) !== end - start || i && c.startTicks !== plan.clips[i - 1].endTicks) throw new Error('Invalid legacy conversion timing.');
+            frames += count; if (frames > 100000) throw new Error('Legacy conversion exceeds the frame limit.');
+            for (j = 0; j < motionNames.length; j++) {
+                var curve = c.motion[motionNames[j]];
+                if (!curve || curve.animated !== false || !curve.keys || curve.keys.length) throw new Error('Invalid static legacy Motion proof.');
+                motionValue(curve.value, motionNames[j]);
+            }
+            if (stringify(c.bounds) !== stringify(plan.bounds) || !sameValue(c.motion.anchor.value, [0.5,0.5]) || !sameValue(c.motion.rotation.value,0)) throw new Error('Invalid legacy conversion geometry.');
+        }
+    }
+    function verifyCaptionConsolidation(file) {
+        try {
+            var p = readPayload(file), s = sequence(p.sequenceId, p.projectPath), found = consolidatedClip(p), present = 0;
+            for (var i = 0; i < p.plan.clips.length; i++) if (findClip(s, p.plan.clips[i].clipNodeId, 2000)) present++;
+            if (present && present !== p.plan.clips.length) throw new Error('Only some legacy clips remain. Review Premiere Undo before continuing; no automatic cleanup was attempted.');
+            if (present) confirmLegacyPlan(p);
+            var replacement = fragmentReceipt([found])[0]; replacement.path = found.clip.projectItem.getMediaPath();
+            return reply({ ok: true, complete: present === 0, clips: p.plan.clips, replacement: replacement });
+        } catch (e) { return reply({ error: e.toString() }); }
+    }
+    function stageCaptionConsolidation(file) {
+        var result = null, p;
+        try {
+            p = readPayload(file); var plan = confirmLegacyPlan(p);
+            if (!p.cues || p.cues.length !== 1 || p.cues[0].clipNodeId || p.cues[0].captionBundle !== true || stringify(p.cues[0].renderBounds) !== stringify(plan.bounds)) throw new Error('Invalid combined caption replacement.');
+            result = parseJSON(apply(file));
+            if (!result.ok) return reply(result);
+            var s = sequence(p.sequenceId, p.projectPath), found = findClip(s, result.cues[0].clipNodeId), clip = found.clip, params = motionParameters(clip), names = ['position', 'width', 'height'];
+            if (stringify(otherEffects(clip)) !== stringify(plan.clips[0].effects)) throw new Error('The combined clip cannot preserve the legacy effects exactly.');
+            for (var n = 0; n < names.length; n++) {
+                var name = names[n], param = params[name], values = consolidationValues(plan, name);
+                if (param.isTimeVarying() || typeof param.setTimeVarying !== 'function' || typeof param.addKey !== 'function' || typeof param.setInterpolationTypeAtKey !== 'function') throw new Error('Premiere did not expose native hold-key creation for combined captions.');
+                param.setTimeVarying(true);
+                for (var k = 0; k < values.length; k++) {
+                    var at = ticksTime(values[k].ticks);
+                    param.addKey(at); param.setValueAtKey(at, values[k].value, 1); param.setInterpolationTypeAtKey(at, 4, 1);
+                }
+            }
+            confirmLegacyPlan(p); verifyConsolidatedMotion(clip, plan);
+            result.cues[0].motionProfile = motionProfile(clip, p.cues[0].startFrame, p.cues[0].endFrame - p.cues[0].startFrame, Number(s.timebase));
+            return reply(result);
+        } catch (e) {
+            var cleanup = true;
+            if (result && result.ok) try {
+                confirmLegacyPlan(p);
+                var staged = findClip(sequence(p.sequenceId, p.projectPath), result.cues[0].clipNodeId);
+                if (!staged || !sameNode(staged.clip.projectItem.nodeId, result.cues[0].projectItemId) || staged.clip.projectItem.getMediaPath() !== result.cues[0].path || referenceCount(staged.clip.projectItem.nodeId) !== 1) throw new Error('The staged caption changed.');
+                staged.clip.remove(false, false);
+                if (findClip(sequence(p.sequenceId, p.projectPath), result.cues[0].clipNodeId)) throw new Error('The staged caption could not be removed.');
+            } catch (cleanupError) { cleanup = false; }
+            return reply({ error: e.toString() + (cleanup ? ' Original clips were preserved.' : ' Original clips were preserved; review the extra staged clip before retrying.'), rolledBack: cleanup, recoveryJob: file });
+        }
+    }
+    function rollbackCaptionConsolidation(file) {
+        try {
+            var p = readPayload(file); confirmLegacyPlan(p);
+            var found = consolidatedClip(p), node = String(found.clip.nodeId), s = sequence(p.sequenceId, p.projectPath);
+            found.clip.remove(false, false);
+            if (findClip(s, node)) throw new Error('Premiere could not remove the staged replacement.');
+            return reply({ ok: true, rolledBack: true });
+        } catch (e) { return reply({ error: e.toString() }); }
+    }
+    function driveMediaPath(path) {
+        var letter = path.charCodeAt(0);
+        return ((letter >= 65 && letter <= 90) || (letter >= 97 && letter <= 122)) && path.charAt(1) === ':' && (path.charAt(2) === '/' || path.charAt(2) === '\\');
+    }
+    function localMediaPath(path) {
+        if (typeof path !== 'string' || path.length > 4096 || /[\u0000-\u001f]/.test(path)) return false;
+        var normalized = path.split('\\').join('/');
+        if (normalized.charAt(0) === '/' && normalized.charAt(1) === '/') return false;
+        if (path.charAt(0) !== '/' && !driveMediaPath(path)) return false;
+        var parts = normalized.split('/');
+        for (var i = 0; i < parts.length; i++) if (parts[i] === '.' || parts[i] === '..') return false;
+        return true;
+    }
+    function linkIdentity(cue) {
+        function identity(value) { return typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f]/.test(value); }
+        if (!cue || !identity(cue.id) || !identity(cue.clipNodeId) || !identity(cue.projectItemId) || !localMediaPath(cue.mediaPath)) throw new Error('A caption timeline link is incomplete. Sync timing from Premiere before updating it.');
+    }
+    function comparableMediaPath(path) {
+        // Drive paths are case-insensitive on supported Windows installs;
+        // macOS/POSIX paths retain case to avoid identifying unrelated media.
+        return driveMediaPath(path) ? path.split('\\').join('/').toLowerCase() : path;
+    }
+    function activeReferences(s) {
+        var references = [], sets = [s.videoTracks, s.audioTracks], inspected = 0;
+        for (var k = 0; k < sets.length; k++) {
+            var tracks = sets[k];
+            if (!tracks || typeof tracks.numTracks !== 'number' || !isFinite(tracks.numTracks) || tracks.numTracks < 0 || tracks.numTracks !== Math.floor(tracks.numTracks) || tracks.numTracks > 256) throw new Error('Premiere could not safely inspect every caption track.');
+            for (var t = 0; t < tracks.numTracks; t++) {
+                var clips = tracks[t].clips;
+                if (!clips || typeof clips.numItems !== 'number' || !isFinite(clips.numItems) || clips.numItems < 0 || clips.numItems !== Math.floor(clips.numItems) || inspected + clips.numItems > 2000) throw new Error('This sequence is too large to confirm deleted caption clips automatically.');
+                for (var c = 0; c < clips.numItems; c++) {
+                    inspected++;
+                    var clip = clips[c], item = clip && clip.projectItem;
+                    if (!clip || clip.nodeId === undefined || clip.nodeId === null || !item || item.nodeId === undefined || item.nodeId === null || typeof item.getMediaPath !== 'function') throw new Error('Premiere could not confirm every timeline media reference.');
+                    var path = item.getMediaPath();
+                    if (typeof path !== 'string') throw new Error('Premiere could not confirm every timeline media path.');
+                    references.push({ clip: clip, video: k === 0, track: t, clipNodeId: String(clip.nodeId), projectItemId: String(item.nodeId), path: comparableMediaPath(path) });
+                }
+            }
+        }
+        return references;
+    }
+    function confirmAbsent(cue, references) {
+        linkIdentity(cue);
+        var path = comparableMediaPath(cue.mediaPath);
+        for (var i = 0; i < references.length; i++) {
+            var ref = references[i];
+            if (ref.clipNodeId === cue.clipNodeId || ref.projectItemId === cue.projectItemId || ref.path === path) throw new Error('A deleted caption still has a clip, split fragment or media copy in this sequence. Sync timing from Premiere before applying again.');
+        }
+    }
+    function confirmDeletedLinks(p, s) {
+        if (p.deletedLinks === undefined) return;
+        if (!(p.deletedLinks instanceof Array) || p.deletedLinks.length > 10000) throw new Error('Invalid deleted caption links.');
+        if (!p.deletedLinks.length) return;
+        var references = activeReferences(s), ids = {}, nodes = {};
+        for (var i = 0; i < p.deletedLinks.length; i++) {
+            var cue = p.deletedLinks[i]; linkIdentity(cue);
+            if (ids['$' + cue.id] || nodes['$' + cue.clipNodeId]) throw new Error('Duplicate deleted caption links.');
+            ids['$' + cue.id] = true; nodes['$' + cue.clipNodeId] = true;
+            confirmAbsent(cue, references);
+        }
+    }
     function prepare(p, requireMedia) {
         var s = sequence(p.sequenceId, p.projectPath), tpf = Number(s.timebase), fps = TICKS / tpf;
         if (!p.sequenceId || !p.projectPath || !p.cues || !p.cues.length || p.cues.length > 10000) throw new Error('Invalid caption job.');
         if (p.width !== s.frameSizeHorizontal || p.height !== s.frameSizeVertical || Math.abs(p.fps - fps) > 0.000001) throw new Error('Sequence dimensions or frame rate changed. Refresh and render again.');
-        if (p.track !== Math.floor(p.track) || !s.videoTracks[p.track]) throw new Error('Add an empty video track in Premiere, then select it in Better Captions.');
+        // Recheck the positive deletion receipt after rendering and again after
+        // UXP creates an automatic track. Undo/re-add must never duplicate clips.
+        confirmDeletedLinks(p, s);
+        var destination = captionDestination(s, p.track);
         var planned = [], ids = {}, nodes = {}, i, j, geometryFrames = 0;
         for (i = 0; i < p.cues.length; i++) {
             var cue = p.cues[i];
@@ -564,13 +1061,27 @@ var BetterCaptionsHost = (function () {
             var found = cue.clipNodeId ? findClip(s, cue.clipNodeId) : null;
             if (cue.clipNodeId && !found) throw new Error('A generated clip was removed. Pull timeline changes before applying.');
             if (found && nodes[String(found.clip.nodeId)]) throw new Error('Two captions refer to the same timeline clip.');
+            var fragments = null, fragmentMotions = null, fragmentGeometryPlans = null;
             if (found) {
                 nodes[String(found.clip.nodeId)] = true;
                 if (!cue.projectItemId || !sameNode(found.clip.projectItem.nodeId, cue.projectItemId) || (cue.previousPath && found.clip.projectItem.getMediaPath() !== cue.previousPath)) throw new Error('A caption timeline link changed. Pull timeline changes before applying.');
-                if (referenceCount(found.clip.projectItem.nodeId) !== 1) throw new Error('A caption media item is used by another timeline clip. Make that clip independent before updating captions.');
+                fragments = captionFragments(s, cue, cue.previousPath || found.clip.projectItem.getMediaPath(), found);
+                if (!fragments && referenceCount(found.clip.projectItem.nodeId) !== 1) throw new Error('A caption media item is used by another timeline clip. Make that clip independent before updating captions.');
+                if (fragments) {
+                    assertFragmentRange(fragments, cue.startFrame, cue.endFrame - cue.startFrame, tpf);
+                    fragmentMotions = [];
+                    for (var f = 0; f < fragments.length; f++) {
+                        var part = fragments[f];
+                        if (!sameNode(part.clip.nodeId, found.clip.nodeId) && nodes[String(part.clip.nodeId)]) throw new Error('Two captions refer to the same native split bundle.');
+                        nodes[String(part.clip.nodeId)] = true;
+                        if (s.videoTracks[part.track].isLocked()) throw new Error('Unlock the native split caption video track before applying.');
+                        fragmentMotions.push(motionState(part.clip));
+                    }
+                }
             }
-            var trackIndex = found ? found.track : p.track;
-            if (s.videoTracks[trackIndex].isLocked()) throw new Error('Unlock video track ' + (trackIndex + 1) + ' before applying captions.');
+            var trackIndex = found ? found.track : destination.trackIndex;
+            if (!found) destination.newCaptionCount++;
+            if (s.videoTracks[trackIndex] && s.videoTracks[trackIndex].isLocked()) throw new Error('Unlock video track ' + (trackIndex + 1) + ' before applying captions.');
             var geometry = null, bounds = null;
             if (cue.renderBounds || cue.motionProfile) {
                 geometryFrames += cue.endFrame - cue.startFrame;
@@ -578,30 +1089,71 @@ var BetterCaptionsHost = (function () {
             }
             if (cue.renderBounds) {
                 bounds = renderBounds(cue.renderBounds, s);
-                if (found) geometry = geometryPlan(found.clip, cue, s);
+                if (fragments) {
+                    fragmentGeometryPlans = [];
+                    for (var g = 0; g < fragments.length; g++) fragmentGeometryPlans.push(geometryPlan(fragments[g].clip, cue, s, true));
+                    geometry = fragmentGeometryPlans[0];
+                } else if (found) geometry = geometryPlan(found.clip, cue, s);
             }
             if (found && cue.motionProfile) {
-                if (typeof cue.motionProfile.signature !== 'string' || cue.endFrame - cue.startFrame > 100000 || motionProfile(found.clip, cue.startFrame, cue.endFrame - cue.startFrame, tpf).signature !== cue.motionProfile.signature) throw new Error('The caption box size or its keyframes changed during rendering. Wait for the adjustment to finish and apply again.');
+                if (typeof cue.motionProfile.signature !== 'string' || cue.endFrame - cue.startFrame > 100000 || (fragments ? fragmentProfile(fragments, cue.startFrame, cue.endFrame - cue.startFrame, tpf) : motionProfile(found.clip, cue.startFrame, cue.endFrame - cue.startFrame, tpf)).signature !== cue.motionProfile.signature) throw new Error('The caption box size or its keyframes changed during rendering. Wait for the adjustment to finish and apply again.');
             }
-            planned.push({ cue: cue, located: found, track: trackIndex, startFrame: cue.startFrame, endFrame: cue.endFrame, geometry: geometry, bounds: bounds });
+            var bundleReceipt = cue.captionBundle === true && found ? fragmentReceipt(fragments || [found]) : null;
+            if (bundleReceipt && !fragments) {
+                // An unsplit caption may deliberately change its range. The
+                // final reference proof must confirm the authorized setTiming
+                // result; native Razor cuts retain their original receipt.
+                bundleReceipt[0].startTicks = String(Math.round(cue.startFrame * tpf));
+                bundleReceipt[0].endTicks = String(Math.round(cue.endFrame * tpf));
+                bundleReceipt[0].inTicks = '0';
+                bundleReceipt[0].outTicks = String(Math.round((cue.endFrame - cue.startFrame) * tpf));
+            }
+            planned.push({ cue: cue, located: found, track: trackIndex, startFrame: cue.startFrame, endFrame: cue.endFrame, geometry: geometry, bounds: bounds, fragments: fragments, fragmentReceipt: fragments ? fragmentReceipt(fragments) : null, bundleReceipt: bundleReceipt, fragmentMotions: fragmentMotions, fragmentGeometry: fragmentGeometryPlans });
         }
         // Inspect every destination track and every desired range before importing or relinking anything.
         for (i = 0; i < planned.length; i++) {
-            var target = planned[i], clips = s.videoTracks[target.track].clips;
+            var target = planned[i], clips = s.videoTracks[target.track] ? s.videoTracks[target.track].clips : { numItems: 0 };
             for (j = 0; j < i; j++) if (target.track === planned[j].track && overlaps(target, planned[j])) throw new Error('Caption clips overlap after frame alignment. Adjust their timing.');
             for (j = 0; j < clips.numItems; j++) {
                 var old = clips[j]; if (nodes[String(old.nodeId)]) continue;
                 if (Number(old.start.ticks) < target.endFrame * tpf - 2 && Number(old.end.ticks) > target.startFrame * tpf + 2) throw new Error('Video track ' + (target.track + 1) + ' contains another clip in a caption range. Choose an empty track or adjust the caption timing.');
             }
         }
-        return { sequence: s, ticksPerFrame: tpf, planned: planned };
+        if (p.track === -1 && !destination.newCaptionCount) { destination.mode = 'linked'; destination.trackIndex = null; }
+        if (destination.mode === 'create' && destination.newCaptionCount && destination.expectedVideoTrackCount >= 256) throw new Error('The sequence already has 256 video tracks. Remove an unused track before creating a caption track.');
+        return { sequence: s, ticksPerFrame: tpf, planned: planned, destination: destination };
     }
-    function preflight(file) { try { var p = prepare(readPayload(file), false); return reply({ ok: true, count: p.planned.length }); } catch (e) { return reply({ error: e.toString() }); } }
+    function preflight(file) { try { var p = prepare(readPayload(file), false); return reply({ ok: true, count: p.planned.length, destination: p.destination }); } catch (e) { return reply({ error: e.toString() }); } }
+    function prepareCaptionTrack(file) {
+        try {
+            var p = readPayload(file), prepared = prepare(p, true), destination = prepared.destination, seed = null;
+            if (destination.mode === 'create') {
+                var entry = null;
+                for (var i = 0; i < prepared.planned.length; i++) if (!prepared.planned[i].located) { entry = prepared.planned[i]; break; }
+                if (!entry) throw new Error('No new caption is available to create its video track.');
+                var bin = null;
+                for (i = 0; i < app.project.rootItem.children.numItems; i++) if (app.project.rootItem.children[i].type === 2 && app.project.rootItem.children[i].name === 'Better Captions') bin = app.project.rootItem.children[i];
+                if (!bin) bin = app.project.rootItem.createBin('Better Captions');
+                var item = findItem(bin, entry.cue.path);
+                if (item && referenceCount(item.nodeId)) throw new Error('The temporary caption source is already used by a timeline clip. No new track was created.');
+                if (!item) {
+                    if (!app.project.importFiles([entry.cue.path], true, bin, false)) throw new Error('Premiere could not import the temporary caption source.');
+                    item = findItem(bin, entry.cue.path);
+                }
+                if (!item || item.getMediaPath() !== entry.cue.path || referenceCount(item.nodeId)) throw new Error('The exact temporary caption source could not be confirmed.');
+                var cue = entry.cue, tpf = prepared.ticksPerFrame;
+                item.setInPoint(0, 1); item.setOutPoint((cue.endFrame - cue.startFrame) * tpf / TICKS, 1);
+                seed = { id: cue.id, path: item.getMediaPath(), projectItemId: String(item.nodeId), startFrame: cue.startFrame, endFrame: cue.endFrame, startTicks: frameTime(cue.startFrame, tpf).ticks, endTicks: frameTime(cue.endFrame, tpf).ticks, durationTicks: frameTime(cue.endFrame - cue.startFrame, tpf).ticks };
+            }
+            return reply({ ok: true, sequenceId: p.sequenceId, projectPath: p.projectPath, ticksPerFrame: prepared.ticksPerFrame, destination: destination, seed: seed });
+        } catch (e) { return reply({ error: e.toString() }); }
+    }
     function apply(file) {
         var created = [], changed = [], results = [], rollbackErrors = [], p, prepared;
         try {
             p = readPayload(file); prepared = prepare(p, true);
             var s = prepared.sequence, planned = prepared.planned, tpf = prepared.ticksPerFrame, i, j;
+            if (prepared.destination.mode === 'create') throw new Error('The automatic caption track must be created by the Better Captions UXP panel before applying. No timeline changes were made.');
             var bin = null;
             for (i = 0; i < app.project.rootItem.children.numItems; i++) if (app.project.rootItem.children[i].type === 2 && app.project.rootItem.children[i].name === 'Better Captions') bin = app.project.rootItem.children[i];
             if (!bin) bin = app.project.rootItem.createBin('Better Captions');
@@ -619,11 +1171,13 @@ var BetterCaptionsHost = (function () {
             for (i = 0; i < planned.length; i++) {
                 entry = planned[i]; var cue = entry.cue, item = entry.item, clip;
                 if (entry.located) {
-                    clip = entry.located.clip; changed.push(snapshot(clip, entry.geometry ? entry.geometry.before : null));
+                    clip = entry.located.clip;
+                    if (entry.fragments) for (var f = 0; f < entry.fragments.length; f++) changed.push(snapshot(entry.fragments[f].clip, entry.fragmentMotions[f]));
+                    else changed.push(snapshot(clip, entry.geometry ? entry.geometry.before : null));
                     if (item.getMediaPath() !== cue.path) {
                         var status = item.changeMediaPath(cue.path, true);
                         if (!(status === 0 || status === true) || item.getMediaPath() !== cue.path) throw new Error('Premiere could not update caption media.');
-                        if (entry.geometry) refreshCaptionMedia(item, cue.path);
+                        if (entry.geometry || entry.fragments) refreshCaptionMedia(item, cue.path);
                     }
                 } else {
                     item.setInPoint(0, 1); item.setOutPoint((cue.endFrame - cue.startFrame) * tpf / TICKS, 1);
@@ -638,16 +1192,30 @@ var BetterCaptionsHost = (function () {
                     }
                     if (!clip) throw new Error('The caption did not appear at its expected timeline position.');
                 }
-                setTiming(clip, cue.startFrame, cue.endFrame, tpf);
-                if (entry.geometry) writeMotion(clip, entry.geometry.target);
-                else if (entry.bounds) initializeGeometry(clip, entry.bounds, s);
-                clip.name = 'Better Captions | ' + String(cue.text || '').substring(0, 60);
-                assertTiming(clip, cue, tpf);
+                if (entry.fragments) {
+                    verifyBundleReferences(s, entry);
+                    for (f = 0; f < entry.fragments.length; f++) {
+                        var fragment = entry.fragments[f].clip;
+                        writeMotion(fragment, entry.fragmentGeometry ? entry.fragmentGeometry[f].target : entry.fragmentMotions[f]);
+                        fragment.name = 'Better Captions | ' + String(cue.text || '').substring(0, 60);
+                    }
+                    if (stringify(fragmentReceipt(entry.fragments)) !== stringify(entry.fragmentReceipt)) throw new Error('Premiere changed native caption split timing while refreshing its media.');
+                } else {
+                    setTiming(clip, cue.startFrame, cue.endFrame, tpf);
+                    if (entry.geometry) writeMotion(clip, entry.geometry.target);
+                    else if (entry.bounds) initializeGeometry(clip, entry.bounds, s);
+                    clip.name = 'Better Captions | ' + String(cue.text || '').substring(0, 60);
+                    assertTiming(clip, cue, tpf);
+                }
                 if (item.getMediaPath() !== cue.path) throw new Error('Caption media readback did not match the rendered movie.');
-                var result = { id: cue.id, clipNodeId: String(clip.nodeId), projectItemId: String(item.nodeId), start: clip.start.seconds, end: clip.end.seconds, track: entry.track, path: item.getMediaPath() };
-                if (entry.bounds) { result.renderBounds = entry.bounds; result.motionProfile = motionProfile(clip, cue.startFrame, cue.endFrame - cue.startFrame, tpf); }
+                var result = { id: cue.id, clipNodeId: String(clip.nodeId), projectItemId: String(item.nodeId), start: entry.fragments ? entry.fragments[0].clip.start.seconds : clip.start.seconds, end: entry.fragments ? entry.fragments[entry.fragments.length - 1].clip.end.seconds : clip.end.seconds, track: entry.track, path: item.getMediaPath() };
+                if (entry.fragments) result.bundleFragments = fragmentReceipt(entry.fragments);
+                if (entry.bounds) { result.renderBounds = entry.bounds; result.motionProfile = entry.fragments ? fragmentProfile(entry.fragments, cue.startFrame, cue.endFrame - cue.startFrame, tpf) : motionProfile(clip, cue.startFrame, cue.endFrame - cue.startFrame, tpf); }
                 results.push(result);
             }
+            // Rediscover global references after every relink and native write.
+            // Cached TrackItems alone cannot reveal a new external copy or cut.
+            for (i = 0; i < planned.length; i++) verifyBundleReferences(s, planned[i]);
             return reply({ ok: true, cues: results });
         } catch (e) {
             // No ripple removals. Restore source geometry and the exact native
@@ -674,13 +1242,36 @@ var BetterCaptionsHost = (function () {
     function readTimeline(file) {
         try {
             var p = readPayload(file), s = sequence(p.sequenceId, p.projectPath), out = [];
+            if (!p.sequenceId || !p.projectPath || !(p.cues instanceof Array) || p.cues.length > 10000) throw new Error('Invalid caption timeline read.');
+            var references = activeReferences(s), ids = {};
             for (var i = 0; i < p.cues.length; i++) {
-                var cue = p.cues[i], found = cue.clipNodeId ? findClip(s, cue.clipNodeId) : null;
-                if (found) out.push({ id: cue.id, start: found.clip.start.seconds, end: found.clip.end.seconds, track: found.track, projectItemId: String(found.clip.projectItem.nodeId), path: found.clip.projectItem.getMediaPath() });
-                else out.push({ id: cue.id, missing: true });
+                var cue = p.cues[i], found = null;
+                if (!cue || typeof cue.id !== 'string' || !cue.id || ids['$' + cue.id]) throw new Error('Invalid caption timeline identities.');
+                ids['$' + cue.id] = true;
+                if (!cue.clipNodeId) { out.push({ id: cue.id, missing: true }); continue; }
+                linkIdentity(cue);
+                for (var r = 0; r < references.length; r++) if (references[r].video && references[r].clipNodeId === cue.clipNodeId) {
+                    if (found) throw new Error('Premiere returned an ambiguous caption timeline link.');
+                    found = references[r];
+                }
+                if (found) {
+                    var fragments = null;
+                    if (!sameNode(found.clip.projectItem.nodeId, cue.projectItemId)) throw new Error('A caption timeline link changed. Sync timing from Premiere before updating it.');
+                    if (cue.captionBundle === true) {
+                        if (!cue.projectItemId || !cue.mediaPath || !sameNode(found.clip.projectItem.nodeId, cue.projectItemId) || found.clip.projectItem.getMediaPath() !== cue.mediaPath) throw new Error('The caption bundle timeline link changed.');
+                        fragments = captionFragments(s, cue, cue.mediaPath, found);
+                    }
+                    var result = { id: cue.id, clipNodeId: String(found.clip.nodeId), start: fragments ? fragments[0].clip.start.seconds : found.clip.start.seconds, end: fragments ? fragments[fragments.length - 1].clip.end.seconds : found.clip.end.seconds, track: found.track, projectItemId: String(found.clip.projectItem.nodeId), path: found.clip.projectItem.getMediaPath() };
+                    if (fragments) result.bundleFragments = fragmentReceipt(fragments);
+                    out.push(result);
+                }
+                else {
+                    confirmAbsent(cue, references);
+                    out.push({ id: cue.id, clipNodeId: cue.clipNodeId, projectItemId: cue.projectItemId, path: cue.mediaPath, missing: true });
+                }
             }
             return reply({ ok: true, cues: out });
         } catch (e) { return reply({ error: e.toString() }); }
     }
-    return { context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, preflight: preflight, apply: apply, readTimeline: readTimeline };
+    return { readCaptionConsolidation: readCaptionConsolidation, stageCaptionConsolidation: stageCaptionConsolidation, verifyCaptionConsolidation: verifyCaptionConsolidation, rollbackCaptionConsolidation: rollbackCaptionConsolidation, context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, readCaptionAreaDescriptor: readCaptionAreaDescriptor, patchCaptionKeyValues: patchCaptionKeyValues, preflight: preflight, prepareCaptionTrack: prepareCaptionTrack, apply: apply, readTimeline: readTimeline };
 })();

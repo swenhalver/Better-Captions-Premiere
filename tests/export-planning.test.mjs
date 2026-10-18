@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url), ts = require('../webview-ui/node
 const root = path.resolve(import.meta.dirname, '..');
 function loadTypeScript(file, replacements = {}, context = {}) {
   const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  const exports = {}, sandbox = { exports, console, setTimeout, ...context, require: name => replacements[name] ?? loadTypeScript(path.resolve(path.dirname(file), name + '.ts'), replacements, context) };
+  const exports = {}, sandbox = { exports, console, setTimeout, ...context, require: name => replacements[name] ?? loadTypeScript(path.resolve(path.dirname(file), name.endsWith('.ts') ? name : name + '.ts'), replacements, context) };
   vm.runInNewContext(code, sandbox, { filename: file }); return exports;
 }
 const planner = loadTypeScript(path.join(root, 'webview-ui/src/lib/export/exporter.ts'), { '../canvas/engine': { CaptionRenderer: class {} } });
@@ -87,10 +87,30 @@ test('text overflow is reported instead of growing or shrinking a previously siz
   const [rendered]=await exporter.exportFrames([phrase],{fontFamily:'Arial',fontWeight:700,fontSize:64,maxWidth:.8,positionX:.5,positionY:.8,activeWord:{},spokenWord:{}},{},720,1280,1,1,{begin:async()=>'/output/overflow',write:async()=>{},finish:async()=>'/output/overflow/caption.mov'});
   assert.equal(rendered.layoutOverflow,true);assert.equal(rendered.renderBounds.height,512);
 });
+test('one native container measures every displayed sentence even when its Motion size stays constant', async () => {
+  const measured = [], context = { save(){}, restore(){}, scale(){} };
+  const exporter = loadTypeScript(path.join(root, 'webview-ui/src/lib/export/exporter.ts'), { '../canvas/engine': { CaptionRenderer: class {
+    resize() {}
+    renderFrame(caption, time, _style, _animation, area) {
+      const segment = caption.renderSegments.find(group => time >= group.startTime && time < group.endTime);
+      if (area.measureOnly) measured.push(segment.id);
+      return { width:100, height:segment.id === 'short' ? 100 : 900 };
+    }
+  } } }, { document: { createElement:()=>({width:0,height:0,getContext:()=>context,toDataURL:()=> 'data:image/png;base64,AAAA'}) } });
+  const phrase = { ...cue('container', 0, 2), renderBounds:{x:72,y:832,width:576,height:512,frameWidth:720,frameHeight:1280}, renderSegments: [
+    { id:'short',text:'short',startTime:0,endTime:1,words:[] }, {id:'tall',text:'a tall sentence',startTime:1,endTime:2,words:[]},
+  ] };
+  let completed = 0;
+  const [rendered] = await exporter.exportFrames([phrase], {fontFamily:'Arial',fontWeight:700,fontSize:64,maxWidth:.8,positionX:.5,positionY:.8,activeWord:{},spokenWord:{}}, {},720,1280,2,2,
+    {begin:async()=>'/output/container',write:async()=>{},finish:async()=>{completed++;return '/output/container/caption.mov';}});
+  assert.deepEqual(measured,['short','tall']); assert.equal(rendered.layoutOverflow,true);
+  assert.equal(completed,1,'all sentence groups render to one physical movie');
+  assert.equal(rendered.renderSegments.length,2); assert.equal(rendered.renderBounds.height,512);
+});
 test('CEP save uses its own sequence directory when a different sequence becomes active', async () => {
   let active = 'a'; const saved = [], contexts = { a: { id: 'a', projectPath: '/project/a.prproj', width: 1920, height: 1080, fps: 24 }, b: { id: 'b', projectPath: '/project/b.prproj', width: 1920, height: 1080, fps: 24 } };
   const runtime = { directory: context => '/data/' + context.id, save: (dir, data) => saved.push({ dir, data }) };
-  const window = { __adobe_cep__: { getSystemPath: () => '/extension', evalScript: (expression, callback) => { const args = JSON.parse('[' + expression.slice(expression.indexOf('(') + 1, -1) + ']'); callback(JSON.stringify(args[0] && args[0] !== active ? { error: 'The active sequence changed.' } : contexts[active])); } }, require: () => runtime };
+  const window = { __adobe_cep__: { getSystemPath: () => '/extension', evalScript: (expression, callback) => { if(expression==='"BC_NATIVE_EVAL_V1"')return callback('BC_NATIVE_EVAL_V1'); if(expression.includes('/*better-captions-host-ready-v1*/'))return callback('{"version":1,"ok":true,"loaded":false}'); if(expression.includes('/*better-captions-host-global-v1*/'))return callback('BC_HOST_GLOBAL_READY_V1'); const args = JSON.parse('[' + expression.slice(expression.indexOf('(') + 1, -1) + ']'); callback(JSON.stringify(args[0] && args[0] !== active ? { error: 'The active sequence changed.' } : contexts[active])); } }, require: name => name === 'node:path' ? path : runtime };
   const api = loadTypeScript(path.join(root, 'webview-ui/src/cep-api.ts'), {}, { window }).createHostAPI();
   await api.getActiveSequenceInfo(); active = 'b'; await api.getActiveSequenceInfo(); await api.saveSession({ sequenceId: 'a', text: 'Keep my original sequence' });
   assert.equal(saved[0].dir, '/data/a'); await assert.rejects(api.saveSession({ sequenceId: 'unknown' }), /Refresh/); await assert.rejects(api.beginCaption('caption-a', 'a'), /changed/);
@@ -98,7 +118,9 @@ test('CEP save uses its own sequence directory when a different sequence becomes
 test('polling jobs are removed after successful and failed native read callbacks', async () => {
   const pending=new Map(),disposed=[],ctx={id:'a',projectPath:'/media/project.prproj',width:720,height:1280,fps:24};let fail=false,index=0;
   const runtime={directory:()=>'/media/Better Captions/a',readJob:data=>{const file='/private/service/jobs/read-'+index++ +'.json';pending.set(file,data);return file;},disposeReadJob:file=>{disposed.push(file);pending.delete(file);},writeJSON:()=>assert.fail('polling must not write jobs beside the media project')};
-  const window={require:()=>runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript:(expression,callback)=>{
+  const window={require:name=>name==='node:path'?path:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript:(expression,callback)=>{
+    if(expression==='"BC_NATIVE_EVAL_V1"')return callback('BC_NATIVE_EVAL_V1');
+    if(expression.includes('/*better-captions-host-ready-v1*/'))return callback('{"version":1,"ok":true,"loaded":false}'); if(expression.includes('/*better-captions-host-global-v1*/'))return callback('BC_HOST_GLOBAL_READY_V1');
     const name=expression.slice('BetterCaptionsHost.'.length,expression.indexOf('('));
     if(name==='context')return callback(JSON.stringify(ctx));
     const [file]=JSON.parse('['+expression.slice(expression.indexOf('(')+1,-1)+']');assert.ok(pending.has(file));

@@ -6,12 +6,12 @@ const { createHostAPI } = require('./api.js');
 const CHANNEL = 'better-captions';
 const PANEL_ID = 'betterCaptions';
 const HOST_METHODS = new Set([
-  'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession',
+  'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession', 'loadStylePresets', 'saveStylePresets',
   'transcribeSequence', 'getFonts', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'getColorScheme',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
 ]);
-const AGENT_METHODS = new Set(['getState', 'patchStyle', 'patchAnimation', 'setCaptions', 'refresh', 'apply']);
+const AGENT_METHODS = new Set(['getState', 'patchStyle', 'patchAnimation', 'setCaptions', 'refresh', 'apply', 'readArea', 'editArea']);
 const ID = /^(?:ui|host)-[a-zA-Z0-9_-]{1,100}$/;
 const pending = new Map();
 const running = new Set();
@@ -70,6 +70,8 @@ const agentProxy = {
   setCaptions: captions => requestAgent('setCaptions', [captions]),
   refresh: () => requestAgent('refresh'),
   apply: () => requestAgent('apply'),
+  readArea: payload => requestAgent('readArea', [payload]),
+  editArea: payload => requestAgent('editArea', [payload]),
 };
 async function startAgent() {
   if (!agentStart) {

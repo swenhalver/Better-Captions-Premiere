@@ -24,6 +24,11 @@ test('process arguments remain literal, including shell metacharacters', async t
   assert.equal(await runtime.run(process.execPath, ['-e', 'process.stdout.write(process.argv[1])', argument]), argument);
   assert.equal(fs.existsSync(marker), false);
 });
+
+test('local process output preserves Unicode split across stdout buffers', async () => {
+  const script = "const bytes=Buffer.from('Café 字幕');process.stdout.write(bytes.subarray(0,4));setTimeout(()=>process.stdout.write(bytes.subarray(4)),25)";
+  assert.equal(await runtime.run(process.execPath, ['-e', script]), 'Café 字幕');
+});
 test('frame writer rejects unowned directories, invalid PNGs, oversized batches and out-of-order frames', t => {
   const dir = temporary(t), folder = runtime.jobDir(dir, 'caption-test'), frame = png();
   assert.throws(() => runtime.saveFrames(dir, [frame], 0), /Unknown/);
@@ -40,7 +45,7 @@ for (const fps of [30000 / 1001, 31]) test(`ProRes output preserves alpha, dimen
   const manifest = JSON.parse(fs.readFileSync(path.join(folder, 'render.json'), 'utf8'));
   assert.equal(manifest.frames, 4); assert.equal(manifest.alpha, true); assert.equal(manifest.width, 32); assert.equal(manifest.height, 18);
   assert.equal(fs.readdirSync(folder).some(name => name.endsWith('.png')), false);
-  const rgba = execFileSync('/opt/homebrew/bin/ffmpeg', ['-v', 'error', '-i', output, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1']);
+  const rgba = execFileSync(runtime.platform.resolveTool('ffmpeg'), ['-v', 'error', '-i', output, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'], { windowsHide: true });
   assert.ok(rgba[3] < 3, 'transparent corner is preserved');
   assert.ok(rgba[(8 * 32 + 16) * 4 + 3] > 250, 'opaque caption area is preserved');
   assert.throws(() => runtime.saveFrames(folder, [frame], 4), /already/);
@@ -52,7 +57,7 @@ test('a box-sized transparent movie retains offscreen placement metadata and odd
   const output = await runtime.encode(folder, 24, 2, undefined, bounds);
   const manifest = JSON.parse(fs.readFileSync(path.join(folder, 'render.json'), 'utf8'));
   assert.equal(manifest.width, 31); assert.equal(manifest.height, 19); assert.deepEqual(manifest.renderBounds, bounds);
-  const rgba = execFileSync('/opt/homebrew/bin/ffmpeg', ['-v', 'error', '-i', output, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1']);
+  const rgba = execFileSync(runtime.platform.resolveTool('ffmpeg'), ['-v', 'error', '-i', output, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'], { windowsHide: true });
   assert.equal(rgba.length, 31 * 19 * 4); assert.ok(rgba[3] < 3); assert.ok(rgba[(8 * 31 + 16) * 4 + 3] > 250);
 });
 test('paragraph encoding rejects source dimensions that do not match its declared box', async t => {
@@ -63,18 +68,18 @@ test('paragraph encoding rejects source dimensions that do not match its declare
 });
 test('session files round-trip with private permissions', t => {
   const dir = temporary(t), data = { sequenceId: 'sequence-a', captions: [{ text: 'Editable source' }] };
-  const file = runtime.save(dir, data); assert.deepEqual(runtime.load(dir), data); assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  const file = runtime.save(dir, data); assert.deepEqual(runtime.load(dir), data); if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 });
 test('read-only polling jobs use private ephemeral storage and tracked cleanup', t => {
   const dir = temporary(t), root = path.join(dir, 'service'), data = { sequenceId: 'sequence', projectPath: '/media/project.prproj', cues: [] };
   const file = runtime.readJob(data, root);
   assert.equal(path.dirname(file), path.join(root, 'jobs'));assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), data);
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
+  if (process.platform !== 'win32') { assert.equal(fs.statSync(file).mode & 0o777, 0o600);assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700); }
   runtime.disposeReadJob(file);assert.equal(fs.existsSync(file), false);
   assert.throws(() => runtime.disposeReadJob(path.join(dir, 'unrelated.json')), /Unknown/);
 });
 test('read-only job storage rejects a symbolic-link root without writing through it', t => {
   const dir = temporary(t), target = path.join(dir, 'elsewhere'), root = path.join(dir, 'service');
-  fs.mkdirSync(target);fs.symlinkSync(target, root);
+  fs.mkdirSync(target);fs.symlinkSync(target, root, process.platform === 'win32' ? 'junction' : 'dir');
   assert.throws(() => runtime.readJob({ cues:[] }, root), /real private/);assert.deepEqual(fs.readdirSync(target), []);
 });
