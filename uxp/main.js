@@ -19,6 +19,7 @@ const completed = new Set();
 const api = createHostAPI();
 let webview = null, uiReady = false, destroyed = false, panelVisible = false, nextId = 0;
 let agentStart = null, agentStop = null, loadFailure = null;
+let playheadTimer = null, playheadReading = false, playheadGeneration = 0, lastPlayhead = '';
 const cleanupListeners = [];
 
 function showStatus(text, isError = false) {
@@ -58,6 +59,30 @@ function availability(snapshot) {
 function visibility(visible = panelVisible) {
   panelVisible = visible;
   if (webview && !destroyed) { try { send({ type: 'better-captions-panel-visibility', visible }); } catch {} }
+  resetPlayhead();
+}
+function canFollowPlayhead() { return !destroyed && !!webview && uiReady && panelVisible && typeof api.readPlayheadIfIdle === 'function'; }
+function schedulePlayhead(delay = 100) {
+  if (!canFollowPlayhead() || playheadTimer !== null || playheadReading) return;
+  playheadTimer = setTimeout(async () => {
+    playheadTimer = null;
+    if (!canFollowPlayhead()) return;
+    const generation = playheadGeneration;
+    playheadReading = true;
+    try {
+      const position = await api.readPlayheadIfIdle();
+      if (generation === playheadGeneration && canFollowPlayhead() && position) {
+        const identity = JSON.stringify([position.sequenceId, position.projectPath, position.time]);
+        if (identity !== lastPlayhead) { lastPlayhead = identity; notify('ui.timelinePlayhead', [position]); }
+      }
+    } catch { /* Availability already reports a genuinely pending native read. Never retry that read here. */ }
+    finally { playheadReading = false; schedulePlayhead(); }
+  }, delay);
+}
+function resetPlayhead() {
+  ++playheadGeneration; lastPlayhead = '';
+  if (playheadTimer !== null) { clearTimeout(playheadTimer); playheadTimer = null; }
+  schedulePlayhead();
 }
 function rejectPending(message) {
   for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error(message)); }
@@ -116,7 +141,7 @@ async function onMessage(event) {
   try {
     let result;
     if (data.method === 'agent.ready') { uiReady = true; loadFailure = null; showStatus(''); await startAgent(); visibility(); availability(); result = { ready: true }; }
-    else if (data.method === 'agent.stopped') { uiReady = false; result = { ready: false }; }
+    else if (data.method === 'agent.stopped') { uiReady = false; resetPlayhead(); result = { ready: false }; }
     else if (data.method === 'diagnostic') {
       const diagnostic = data.args[0];
       if (!diagnostic || typeof diagnostic !== 'object' || typeof diagnostic.stage !== 'string' || typeof diagnostic.message !== 'string') throw new Error('Invalid caption bootstrap diagnostic.');
@@ -144,7 +169,7 @@ function sequenceEvents() {
     const events = premiere.Constants.SequenceEvent;
     for (const [event, method] of [[events.ACTIVATED, 'ui.sequenceActivated'], [events.CLOSED, 'ui.sequenceClosed']]) {
       if (!event) continue;
-      const listener = () => notify(method);
+      const listener = () => { resetPlayhead(); notify(method); };
       premiere.EventManager.addGlobalEventListener(event, listener);
       cleanupListeners.push(() => premiere.EventManager.removeGlobalEventListener(event, listener));
     }
@@ -160,7 +185,7 @@ function mount() {
     webview.addEventListener('message', onMessage);
     window.addEventListener('message', onMessage);
     cleanupListeners.push(() => window.removeEventListener('message', onMessage));
-    webview.addEventListener('loadstart', () => { uiReady = false; loadFailure = null; showStatus('Loading caption editor…'); rejectPending('The Better Captions editor is reloading. Try the agent action again when it is ready.'); });
+    webview.addEventListener('loadstart', () => { uiReady = false; resetPlayhead(); loadFailure = null; showStatus('Loading caption editor…'); rejectPending('The Better Captions editor is reloading. Try the agent action again when it is ready.'); });
     webview.addEventListener('loadstop', () => {
       if (!uiReady && !loadFailure) showStatus('Caption editor loaded. Waiting for its controls…');
       Promise.resolve(api.getColorScheme()).then(scheme => notify('ui.colorScheme', [scheme])).catch(() => {});

@@ -10,6 +10,9 @@ const HOST_METHODS = [
   'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'writeNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
 ] as const;
 const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionArea', 'readCaptionConsolidation']);
+// Internal position sampling may report lane availability, but cannot be
+// requested through the webview's RPC allowlist.
+const AVAILABILITY_METHODS = new Set<string>([...HOST_METHODS, 'readTimelinePlayhead']);
 const TRANSPORT_CODES = new Set(['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE', 'BC_NATIVE_CLOSED', 'BC_OUTPUT_UNCONFIRMED']);
 export interface NativeTransportAvailability {
   version: 1;
@@ -60,8 +63,8 @@ function nativeTransport(host: UXPMessageHost, webviewAPI: unknown) {
     if (closed || nativeAvailability.state === 'closed') return;
     if (!status || status.version !== 1 || !Number.isSafeInteger(status.revision) || status.revision < 0 || status.revision <= nativeAvailability.revision) return;
     if (status.state === 'ready') { if (status.method !== null || status.reason !== 'idle') return; }
-    else if (status.state === 'waiting') { if (typeof status.method !== 'string' || !HOST_METHODS.includes(status.method as typeof HOST_METHODS[number]) || status.reason !== 'native-timeout') return; }
-    else if (status.state === 'closed') { if (status.method !== null && (typeof status.method !== 'string' || !HOST_METHODS.includes(status.method as typeof HOST_METHODS[number]))) return; if (status.reason !== 'closed') return; }
+    else if (status.state === 'waiting') { if (typeof status.method !== 'string' || !AVAILABILITY_METHODS.has(status.method) || status.reason !== 'native-timeout') return; }
+    else if (status.state === 'closed') { if (status.method !== null && (typeof status.method !== 'string' || !AVAILABILITY_METHODS.has(status.method))) return; if (status.reason !== 'closed') return; }
     else return;
     nativeAvailability = { version: 1, revision: status.revision, state: status.state, method: status.method, reason: status.reason };
     publishAvailability();
@@ -115,6 +118,7 @@ function nativeTransport(host: UXPMessageHost, webviewAPI: unknown) {
       switch (data.method) {
         case 'ui.sequenceActivated': callbacks.onSequenceActivated?.(); return;
         case 'ui.sequenceClosed': callbacks.onSequenceClosed?.(); return;
+        case 'ui.timelinePlayhead': callbacks.onTimelinePlayhead?.(...args as never[]); return;
         case 'ui.colorScheme': callbacks.updateColorScheme?.(...args as never[]); return;
         case 'agent.getState': if (!handler) throw new Error('The caption editor is not ready.'); result = await handler.getState(); break;
         case 'agent.patchStyle': if (!handler) throw new Error('The caption editor is not ready.'); result = await handler.patchStyle(args[0] as Parameters<AgentHandler['patchStyle']>[0]); break;

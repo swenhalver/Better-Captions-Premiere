@@ -49,7 +49,7 @@ function transpile(source) {
 }
 
 function fixture(t, options = {}) {
-  let time = 0, nextTimer = 0, main, component, mounted, cleanup, availability, liveOptions;
+  let time = 0, nextTimer = 0, main, component, mounted, cleanup, availability, liveOptions, playheadCallback;
   const timers = new Map(), modules = new Map(), storage = new Map(), effects = [], calls = { apply: [], commits: [], saves: [], renders: [], seeks: [], transcript: 0, supersedes: 0 };
   const info = { id: 'sequence', name: 'Caption verification', projectPath: '/project/test.prproj', frameWidth: 1920, frameHeight: 1080, frameRate: 24, duration: 8, playhead: .25, tracks: [{ index: 2, name: 'Captions', clips: 1, locked: false }] };
   const profile = { signature: 'motion-rendered', watchSignature: 'geometry-rendered', samples: [{ time: .25, scaleX: 1, scaleY: 1 }, { time: 7.75, scaleX: 1, scaleY: 1 }] };
@@ -95,7 +95,7 @@ function fixture(t, options = {}) {
     if (name === 'svelte') return { onMount: fn => { mounted = fn; }, tick: async () => {} };
     if (name === 'svelte/reactivity') return { SvelteMap: Map };
     if (name.includes('/components/') && name.endsWith('.svelte')) return {};
-    if (name === './webview-api') return { setSequenceCallbacks() {} };
+    if (name === './webview-api') return { setSequenceCallbacks() {}, setTimelinePlayheadCallback(callback) { playheadCallback = callback; } };
     if (name === './webview-setup') return { initWebview: () => ({ api }) };
     const base = resolve(dirname(from), name), filename = [base, base + '.ts'].find(existsSync);
     if (!filename) throw new Error('Unexpected controller dependency: ' + name);
@@ -156,9 +156,24 @@ function fixture(t, options = {}) {
   t.after(() => cleanup?.());
   return { main, manager, storage, calls, info, api, caption, saved, parser, realExport, sync, advance, settle,
     context: () => liveOptions.current(), emitAvailability: state => { availability({ state }); sync(); },
+    emitPlayhead: value => { playheadCallback?.(value); sync(); },
+    stop() { cleanup?.(); cleanup = null; },
     async start() { cleanup = mounted(); await settle(); sync(); return this; },
   };
 }
+
+test('Premiere timeline position follows without selecting, seeking, saving or rendering captions', async t => {
+  const h = fixture(t); h.info.id = 'f18a14ea-2be5-4393-a113-c1b43bfcab1e'; await h.start();
+  const before = clone(h.calls), storage = [...h.storage], selected = h.main.getState().runtime.selectedId, signature = h.main.outputSignature(h.manager.current);
+  const position = { sequenceId: '{' + h.info.id.toUpperCase() + '}', projectPath: h.info.projectPath, time: 1.25 };
+  h.emitPlayhead(position); assert.equal(h.manager.current.currentTime, 1.25);
+  assert.equal(h.main.getState().runtime.selectedId, selected); assert.equal(h.main.outputSignature(h.manager.current), signature);
+  assert.deepEqual([...h.storage], storage, 'CTI display state never persists a caption edit');
+  await h.advance(5000); assert.deepEqual(h.calls, before, 'Following playback never queues an automatic movie or native document update');
+  for (const bad of [null, [], {}, { ...position, time: NaN }, { ...position, time: -1 }, { ...position, time: '2' }, { ...position, projectPath: '/project/copy.prproj' }, { ...position, sequenceId: 'another-sequence' }]) h.emitPlayhead(bad);
+  assert.equal(h.manager.current.currentTime, 1.25, 'Malformed and other-project/sequence positions are ignored');
+  h.stop(); h.emitPlayhead({ ...position, time: 2 }); assert.equal(h.manager.current.currentTime, 1.25, 'Unmount removes its callback');
+});
 
 test('harness module routes match native Windows and POSIX paths without matching unrelated basenames', () => {
   for (const [route, suffix] of Object.entries(routedPaths)) {

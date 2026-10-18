@@ -16,7 +16,7 @@ function sameSavedSequence(a, b) {
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
-const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionArea', 'readCaptionConsolidation']);
+const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'readTimelinePlayhead', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionArea', 'readCaptionConsolidation']);
 const SERVICE_READS = new Set(['getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 
 function createHostAPI(options = {}) {
@@ -312,6 +312,23 @@ function createHostAPI(options = {}) {
   }
   // These observers inspect only this instance's lane; they never issue native
   // calls or replay a timed-out operation. Ready means its real promise settled.
+  // The host-only position sampler skips a busy lane instead of queuing behind
+  // editing/rendering. It uses three cheap SDK reads and never scans tracks,
+  // changes captured session identities, seeks, or touches the filesystem.
+  api.readPlayheadIfIdle = () => {
+    if (disposed || active || unresolved || waiting.length) return Promise.resolve(null);
+    return serial('readTimelinePlayhead', async () => {
+      const project = await ppro.Project.getActiveProject();
+      if (!project) return null;
+      const projectPath = project.path;
+      const sequence = await project.getActiveSequence();
+      if (!sequence) return null;
+      const sequenceId = key(sequence.guid.toString());
+      const time = (await sequence.getPlayerPosition()).seconds;
+      if (disposed || typeof projectPath !== 'string' || !sequenceId || !Number.isFinite(time) || time < 0) return null;
+      return { sequenceId, projectPath, time };
+    }, null);
+  };
   api.getTransportAvailability = () => ({ ...availability });
   api.onTransportAvailability = listener => {
     if (typeof listener !== 'function') throw new TypeError('A transport availability listener is required.');

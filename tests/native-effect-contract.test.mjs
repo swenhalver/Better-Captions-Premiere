@@ -287,7 +287,9 @@ test('existing-document edit preserves host origin3600 after split/move and igno
   const { encodeNativeTransportText, decodeNativeTransportTimeOrigin } = await import('../webview-ui/src/lib/native-effect/encode.ts');
   const { runInNewContext } = await import('node:vm');
   const locator={projectPath:'/scratch.prproj',sequenceId:'seq-1',clipNodeId:'right-split',trackIndex:0,clipIndex:0,componentIndex:0,documentParamIndex:0};
+  for (const typography of [false, true]) {
   const original={...document(),timeOriginSeconds:3600};let carrier=encodeNativeTransportText(original),writes=0;
+  if (typography) { original.style.baseFontWeight=400; Object.assign(original.style.current,{fontWeight:700,italic:true,fontWeightOffset:100}); carrier=encodeNativeTransportText(original); }
   const param={displayName:'Caption document (experimental)',isTimeVarying:()=>false,getValue:()=>carrier,setValue(value){writes++;carrier=value;return true;}};
   const tick=seconds=>String(BigInt(seconds)*254016000000n);
   const clip={isAdjustmentLayer:()=>true,nodeId:'right-split',start:{ticks:tick(4)},end:{ticks:tick(8)},inPoint:{ticks:tick(3604)},outPoint:{ticks:tick(3608)},components:{numItems:1,0:{matchName:NATIVE_EFFECT_MATCH_NAME,properties:{numItems:1,0:param}}}};
@@ -303,6 +305,8 @@ test('existing-document edit preserves host origin3600 after split/move and igno
   assert.equal(result.ok,true);assert.equal(writes,1);assert.equal(decodeNativeTransportTimeOrigin(carrier),3600);
   assert.equal(edited.timeOriginSeconds,-999);assert.equal(edited.captions[0].words[0].start,0);
   assert.throws(()=>buildCepNativeDocumentApplyScript({locator,revision:fresh.revision},edited,true),/Choose explicit/);
+  if(typography)assert.equal(Buffer.from(carrier.slice(7),'hex').readUInt32LE(4),3,'Existing typography documents retain BCAP3 and their persisted origin');
+  }
 });
 
 test('persisted-origin reader accepts legacyv1 zero and rejects malformed footer/layout', async () => {

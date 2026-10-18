@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import * as webviewAPI from "./webview-api";
-  import { setSequenceCallbacks } from "./webview-api";
+  import { setSequenceCallbacks, setTimelinePlayheadCallback } from "./webview-api";
   import { initWebview } from "./webview-setup";
   import type { NativeTransportAvailability } from "./webview-setup";
   import { createLiveOutput, retryableNativeRead, type LiveOutputStatus } from "./lib/live-output";
@@ -722,9 +722,20 @@
       await flushSave(); await exportButton.apply(); await flushSave(); return getState();
     },
   };
+  function followTimelinePlayhead(value: unknown) {
+    const session = sessionManager.current;
+    if (api.isDemo || !session || !hostPanelVisible || !documentVisible || isRefreshing || session.isLoading || !value || typeof value !== 'object' || Array.isArray(value)) return;
+    const position = value as { sequenceId?: unknown; projectPath?: unknown; time?: unknown };
+    if (typeof position.sequenceId !== 'string' || typeof position.projectPath !== 'string' || typeof position.time !== 'number' || !Number.isFinite(position.time) || position.time < 0) return;
+    if (!sameSequenceId(position.sequenceId, session.sequenceId) || position.projectPath !== session.projectPath) return;
+    // Following the CTI is display state only. It does not select/seek a clip,
+    // save captions, or invalidate their rendered/native document signature.
+    if (session.currentTime !== position.time) sessionManager.setCurrentTime(position.time);
+  }
   onMount(() => {
     sessionManager.saveHandler = save;
     setSequenceCallbacks(() => { ++reconnectGeneration; reconnect?.notify(); }, () => { ++reconnectGeneration; reconnect?.notify(); });
+    setTimelinePlayheadCallback(followTimelinePlayhead);
     (window as unknown as { betterCaptionsAgent: AgentHandler }).betterCaptionsAgent = agent;
     const stopAgentBridge = api.startAgentBridge(agent);
     liveOutput = createLiveOutput({
@@ -814,6 +825,7 @@
       stopAgentBridge();
       sessionManager.saveHandler = null;
       setSequenceCallbacks(() => {}, () => {});
+      setTimelinePlayheadCallback(null);
       delete (window as unknown as { betterCaptionsAgent?: AgentHandler }).betterCaptionsAgent;
     };
   });

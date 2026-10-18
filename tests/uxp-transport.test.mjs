@@ -20,11 +20,11 @@ function events() {
     count(type) { return handlers.get(type)?.size || 0; },
   };
 }
-function harness(t, nativeOverrides = {}) {
+function harness(t, nativeOverrides = {}, options = {}) {
   const hostWindow = events(), uiWindow = events(), frame = events(), sequenceEvents = new Map();
-  const timers = new Map(), calls = [], replies = [], logs = [];
-  const schedule = (callback, ms) => { const timer = setTimeout(callback, ms); timers.set(timer,{callback,ms}); return timer; };
-  const cancel = timer => { timers.delete(timer); clearTimeout(timer); };
+  const timers = new Map(), calls = [], replies = [], logs = [], playheads = [];
+  const schedule = (callback, ms) => { const timer = options.manualTimers ? {} : setTimeout(() => { timers.delete(timer); callback(); }, ms); timers.set(timer,{callback,ms}); return timer; };
+  const cancel = timer => { timers.delete(timer); if (!options.manualTimers) clearTimeout(timer); };
   const logger = { log: (...args) => logs.push(args), warn: (...args) => logs.push(args), error: (...args) => logs.push(args) };
   let setup, proxy, stops = 0, activated = 0, closed = 0, theme = 0;
   const status = { textContent: '', style: {} };
@@ -77,7 +77,7 @@ function harness(t, nativeOverrides = {}) {
     window: uiWindow, console: logger, setTimeout: schedule, clearTimeout: cancel, Map, Set,
   };
   vm.runInNewContext(transport, uiContext);
-  const { api } = exported.initWebview({ onSequenceActivated() { activated++; }, onSequenceClosed() { closed++; }, updateColorScheme() { theme++; } });
+  const { api } = exported.initWebview({ onSequenceActivated() { activated++; }, onSequenceClosed() { closed++; }, updateColorScheme() { theme++; }, onTimelinePlayhead(position) { playheads.push(position); } });
   const handler = {
     getState() { return state; },
     async patchStyle(patch) { Object.assign(state.style, patch); return state; },
@@ -86,16 +86,82 @@ function harness(t, nativeOverrides = {}) {
     async refresh() { return state; },
     async apply() { return { applied: true }; },
   };
-  const stop = api.startAgentBridge(handler);
-  t.after(async () => { stop(); await setup.plugin.destroy(); for (const timer of timers.keys()) clearTimeout(timer); });
+  let currentStop = () => {};
+  const ready = () => { currentStop = api.startAgentBridge(handler); };
+  const stop = () => currentStop();
+  if (options.autoAgent !== false) ready();
+  t.after(async () => { stop(); await setup.plugin.destroy(); for (const timer of timers.keys()) cancel(timer); });
   return { api, frame, status, setup, state, calls, replies, logs, hostWindow, uiWindow, sequenceEvents,
-    handler, proxy: () => proxy, stops: () => stops, counters: () => ({ activated, closed, theme }), stop,
+    handler, proxy: () => proxy, stops: () => stops, counters: () => ({ activated, closed, theme }), stop, ready, playheads,
     availability(status) { nativeAvailability={...status};for(const listener of nativeObservers)listener({...status}); },
     availabilityObservers:()=>nativeObservers.size,
-    fireTimeout(ms) { const found=[...timers].find(([,value])=>value.ms===ms);assert.ok(found,'expected timeout '+ms);cancel(found[0]);found[1].callback(); },
+    fireTimeout(ms) { const found=[...timers].find(([,value])=>value.ms===ms);assert.ok(found,'expected timeout '+ms);cancel(found[0]);return found[1].callback(); },
+    timerCount: ms => [...timers.values()].filter(timer=>ms===undefined||timer.ms===ms).length,
     runBootstrap() { vm.runInNewContext(source('webview-ui/public/bootstrap.js'), { window: uiWindow, Date }); },
   };
 }
+
+test('host playhead sampling starts only after editor readiness and visibility and forwards captured position callbacks',async t=>{
+  let reads=0;const position={sequenceId:'native-sequence',projectPath:'/captured/project.prproj',time:1.25};
+  const app=harness(t,{readPlayheadIfIdle:async()=>{reads++;return position;}},{manualTimers:true,autoAgent:false});
+  app.setup.panels.betterCaptions.show();await tick();assert.equal(app.timerCount(100),0);assert.equal(reads,0,'visible without editor readiness cannot sample');
+  app.ready();await tick();assert.equal(app.timerCount(100),1);await app.fireTimeout(100);
+  assert.equal(reads,1);assert.deepEqual(app.playheads,[position]);assert.equal(app.timerCount(100),1);
+  app.setup.panels.betterCaptions.hide();assert.equal(app.timerCount(100),0);
+  app.setup.panels.betterCaptions.show();assert.equal(app.timerCount(100),1);
+  app.frame.emit('loadstart',{});assert.equal(app.timerCount(100),0);assert.equal(reads,1);
+});
+test('host sampler has one outstanding read, deduplicates unchanged positions and resumes with fresh samples',async t=>{
+  let finish,reads=0;const position={sequenceId:'one',projectPath:'/project/a.prproj',time:0};
+  const app=harness(t,{readPlayheadIfIdle:()=>{reads++;return reads===1?new Promise(resolve=>{finish=resolve;}):Promise.resolve({...position});}},{manualTimers:true});await tick();
+  app.setup.panels.betterCaptions.show();const pending=app.fireTimeout(100);await tick();
+  assert.equal(reads,1);assert.equal(app.timerCount(100),0,'no second timer is queued while native work is outstanding');
+  finish({...position});await pending;assert.equal(app.timerCount(100),1);assert.equal(app.playheads.length,1);
+  await app.fireTimeout(100);assert.equal(reads,2);assert.equal(app.playheads.length,1,'unchanged samples do not churn the editor');
+  position.time=2;await app.fireTimeout(100);assert.equal(app.playheads.length,2);assert.equal(app.playheads.at(-1).time,2);
+  position.projectPath='/project/b.prproj';await app.fireTimeout(100);assert.equal(app.playheads.length,3,'the same sequence ID and time in another project is a new context');
+  position.sequenceId='two';await app.fireTimeout(100);assert.equal(app.playheads.length,4);assert.equal(app.timerCount(100),1);
+});
+test('late sampler replies after hide, reload or sequence events never update the old editor context',async t=>{
+  for(const change of ['hide','hide-and-show','reload','reload-and-ready','activated','closed']){
+    let finish,reads=0;const old={sequenceId:'old',projectPath:'/old/edit.prproj',time:2},fresh={sequenceId:'new',projectPath:'/new/edit.prproj',time:7};
+    const app=harness(t,{readPlayheadIfIdle:()=>{reads++;return reads===1?new Promise(resolve=>{finish=resolve;}):Promise.resolve(fresh);}},{manualTimers:true});await tick();
+    app.setup.panels.betterCaptions.show();const pending=app.fireTimeout(100);await tick();
+    if(change.startsWith('hide')){
+      app.setup.panels.betterCaptions.hide();if(change==='hide-and-show')app.setup.panels.betterCaptions.show();
+    }else if(change.startsWith('reload')){
+      app.frame.emit('loadstart',{});if(change==='reload-and-ready'){app.ready();await tick();}
+    }else app.sequenceEvents.get(change)();
+    finish(old);await pending;assert.equal(app.playheads.length,0,change+' must invalidate its already-running native reply');
+    if(change==='hide'){assert.equal(app.timerCount(100),0);app.setup.panels.betterCaptions.show();}
+    if(change==='reload'){assert.equal(app.timerCount(100),0);app.ready();await tick();}
+    assert.equal(app.timerCount(100),1);await app.fireTimeout(100);assert.deepEqual(app.playheads,[fresh]);assert.equal(reads,2);
+    app.setup.panels.betterCaptions.hide();
+  }
+});
+test('plugin destruction cancels sampler timers and ignores an outstanding native reply without rescheduling',async t=>{
+  const idle=harness(t,{readPlayheadIfIdle:async()=>null},{manualTimers:true});await tick();idle.setup.panels.betterCaptions.show();assert.equal(idle.timerCount(100),1);
+  await idle.setup.plugin.destroy();assert.equal(idle.timerCount(100),0);idle.setup.plugin.destroy=async()=>{};
+  let finish,reads=0;const app=harness(t,{readPlayheadIfIdle:()=>{reads++;return new Promise(resolve=>{finish=resolve;});}},{manualTimers:true});await tick();
+  app.setup.panels.betterCaptions.show();const pending=app.fireTimeout(100);await tick();await app.setup.plugin.destroy();
+  finish({sequenceId:'one',projectPath:'/project/edit.prproj',time:4});await pending;
+  assert.equal(app.playheads.length,0);assert.equal(app.timerCount(100),0);assert.equal(reads,1);app.setup.plugin.destroy=async()=>{};
+});
+test('host-only sampler methods remain inaccessible through RPC while internal read availability reaches the editor',async t=>{
+  let reads=0;const app=harness(t,{readPlayheadIfIdle:async()=>{reads++;return null;},readTimelinePlayhead:async()=>{reads++;return null;}},{manualTimers:true});await tick();
+  for(const method of ['readPlayheadIfIdle','readTimelinePlayhead']){
+    assert.equal(app.api[method],undefined);const id='ui-denied-'+method;
+    app.hostWindow.emit('message',{source:app.frame,data:{channel:'better-captions',id,method,args:[]}});await tick();
+    assert.match(app.replies.find(reply=>reply.id===id)?.error?.message,/Unsupported Premiere caption method/);
+  }
+  app.availability({version:1,revision:1,state:'waiting',method:'readTimelinePlayhead',reason:'native-timeout'});
+  assert.equal(app.api.getTransportAvailability().state,'waiting');assert.equal(app.api.getTransportAvailability().method,'readTimelinePlayhead');
+  await assert.rejects(app.api.getActiveSequenceInfo(),{code:'BC_NATIVE_WAITING'});assert.equal(reads,0);
+  app.availability({version:1,revision:2,state:'ready',method:null,reason:'idle'});assert.equal(app.api.getTransportAvailability().state,'ready');assert.equal(reads,0);
+  assert.equal((await app.api.getActiveSequenceInfo()).id,'native-sequence');
+  app.availability({version:1,revision:3,state:'closed',method:'readTimelinePlayhead',reason:'closed'});assert.equal(app.api.getTransportAvailability().state,'closed');
+  await assert.rejects(app.api.getActiveSequenceInfo(),{code:'BC_NATIVE_CLOSED'});assert.equal(reads,0);
+});
 
 test('font catalog metadata and explicit system errors round trip through both fixed native allowlists',async t=>{
   const expected=[{family:'Literal, 字體',weights:[380,400.444,617],italic:false,variable:{min:380,max:617}}];

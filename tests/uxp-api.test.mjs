@@ -10,12 +10,17 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function harness(t, options = {}) {
   let active='one',projectPath='/projects/edit.prproj',counter=0;
   let projectReads=0,serviceReads=0,clockOffset=0;
+  const nativeReads={activeSequence:0,sequences:0,settings:0,frameRect:0,timebase:0,duration:0,playhead:0,tracks:0};
   const writes=[],requests=[];
   const timers=new Map();
   const schedule=(callback,ms)=>{const timer=setTimeout(()=>{timers.delete(timer);callback();},ms);timers.set(timer,{callback,ms});return timer;};
   const cancel=timer=>{timers.delete(timer);clearTimeout(timer);};
-  const sequences=['one','two'].map(id=>({guid:{toString:()=>id},name:id,getSettings:async()=>({getVideoFrameRect:async()=>({width:720,height:1280})}),getTimebase:async()=>10584000000,getEndTime:async()=>({seconds:10}),getPlayerPosition:async()=>({seconds:id==='one'?2.5:7}),getVideoTrackCount:async()=>0}));
-  const project={get path(){return projectPath;},getSequences:async()=>sequences,getActiveSequence:async()=>sequences.find(s=>s.name===active)};
+  const sequences=['one','two'].map(id=>({guid:{toString:()=>options.guids?.[id]??id},name:id,
+    getSettings:async()=>{nativeReads.settings++;return{getVideoFrameRect:async()=>{nativeReads.frameRect++;return{width:720,height:1280};}};},
+    getTimebase:async()=>{nativeReads.timebase++;return 10584000000;},getEndTime:async()=>{nativeReads.duration++;return{seconds:10};},
+    getPlayerPosition:async()=>{nativeReads.playhead++;return options.playhead?options.playhead(id):{seconds:id==='one'?2.5:7};},
+    getVideoTrackCount:async()=>{nativeReads.tracks++;return 0;}}));
+  const project={get path(){return projectPath;},getSequences:async()=>{nativeReads.sequences++;return sequences;},getActiveSequence:async()=>{nativeReads.activeSequence++;return sequences.find(s=>s.name===active);}};
   const folders=new Map();
   function folder(path) {
     if(folders.has(path))return folders.get(path);
@@ -49,7 +54,7 @@ function harness(t, options = {}) {
   const native={fetchTranscript:async sequence=>sequence.name,transcribe:async sequence=>options.transcribe?options.transcribe(sequence):sequence.name};
   const module={exports:{}};
   const context={module,exports:module.exports,setTimeout:schedule,clearTimeout:cancel,Date:{now:()=>Date.now()+clockOffset},Map,Set,require:name=>{
-    if(name==='premierepro')return {Project:{getActiveProject:async()=>{projectReads++;return project;}},Constants:{TrackItemType:{CLIP:1}}};
+    if(name==='premierepro')return {Project:{getActiveProject:async()=>{projectReads++;return options.noProject?null:project;}},Constants:{TrackItemType:{CLIP:1}}};
     if(name==='uxp')return {storage:{localFileSystem:{getDataFolder:async()=>folder('/plugin-data')}}};
     if(name==='./style-presets.js')return require('../uxp/style-presets.js');
     if(name==='./storage.js')return storage;
@@ -61,8 +66,59 @@ function harness(t, options = {}) {
   }};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/api.js',import.meta.url),'utf8'),context);
   const api=module.exports.createHostAPI({readTimeoutMs:options.readTimeoutMs??12000,serviceStartupGraceMs:options.serviceStartupGraceMs??0,serviceStartupPollMs:options.serviceStartupPollMs??5});t.after(()=>api.dispose());
-  return {api,writes,requests,respond,setService,healthyService,fireTimeout(ms){const entry=[...timers].find(([,value])=>value.ms===ms);assert.ok(entry,'Expected timer '+ms);cancel(entry[0]);entry[1].callback();},advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},get projectReads(){return projectReads;},get serviceReads(){return serviceReads;}};
+  return {api,writes,requests,respond,setService,healthyService,fireTimeout(ms){const entry=[...timers].find(([,value])=>value.ms===ms);assert.ok(entry,'Expected timer '+ms);cancel(entry[0]);entry[1].callback();},advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},nativeReads:()=>({...nativeReads}),get projectReads(){return projectReads;},get serviceReads(){return serviceReads;}};
 }
+
+test('idle playhead sampling reads only the active project, sequence and time without creating a session context',async t=>{
+  const h=harness(t,{service:null});
+  const position=await h.api.readPlayheadIfIdle();
+  assert.deepEqual(JSON.parse(JSON.stringify(position)),{sequenceId:'one',projectPath:'/projects/edit.prproj',time:2.5});
+  assert.equal(h.projectReads,1);assert.deepEqual(h.nativeReads(),{activeSequence:1,sequences:0,settings:0,frameRect:0,timebase:0,duration:0,playhead:1,tracks:0});
+  assert.equal(h.serviceReads,0);assert.equal(h.writes.length,0);assert.equal(h.requests.length,0);
+  await assert.rejects(h.api.loadSession('one'),/Refresh the sequence/,'a cheap sample must not pretend it captured a full session');
+  h.select('two');h.relocate('/copied/project.prproj');
+  assert.deepEqual(JSON.parse(JSON.stringify(await h.api.readPlayheadIfIdle())),{sequenceId:'two',projectPath:'/copied/project.prproj',time:7});
+});
+test('a delayed playhead read retains its captured project and GUID instead of mixing in a later active sequence',async t=>{
+  let finish;const guid='{A14706AA-93BB-74D3-A5FD-C8974E471C87}',h=harness(t,{guids:{one:guid},playhead:()=>new Promise(resolve=>{finish=resolve;})});
+  const sampling=h.api.readPlayheadIfIdle();await tick();h.select('two');h.relocate('/different/edit.prproj');finish({seconds:0});
+  assert.deepEqual(JSON.parse(JSON.stringify(await sampling)),{sequenceId:'a14706aa-93bb-74d3-a5fd-c8974e471c87',projectPath:'/projects/edit.prproj',time:0});
+  assert.equal(h.nativeReads().playhead,1);assert.equal(h.nativeReads().settings,0);assert.equal(h.requests.length,0);
+});
+test('playhead sampling returns no position for absent projects/sequences and invalid native times',async t=>{
+  const absent=harness(t,{noProject:true});assert.equal(await absent.api.readPlayheadIfIdle(),null);assert.equal(absent.nativeReads().activeSequence,0);
+  const noSequence=harness(t);noSequence.select('closed');assert.equal(await noSequence.api.readPlayheadIfIdle(),null);assert.equal(noSequence.nativeReads().playhead,0);
+  for(const seconds of [-1,NaN,Infinity,undefined]){
+    const h=harness(t,{playhead:()=>({seconds})});assert.equal(await h.api.readPlayheadIfIdle(),null);assert.equal(h.requests.length,0);assert.equal(h.nativeReads().tracks,0);
+  }
+});
+test('busy and queued native work makes the sampler skip immediately without joining the queue',async t=>{
+  let finish,entered;const started=new Promise(resolve=>{entered=resolve;});
+  const h=harness(t,{transcribe:async()=>{entered();await new Promise(resolve=>{finish=resolve;});return 'done';}});await h.api.getActiveSequenceInfo();
+  const working=h.api.transcribeSequence('one');await started;const before=h.projectReads,reads=h.nativeReads();
+  assert.equal(await h.api.readPlayheadIfIdle(),null);
+  const queued=h.api.getActiveSequenceInfo();assert.equal(await h.api.readPlayheadIfIdle(),null);
+  assert.equal(h.projectReads,before);assert.deepEqual(h.nativeReads(),reads);assert.equal(h.requests.length,0);
+  finish();assert.equal(await working,'done');await queued;assert.equal((await h.api.readPlayheadIfIdle()).time,2.5);
+});
+test('a pending sampler timeout keeps the single native lane occupied and never repeats the SDK read',async t=>{
+  let finish;const h=harness(t,{readTimeoutMs:50,playhead:()=>new Promise(resolve=>{finish=resolve;})});
+  const states=[];h.api.onTransportAvailability(state=>states.push({...state}));
+  const pending=h.api.readPlayheadIfIdle();await tick();assert.equal(await h.api.readPlayheadIfIdle(),null);h.fireTimeout(50);
+  await assert.rejects(pending,error=>error.code==='BC_NATIVE_PENDING'&&error.method==='readTimelinePlayhead'&&error.recoverable===true&&error.operationPending===true);
+  const reads=h.projectReads;assert.equal(await h.api.readPlayheadIfIdle(),null);
+  await assert.rejects(h.api.getActiveSequenceInfo(),{code:'BC_NATIVE_WAITING'});assert.equal(h.projectReads,reads);
+  assert.equal(states.at(-1).state,'waiting');assert.equal(states.at(-1).method,'readTimelinePlayhead');
+  finish({seconds:4});await tick();assert.equal(h.api.getTransportAvailability().state,'ready');assert.equal(h.nativeReads().playhead,1);
+  assert.deepEqual(states.map(state=>state.state),['ready','waiting','ready']);assert.equal(h.requests.length,0);
+});
+test('disposing before or during sampling prevents new reads and late completion cannot reopen the lane',async t=>{
+  const closed=harness(t);closed.api.dispose();assert.equal(await closed.api.readPlayheadIfIdle(),null);assert.equal(closed.projectReads,0);
+  let finish;const h=harness(t,{playhead:()=>new Promise(resolve=>{finish=resolve;})});
+  const sampling=h.api.readPlayheadIfIdle();await tick();h.api.dispose();
+  await assert.rejects(sampling,error=>error.code==='BC_NATIVE_CLOSED'&&error.operationPending===true);
+  finish({seconds:3});await tick();assert.equal(await h.api.readPlayheadIfIdle(),null);assert.equal(h.api.getTransportAvailability().state,'closed');assert.equal(h.nativeReads().playhead,1);
+});
 
 test('style preset storage works without a project or renderer and serializes stale writers', async t => {
   const h = harness(t, { service: null });
