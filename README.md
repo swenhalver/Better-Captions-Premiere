@@ -4,7 +4,7 @@ Editable word-highlight captions using **Premiere Pro's built-in Speech to Text*
 
 This fork adds independent upcoming, currently spoken, and previously spoken word appearances; a rounded bubble behind the active word; word sizing; transcript and timing edits; a movable, independently resizable text area in Premiere's Program Monitor; native position and size keyframes; actual timeline insertion; and a local agent API.
 
-**Development status:** this branch contains the 0.7.3 one-clip/automatic-track changes described below. They are not released yet: Adobe's Windows installer is blocking fresh native acceptance. The published download remains [0.7.2](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.2). See the [0.7.3 verification record](docs/windows-verification-0.7.3.md) for the exact boundary.
+**Pre-release status:** [0.7.8](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.8) adds one-clip output, automatic tracks and installed Mac fixes. Native Mac checks confirmed a new track above occupied footage, character regrouping, plugin size-keyframe edits, retiming and preserved Razor cuts. Physical mouse dragging remains unverified by the automated native tests, compatible static legacy conversion still needs native acceptance, and Adobe installation is blocking Windows acceptance. See the [Mac verification record](docs/mac-verification-0.7.8.md) and [Windows verification record](docs/windows-verification-0.7.3.md) for the exact boundaries.
 
 ## What you can edit
 
@@ -21,7 +21,7 @@ New captions render as one transparent **ProRes 4444 text-area clip** at the seq
 
 ## Requirements
 
-The installer supports **Windows and macOS (Apple Silicon or Intel), with Premiere Pro 26.3 or newer**. The same JavaScript plugin and platform-neutral package are used on both systems. Download the complete [0.7.2 Windows/macOS package](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.2). See the [release notes](docs/release-0.7.2.md) and [native Mac verification](docs/mac-verification-0.7.2.md) for tested behavior and remaining runtime limits.
+The installer targets **Windows and macOS (Apple Silicon or Intel), with Premiere Pro 26.3 or newer**. The same JavaScript plugin and platform-neutral package are used on both systems. Download the complete [0.7.8 Windows/macOS pre-release package](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.8). Installed acceptance used Premiere Pro 26.5.2 on Apple Silicon; Windows native acceptance is pending. See the [release notes](docs/release-0.7.8.md) and [native Mac verification](docs/mac-verification-0.7.8.md) for tested behavior and remaining runtime limits.
 
 - Node.js 24 LTS for building/development and the optional agent CLI.
 - Local FFmpeg and FFprobe. The plugin finds WinGet's user links on Windows, Apple Silicon/Intel Homebrew locations on macOS, and absolute directories in `PATH`.
@@ -64,7 +64,7 @@ Background geometry checks use a bounded change fingerprint rather than evaluati
 
 Automatic size watching supports up to 256 combined Motion control keys; more complex curves can still use a manual Update. Existing animated Anchor Point changes or animated Motion on a nonzero trimmed source-in can require a fresh caption clip before changing its media geometry. A verified native Razor bundle permits later-slice text-area edits on the correct source frames. Its slices must remain adjacent, forward 1x, in source order, on one track, with no external reuse. Discovery is bounded to 64 fragments and 2,000 project clips. Supported Position, independent Width and Height keys remain on their existing clip.
 
-Updating a compatible legacy set of separate, untrimmed caption clips converts it into one clip. Existing static positions and sizes become native hold keys. The replacement is verified before the originals are removed together without ripple. Animated or custom effects, different source text-box bounds, custom anchor/rotation, timing gaps, trims and reused media stop conversion with the original clips preserved. These conversion and automatic-track paths still require installed 0.7.3 native acceptance.
+Updating a compatible legacy set of separate, untrimmed caption clips converts it into one clip. Existing static positions and sizes become native hold keys. The replacement is verified before the originals are removed together without ripple. Animated or custom effects, different source text-box bounds, custom anchor/rotation, timing gaps, trims and reused media stop conversion with the original clips preserved. Native Mac acceptance confirmed automatic creation of a track above footage and refusal of animated legacy conversion while retaining the originals' Motion keys exactly. Successful conversion of a compatible static legacy set still requires installed acceptance.
 
 For edited footage, source word timestamps are mapped through the timeline clips' in/out points and duration. Muted tracks and disabled audio clips are skipped. Repeated uses of the same source reuse its native transcript. Native transcription failures are reported rather than replaced with another speech engine.
 

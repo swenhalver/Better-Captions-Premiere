@@ -17,6 +17,8 @@ function fixture(options={}){
   platform:{resolveTool:name=>'/trusted/'+name},
   async run(...args){probes.push(args);if(options.afterProbe)current=options.afterProbe(current);return options.probe??JSON.stringify({streams:[{codec_type:'video'}]});}};
  const window={require:name=>name==='node:path'?nativePath:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript(expression,callback){
+  if(expression==='"BC_NATIVE_EVAL_V1"')return callback('BC_NATIVE_EVAL_V1');
+  if(expression.includes('/*better-captions-host-ready-v1*/'))return callback('{"version":1,"ok":true,"loaded":false}'); if(expression.includes('/*better-captions-host-global-v1*/'))return callback('BC_HOST_GLOBAL_READY_V1');
   const method=expression.slice('BetterCaptionsHost.'.length,expression.indexOf('(')),args=JSON.parse('['+expression.slice(expression.indexOf('(')+1,-1)+']');
   calls.push({method,args});
   if(method==='context')return callback(JSON.stringify(current));

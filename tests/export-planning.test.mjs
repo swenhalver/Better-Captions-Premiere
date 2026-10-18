@@ -110,7 +110,7 @@ test('one native container measures every displayed sentence even when its Motio
 test('CEP save uses its own sequence directory when a different sequence becomes active', async () => {
   let active = 'a'; const saved = [], contexts = { a: { id: 'a', projectPath: '/project/a.prproj', width: 1920, height: 1080, fps: 24 }, b: { id: 'b', projectPath: '/project/b.prproj', width: 1920, height: 1080, fps: 24 } };
   const runtime = { directory: context => '/data/' + context.id, save: (dir, data) => saved.push({ dir, data }) };
-  const window = { __adobe_cep__: { getSystemPath: () => '/extension', evalScript: (expression, callback) => { const args = JSON.parse('[' + expression.slice(expression.indexOf('(') + 1, -1) + ']'); callback(JSON.stringify(args[0] && args[0] !== active ? { error: 'The active sequence changed.' } : contexts[active])); } }, require: name => name === 'node:path' ? path : runtime };
+  const window = { __adobe_cep__: { getSystemPath: () => '/extension', evalScript: (expression, callback) => { if(expression==='"BC_NATIVE_EVAL_V1"')return callback('BC_NATIVE_EVAL_V1'); if(expression.includes('/*better-captions-host-ready-v1*/'))return callback('{"version":1,"ok":true,"loaded":false}'); if(expression.includes('/*better-captions-host-global-v1*/'))return callback('BC_HOST_GLOBAL_READY_V1'); const args = JSON.parse('[' + expression.slice(expression.indexOf('(') + 1, -1) + ']'); callback(JSON.stringify(args[0] && args[0] !== active ? { error: 'The active sequence changed.' } : contexts[active])); } }, require: name => name === 'node:path' ? path : runtime };
   const api = loadTypeScript(path.join(root, 'webview-ui/src/cep-api.ts'), {}, { window }).createHostAPI();
   await api.getActiveSequenceInfo(); active = 'b'; await api.getActiveSequenceInfo(); await api.saveSession({ sequenceId: 'a', text: 'Keep my original sequence' });
   assert.equal(saved[0].dir, '/data/a'); await assert.rejects(api.saveSession({ sequenceId: 'unknown' }), /Refresh/); await assert.rejects(api.beginCaption('caption-a', 'a'), /changed/);
@@ -119,6 +119,8 @@ test('polling jobs are removed after successful and failed native read callbacks
   const pending=new Map(),disposed=[],ctx={id:'a',projectPath:'/media/project.prproj',width:720,height:1280,fps:24};let fail=false,index=0;
   const runtime={directory:()=>'/media/Better Captions/a',readJob:data=>{const file='/private/service/jobs/read-'+index++ +'.json';pending.set(file,data);return file;},disposeReadJob:file=>{disposed.push(file);pending.delete(file);},writeJSON:()=>assert.fail('polling must not write jobs beside the media project')};
   const window={require:name=>name==='node:path'?path:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript:(expression,callback)=>{
+    if(expression==='"BC_NATIVE_EVAL_V1"')return callback('BC_NATIVE_EVAL_V1');
+    if(expression.includes('/*better-captions-host-ready-v1*/'))return callback('{"version":1,"ok":true,"loaded":false}'); if(expression.includes('/*better-captions-host-global-v1*/'))return callback('BC_HOST_GLOBAL_READY_V1');
     const name=expression.slice('BetterCaptionsHost.'.length,expression.indexOf('('));
     if(name==='context')return callback(JSON.stringify(ctx));
     const [file]=JSON.parse('['+expression.slice(expression.indexOf('(')+1,-1)+']');assert.ok(pending.has(file));

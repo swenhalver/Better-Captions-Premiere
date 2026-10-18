@@ -432,23 +432,41 @@ var BetterCaptionsHost = (function () {
         }
         return curveSignature({ size: sizeSignature, position: curve, probes: probes }).replace('motion-v1-', 'controls-v1-');
     }
-    function motionProfile(clip, firstFrame, count, tpf) {
+    function motionPhase(trace, phase, frame) {
+        if (trace) { trace.phase = phase; trace.frame = typeof frame === 'number' ? frame : null; }
+    }
+    function motionProfile(clip, firstFrame, count, tpf, trace) {
+        motionPhase(trace, 'Motion playback speed');
         assertNormalSpeed(clip);
-        var params = motionParameters(clip), height = copyCurve(parameterCurve(params.height), 'height'), width = copyCurve(parameterCurve(params.width), 'width'), uniform = copyCurve(parameterCurve(params.uniform), 'uniform'), samples = [], values = [], fps = TICKS / tpf;
+        motionPhase(trace, 'Motion parameters');
+        var params = motionParameters(clip);
+        motionPhase(trace, 'height curve');
+        var height = copyCurve(parameterCurve(params.height), 'height');
+        motionPhase(trace, 'width curve');
+        var width = copyCurve(parameterCurve(params.width), 'width');
+        motionPhase(trace, 'Uniform Scale curve');
+        var uniform = copyCurve(parameterCurve(params.uniform), 'uniform'), samples = [], values = [], fps = TICKS / tpf;
+        motionPhase(trace, 'Motion source timing');
         var sourceIn = Number(clip.inPoint.ticks);
         if (!isFinite(sourceIn) || sourceIn < 0) throw new Error('The caption has an invalid source in point.');
         for (var frame = 0; frame < count; frame++) {
             // Effect keys use the clip's source clock, independent of its
             // position on the sequence or the current playhead.
+            motionPhase(trace, 'Motion sample time', frame);
             var at = height.animated || width.animated || uniform.animated ? ticksTime(Math.round(sourceIn + (frame + 0.5) * tpf)) : null;
-            var locked = parameterAt(params.uniform, uniform, at), sy = Number(parameterAt(params.height, height, at)) / 100;
+            motionPhase(trace, 'Uniform Scale sample', frame);
+            var locked = parameterAt(params.uniform, uniform, at);
+            motionPhase(trace, 'height sample', frame);
+            var sy = Number(parameterAt(params.height, height, at)) / 100;
             if (!(locked === true || locked === false || locked === 0 || locked === 1)) throw new Error('Premiere returned an invalid Uniform Scale value.');
+            motionPhase(trace, 'width sample', frame);
             var sx = locked ? sy : Number(parameterAt(params.width, width, at)) / 100;
             if (!isFinite(sx) || !isFinite(sy) || sx < 0.01 || sy < 0.01 || sx > 100 || sy > 100) throw new Error('Caption box width and height must remain between 1% and 10000%.');
             samples.push({ time: (firstFrame + frame + 0.5) / fps, scaleX: sx, scaleY: sy }); values.push([sx, sy]);
         }
         // ExtendScript has no interpolation-mode getter. Evaluating every
         // output frame captures interpolation changes affecting the video.
+        motionPhase(trace, 'Motion profile signature');
         var profile = { signature: curveSignature({ sourceIn: String(sourceIn), count: count, height: height, width: width, uniform: uniform, values: values }), samples: samples };
         try { profile.watchSignature = geometrySignature(clip, firstFrame, count, tpf, params, { height: height, width: width, uniform: uniform }); }
         catch (watchError) { profile.watchError = watchError.toString().slice(0, 300); }
@@ -471,11 +489,12 @@ var BetterCaptionsHost = (function () {
         var receipt = fragmentReceipt(parts);
         return { watchSignature: curveSignature({ fragments: receipt, sizes: sizes }).replace('motion-v1-', 'geometry-bundle-v1-'), controlRevision: curveSignature({ fragments: receipt, controls: controls }).replace('motion-v1-', 'controls-bundle-v1-') };
     }
-    function fragmentProfile(parts, firstFrame, count, tpf) {
+    function fragmentProfile(parts, firstFrame, count, tpf, trace) {
         assertFragmentRange(parts, firstFrame, count, tpf);
         var samples = [], signatures = [];
         for (var i = 0; i < parts.length; i++) {
-            var clip = parts[i].clip, first = Math.round(Number(clip.start.ticks) / tpf), frames = Math.round((Number(clip.end.ticks) - Number(clip.start.ticks)) / tpf), profile = motionProfile(clip, first, frames, tpf);
+            if (trace) trace.fragment = i;
+            var clip = parts[i].clip, first = Math.round(Number(clip.start.ticks) / tpf), frames = Math.round((Number(clip.end.ticks) - Number(clip.start.ticks)) / tpf), profile = motionProfile(clip, first, frames, tpf, trace);
             signatures.push(profile.signature);
             for (var frame = 0; frame < profile.samples.length; frame++) samples.push(profile.samples[frame]);
         }
@@ -497,6 +516,19 @@ var BetterCaptionsHost = (function () {
             } catch (e) { diagnostic[fields[i] + 'Error'] = e.toString().slice(0, 300); }
         }
     }
+    function requestedCaptionRange(caption, clip, fragments) {
+        // Keep nullable native fallbacks in explicit branches. Premiere's
+        // ExtendScript evaluator failed on the previous nested conditional
+        // even when the caller supplied numeric start/end values.
+        var start, end;
+        if (typeof caption.startTime === 'number') start = caption.startTime;
+        else if (fragments) start = fragments[0].clip.start.seconds;
+        else start = clip.start.seconds;
+        if (typeof caption.endTime === 'number') end = caption.endTime;
+        else if (fragments) end = fragments[fragments.length - 1].clip.end.seconds;
+        else end = clip.end.seconds;
+        return { start: start, end: end };
+    }
     function readCaptionGeometry(file) {
         try {
             var p = readPayload(file);
@@ -508,7 +540,7 @@ var BetterCaptionsHost = (function () {
                 if (!found || !caption.id || !caption.projectItemId || !sameNode(found.clip.projectItem.nodeId, caption.projectItemId) || found.clip.projectItem.getMediaPath() !== caption.mediaPath) throw new Error('The caption timeline link changed. Sync timing from Premiere before reading its box size.');
                 var clip = found.clip, fragments = captionFragments(s, caption, caption.mediaPath, found);
                 assertNormalSpeed(clip);
-                var requestedStart = typeof caption.startTime === 'number' ? caption.startTime : fragments ? fragments[0].clip.start.seconds : clip.start.seconds, requestedEnd = typeof caption.endTime === 'number' ? caption.endTime : fragments ? fragments[fragments.length - 1].clip.end.seconds : clip.end.seconds;
+                var requested = requestedCaptionRange(caption, clip, fragments), requestedStart = requested.start, requestedEnd = requested.end;
                 if (!isFinite(requestedStart) || !isFinite(requestedEnd) || requestedStart < 0 || requestedEnd <= requestedStart) throw new Error('The caption has invalid box-animation timing.');
                 var firstFrame = Math.floor(requestedStart * fps + 0.0000001), endFrame = Math.ceil(requestedEnd * fps - 0.0000001), count = endFrame - firstFrame;
                 if (count < 1 || count > 100000000) throw new Error('The caption has invalid automatic-reflow timing.');
@@ -604,23 +636,30 @@ var BetterCaptionsHost = (function () {
         }
     }
     function readCaptionMotion(file) {
+        var trace = { phase: 'caption job', frame: null, fragment: null };
         try {
             var p = readPayload(file);
             if (!p.sequenceId || !p.projectPath || !p.cues || !p.cues.length || p.cues.length > 10000) throw new Error('Invalid caption Motion request.');
+            trace.phase = 'sequence context';
             var s = sequence(p.sequenceId, p.projectPath), tpf = Number(s.timebase), fps = TICKS / tpf, out = [], totalFrames = 0;
             if (!isFinite(tpf) || tpf <= 0) throw new Error('The sequence has an invalid frame rate.');
             for (var i = 0; i < p.cues.length; i++) {
+                motionPhase(trace, 'caption clip lookup'); trace.fragment = null;
                 var caption = p.cues[i], found = caption.clipNodeId ? findClip(s, caption.clipNodeId) : null;
                 if (!found || !caption.id || !caption.projectItemId || !sameNode(found.clip.projectItem.nodeId, caption.projectItemId) || found.clip.projectItem.getMediaPath() !== caption.mediaPath) throw new Error('The caption timeline link changed. Sync timing from Premiere before reading its box size.');
+                motionPhase(trace, 'caption split references');
                 var clip = found.clip, fragments = captionFragments(s, caption, caption.mediaPath, found);
-                var requestedStart = typeof caption.startTime === 'number' ? caption.startTime : fragments ? fragments[0].clip.start.seconds : clip.start.seconds, requestedEnd = typeof caption.endTime === 'number' ? caption.endTime : fragments ? fragments[fragments.length - 1].clip.end.seconds : clip.end.seconds;
+                motionPhase(trace, 'caption frame timing');
+                var requested = requestedCaptionRange(caption, clip, fragments), requestedStart = requested.start, requestedEnd = requested.end;
                 if (!isFinite(requestedStart) || !isFinite(requestedEnd) || requestedStart < 0 || requestedEnd <= requestedStart) throw new Error('The caption has invalid box-animation timing.');
                 var firstFrame = Math.floor(requestedStart * fps + 0.0000001), endFrame = Math.ceil(requestedEnd * fps - 0.0000001), count = endFrame - firstFrame;
                 totalFrames += count;
                 if (count < 1 || totalFrames > 100000) throw new Error('Read caption box animation in smaller batches of at most 100000 frames.');
-                var result = { id: caption.id, clipNodeId: String(clip.nodeId), projectItemId: String(clip.projectItem.nodeId), path: clip.projectItem.getMediaPath(), motionProfile: fragments ? fragmentProfile(fragments, firstFrame, count, tpf) : motionProfile(clip, firstFrame, count, tpf) };
+                motionPhase(trace, 'caption Motion profile');
+                var result = { id: caption.id, clipNodeId: String(clip.nodeId), projectItemId: String(clip.projectItem.nodeId), path: clip.projectItem.getMediaPath(), motionProfile: fragments ? fragmentProfile(fragments, firstFrame, count, tpf, trace) : motionProfile(clip, firstFrame, count, tpf, trace) };
                 if (fragments) result.bundleFragments = fragmentReceipt(fragments);
                 if (p.includeDiagnostics === true) {
+                    motionPhase(trace, 'optional Motion diagnostics');
                     var params = motionParameters(clip), diagnosticTime = ticksTime(Math.round(Number(clip.inPoint.ticks) + tpf / 2));
                     // Native metadata/Position/Anchor probing is explicit and
                     // never part of the automatic geometry watch path.
@@ -632,8 +671,17 @@ var BetterCaptionsHost = (function () {
                 }
                 out.push(result);
             }
+            motionPhase(trace, 'Motion response encoding');
             return reply({ ok: true, cues: out });
-        } catch (e) { return reply({ error: e.toString() }); }
+        } catch (e) {
+            // Preserve bounded native line/phase details through the fixed
+            // service error string; never return media text or raw parameters.
+            var line = null, detail = 'Unknown native Motion error.';
+            try { var candidateLine = Number(e && e.line); if (isFinite(candidateLine) && candidateLine > 0 && candidateLine <= 10000000) line = Math.floor(candidateLine); } catch (lineError) {}
+            try { detail = String(e).slice(0, 400); } catch (detailError) {}
+            var phase = String(trace.phase).slice(0, 80), frame = typeof trace.frame === 'number' && trace.frame >= 0 && trace.frame < 100000 ? trace.frame : null;
+            return reply({ error: 'Premiere caption Motion read failed during ' + phase + (frame === null ? '' : ' at output frame ' + frame) + (line === null ? '' : ' (line ' + line + ')') + ': ' + detail, phase: phase, nativeLine: line, frame: frame, fragment: trace.fragment });
+        }
     }
     function overlaps(a, b) { return a.startFrame < b.endFrame && a.endFrame > b.startFrame; }
     function frameTime(frame, ticksPerFrame) { var t = new Time(); t.ticks = String(Math.round(frame * ticksPerFrame)); return t; }
@@ -797,9 +845,11 @@ var BetterCaptionsHost = (function () {
         for (var i = 0; i < cues.length; i++) {
             var cue = cues[i], found = cue.clipNodeId ? findClip(s, cue.clipNodeId, 2000) : null;
             if (cue.manualSplit || cue.captionBundle || !cue.id || !cue.projectItemId || !found || !sameNode(found.clip.projectItem.nodeId, cue.projectItemId) || found.clip.projectItem.getMediaPath() !== cue.mediaPath || ids[String(found.clip.nodeId)]) throw new Error('A legacy caption link changed or contains a deliberate split. Existing clips were preserved.');
-            var clip = found.clip, b = renderBounds(cue.renderBounds, s), motion = motionState(clip);
+            var clip = found.clip, track = s.videoTracks[found.track];
+            if (clip.disabled || typeof track.isMuted === 'function' && track.isMuted()) throw new Error('Enable every legacy caption clip and its video track before combining captions. Existing clips were preserved.');
+            var b = renderBounds(cue.renderBounds, s), motion = motionState(clip);
             ids[String(clip.nodeId)] = true; assertNormalSpeed(clip);
-            if (s.videoTracks[found.track].isLocked() || s.videoTracks[found.track].transitions && s.videoTracks[found.track].transitions.numItems) throw new Error('Unlock the legacy caption track and remove its transitions before combining clips.');
+            if (track.isLocked() || track.transitions && track.transitions.numItems) throw new Error('Unlock the legacy caption track and remove its transitions before combining clips.');
             if (referenceCount(clip.projectItem.nodeId) !== 1) throw new Error('Legacy caption media is reused. Make copied captions independent before combining them.');
             for (var m = 0; m < motionNames.length; m++) if (motion[motionNames[m]].animated) throw new Error('Legacy captions with native animation are preserved as separate clips. Use one new caption clip or keep their existing keys.');
             if (!sameValue(motion.anchor.value, [0.5, 0.5]) || !sameValue(motion.rotation.value, 0)) throw new Error('Legacy captions with a custom anchor or rotation are preserved as separate clips.');
@@ -932,14 +982,27 @@ var BetterCaptionsHost = (function () {
             return reply({ ok: true, rolledBack: true });
         } catch (e) { return reply({ error: e.toString() }); }
     }
+    function driveMediaPath(path) {
+        var letter = path.charCodeAt(0);
+        return ((letter >= 65 && letter <= 90) || (letter >= 97 && letter <= 122)) && path.charAt(1) === ':' && (path.charAt(2) === '/' || path.charAt(2) === '\\');
+    }
+    function localMediaPath(path) {
+        if (typeof path !== 'string' || path.length > 4096 || /[\u0000-\u001f]/.test(path)) return false;
+        var normalized = path.split('\\').join('/');
+        if (normalized.charAt(0) === '/' && normalized.charAt(1) === '/') return false;
+        if (path.charAt(0) !== '/' && !driveMediaPath(path)) return false;
+        var parts = normalized.split('/');
+        for (var i = 0; i < parts.length; i++) if (parts[i] === '.' || parts[i] === '..') return false;
+        return true;
+    }
     function linkIdentity(cue) {
         function identity(value) { return typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f]/.test(value); }
-        if (!cue || !identity(cue.id) || !identity(cue.clipNodeId) || !identity(cue.projectItemId) || typeof cue.mediaPath !== 'string' || cue.mediaPath.length > 4096 || !/^(?:\/(?!\/)|[a-z]:[\\/])/i.test(cue.mediaPath) || /[\u0000-\u001f]/.test(cue.mediaPath) || /(?:^|[\\/])\.{1,2}(?:[\\/]|$)/.test(cue.mediaPath)) throw new Error('A caption timeline link is incomplete. Sync timing from Premiere before updating it.');
+        if (!cue || !identity(cue.id) || !identity(cue.clipNodeId) || !identity(cue.projectItemId) || !localMediaPath(cue.mediaPath)) throw new Error('A caption timeline link is incomplete. Sync timing from Premiere before updating it.');
     }
     function comparableMediaPath(path) {
         // Drive paths are case-insensitive on supported Windows installs;
         // macOS/POSIX paths retain case to avoid identifying unrelated media.
-        return /^[a-z]:[\\/]/i.test(path) ? path.replace(/\\/g, '/').toLowerCase() : path;
+        return driveMediaPath(path) ? path.split('\\').join('/').toLowerCase() : path;
     }
     function activeReferences(s) {
         var references = [], sets = [s.videoTracks, s.audioTracks], inspected = 0;
@@ -1035,7 +1098,17 @@ var BetterCaptionsHost = (function () {
             if (found && cue.motionProfile) {
                 if (typeof cue.motionProfile.signature !== 'string' || cue.endFrame - cue.startFrame > 100000 || (fragments ? fragmentProfile(fragments, cue.startFrame, cue.endFrame - cue.startFrame, tpf) : motionProfile(found.clip, cue.startFrame, cue.endFrame - cue.startFrame, tpf)).signature !== cue.motionProfile.signature) throw new Error('The caption box size or its keyframes changed during rendering. Wait for the adjustment to finish and apply again.');
             }
-            planned.push({ cue: cue, located: found, track: trackIndex, startFrame: cue.startFrame, endFrame: cue.endFrame, geometry: geometry, bounds: bounds, fragments: fragments, fragmentReceipt: fragments ? fragmentReceipt(fragments) : null, bundleReceipt: cue.captionBundle === true && found ? fragmentReceipt(fragments || [found]) : null, fragmentMotions: fragmentMotions, fragmentGeometry: fragmentGeometryPlans });
+            var bundleReceipt = cue.captionBundle === true && found ? fragmentReceipt(fragments || [found]) : null;
+            if (bundleReceipt && !fragments) {
+                // An unsplit caption may deliberately change its range. The
+                // final reference proof must confirm the authorized setTiming
+                // result; native Razor cuts retain their original receipt.
+                bundleReceipt[0].startTicks = String(Math.round(cue.startFrame * tpf));
+                bundleReceipt[0].endTicks = String(Math.round(cue.endFrame * tpf));
+                bundleReceipt[0].inTicks = '0';
+                bundleReceipt[0].outTicks = String(Math.round((cue.endFrame - cue.startFrame) * tpf));
+            }
+            planned.push({ cue: cue, located: found, track: trackIndex, startFrame: cue.startFrame, endFrame: cue.endFrame, geometry: geometry, bounds: bounds, fragments: fragments, fragmentReceipt: fragments ? fragmentReceipt(fragments) : null, bundleReceipt: bundleReceipt, fragmentMotions: fragmentMotions, fragmentGeometry: fragmentGeometryPlans });
         }
         // Inspect every destination track and every desired range before importing or relinking anything.
         for (i = 0; i < planned.length; i++) {

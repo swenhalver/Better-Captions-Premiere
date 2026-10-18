@@ -2,7 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import {createRequire} from 'node:module';
+const acorn=createRequire(import.meta.url)('../webview-ui/node_modules/acorn');
 const TICKS = 254016000000, TPF = 8475667200, FPS = TICKS / TPF;
+test('native host regex literals never contain an unescaped slash inside a character class',()=>{
+ const source=fs.readFileSync(new URL('../cep/host/bridge.jsx',import.meta.url),'utf8'),tree=acorn.parse(source,{ecmaVersion:3,locations:true}),invalid=[];
+ function visit(node){
+  if(!node||typeof node!=='object')return;
+  if(node.regex){let inside=false,escaped=false;for(const char of node.regex.pattern){if(escaped){escaped=false;continue;}if(char==='\\'){escaped=true;continue;}if(char==='[')inside=true;else if(char===']')inside=false;else if(inside&&char==='/')invalid.push({line:node.loc.start.line,pattern:node.raw});}}
+  for(const key of Object.keys(node)){if(key==='loc')continue;const value=node[key];if(Array.isArray(value))value.forEach(visit);else if(value&&typeof value==='object')visit(value);}
+ }
+ visit(tree);assert.deepEqual(invalid,[],'ExtendScript can abort loading the entire host on these otherwise valid ES3 regex forms');
+});
+test('native host timing never depends on nested conditional expressions',()=>{
+ const source=fs.readFileSync(new URL('../cep/host/bridge.jsx',import.meta.url),'utf8'),tree=acorn.parse(source,{ecmaVersion:3,locations:true}),nested=[];
+ function visit(node){
+  if(!node||typeof node!=='object')return;
+  if(node.type==='ConditionalExpression'&&(node.consequent.type==='ConditionalExpression'||node.alternate.type==='ConditionalExpression'))nested.push(node.loc.start.line);
+  for(const key of Object.keys(node)){if(key==='loc')continue;const value=node[key];if(Array.isArray(value))value.forEach(visit);else if(value&&typeof value==='object')visit(value);}
+ }
+ visit(tree);assert.deepEqual(nested,[],'Premiere 26.5.2 dereferenced a null fragment fallback in the old nested timing expression; keep native branches explicit');
+});
 function collection(values = [], size = 'numItems') { Object.defineProperty(values, size, { get: () => values.length }); return values; }
 class Time { constructor(seconds = 0) { this.seconds = seconds; } get seconds() { return this._ticks / TICKS; } set seconds(value) { this._ticks = Math.round(value * TICKS); } get ticks() { return String(this._ticks); } set ticks(value) { this._ticks = Number(value); } }
 function hostFixture() {
@@ -196,6 +216,18 @@ test('ambiguous, incomplete and stale deletion receipts fail closed before impor
  for(const context of [{sequenceId:'other'},{projectPath:'/different.prproj'}]){const f=deletedCaptionFixture();f.old.remove();assert.match(f.read(context).error,/changed/);assert.equal(f.imports.length,0);}
  const f=deletedCaptionFixture();f.old.remove();assert.match(f.read({cues:[f.link,f.link]}).error,/identities/);
 });
+test('native path guards accept absolute Mac and Windows media while rejecting traversal, relative and network paths',()=>{
+ const valid=['/Users/editor/Caption.mov','/Users/éditeur/字 captions/caption.mov','/project/.captions/caption.mov','/project/..hidden/caption.mov','C:\\Project\\caption.mov','d:/Project Data/Caption.mov','C:\\Project/字\\caption.mov'];
+ for(const mediaPath of valid){const f=deletedCaptionFixture();f.old.remove();f.link.mediaPath=mediaPath;const result=f.read();assert.equal(result.ok,true,mediaPath+': '+JSON.stringify(result));assert.equal(result.cues[0].missing,true);assert.equal(f.imports.length,0);}
+ const invalid=['','relative/caption.mov','C:caption.mov','1:/caption.mov','\\caption.mov','\\\\server\\share\\caption.mov','//server/share/caption.mov','/\\server/share/caption.mov','/project/../caption.mov','/project/./caption.mov','C:\\Project\\..\\caption.mov','C:/Project/./caption.mov','/project\\..\\caption.mov','C:\\Project/../caption.mov','/project/\u0000caption.mov','/project/\ncaption.mov'];
+ for(const mediaPath of invalid){const f=deletedCaptionFixture();f.old.remove();f.link.mediaPath=mediaPath;const result=f.read();assert.match(result.error,/incomplete/,JSON.stringify(mediaPath));assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);}
+});
+test('native media comparison normalizes Windows separators and casing while preserving Mac path identity',()=>{
+ for(const mediaPath of ['c:/project/Caption.MOV','C:\\PROJECT\\caption.mov']){
+  const f=deletedCaptionFixture();f.old.remove();f.link.mediaPath='C:\\Project\\Caption.mov';f.addClip(f.item(mediaPath),2,3,f.top.clips);assert.match(f.read().error,/still has/);
+ }
+ const f=deletedCaptionFixture();f.old.remove();f.link.mediaPath='/project/Caption.mov';f.addClip(f.item('/project/caption.mov'),2,3,f.top.clips);assert.equal(f.read().ok,true,'distinct POSIX paths must not be case-folded');
+});
 test('absence inspection never treats an unreadable, oversized or malformed timeline as empty',()=>{
  const changes=[f=>{f.sequence.videoTracks=collection(Array.from({length:257},()=>({clips:collection()})),'numTracks');},f=>{f.top.clips=collection(Array.from({length:2001},()=>f.footage));},f=>{f.top.clips={numItems:NaN};},f=>{f.top.clips.push({nodeId:'unreadable'});},f=>{f.footage.projectItem.getMediaPath=()=>{throw new Error('native read failed');};}];
  for(const change of changes){const f=deletedCaptionFixture();f.old.remove();change(f);assert.ok(f.read().error);assert.ok(JSON.parse(f.host.prepareCaptionTrack(f.job())).error);assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);}
@@ -210,6 +242,33 @@ function razorFixture(){
  return {...f,media,first,second,a,b,caption,readFile};
 }
 function frameTimeForTest(frame){const time=new Time();time.ticks=String(frame*TPF);return time;}
+function unsplitBundleFixture(){
+ const f=hostFixture(),media=f.item('/bundle-old.mov'),clip=f.addClip(media,30/FPS,60/FPS);
+ clip.outPoint=frameTimeForTest(30);
+ attachNativeMotion(clip,{uniform:{value:false},width:{keys:[{time:0,value:100},{time:29/FPS,value:140}]},position:{keys:[{time:0,value:[.4,.6]},{time:29/FPS,value:[.6,.7]}]}});
+ const caption=f.cue('bundle-retimed',31,65,{clipNodeId:clip.nodeId,projectItemId:media.nodeId,previousPath:media.media,captionBundle:true,renderBounds:bounds(),previousRenderBounds:bounds()});
+ return {...f,media,clip,caption};
+}
+test('an unsplit bundle accepts deliberate frame retiming while preserving its native identity and key curves',()=>{
+ const f=unsplitBundleFixture(),before=nativeSnapshot(f.clip),file=automaticPayload(f,[f.caption]);
+ assert.equal(JSON.parse(f.host.preflight(file)).ok,true);
+ const result=JSON.parse(f.host.apply(file));assert.equal(result.ok,true,JSON.stringify(result));
+ assert.equal(result.cues.length,1);assert.equal(result.cues[0].clipNodeId,before.node);assert.equal(result.cues[0].projectItemId,f.media.nodeId);assert.equal(result.cues[0].path,f.caption.path);
+ assert.equal(f.clip.start.ticks,String(31*TPF));assert.equal(f.clip.end.ticks,String(65*TPF));assert.equal(f.clip.inPoint.ticks,'0');assert.equal(f.clip.outPoint.ticks,String(34*TPF));
+ assert.deepEqual(nativeSnapshot(f.clip).keys,before.keys);assert.equal(result.cues[0].motionProfile.samples.length,34);assert.equal(f.clips.length,1);assert.equal(f.overwrites.length,0);assert.equal(f.imports.length,0);
+});
+test('an ignored unsplit bundle timing change restores the original source, timing and native keys',()=>{
+ const f=unsplitBundleFixture(),before=nativeSnapshot(f.clip),oldSource=f.media.media;let end=f.clip.end,ignoreNext=true;
+ Object.defineProperty(f.clip,'end',{configurable:true,get:()=>end,set(value){if(ignoreNext){ignoreNext=false;return;}end=value;}});
+ const result=JSON.parse(f.host.apply(automaticPayload(f,[f.caption])));
+ assert.match(result.error,/did not keep the requested caption timing/);assert.equal(result.rolledBack,true);assert.equal(f.media.media,oldSource);assert.deepEqual(nativeSnapshot(f.clip),before);assert.equal(f.clips.length,1);assert.equal(f.overwrites.length,0);
+});
+test('retiming an unsplit bundle still rejects a newly copied source after relink and rolls back the original',()=>{
+ const f=unsplitBundleFixture(),before=nativeSnapshot(f.clip),oldSource=f.media.media,original=f.media.changeMediaPath;
+ f.media.changeMediaPath=function(path){const result=original.call(this,path);if(path===f.caption.path)f.addClip(f.media,90/FPS,120/FPS);return result;};
+ const result=JSON.parse(f.host.apply(automaticPayload(f,[f.caption])));
+ assert.match(result.error,/source order|splits or references changed/);assert.equal(result.rolledBack,true);assert.equal(f.media.media,oldSource);assert.deepEqual(nativeSnapshot(f.clip),before);assert.equal(f.clips.length,2,'the separately added clip is preserved');assert.equal(f.overwrites.length,0);
+});
 function consolidationFixture(){
  const f=hostFixture(),a=f.addClip(f.item('/legacy-a.mov'),0,1),b=f.addClip(f.item('/legacy-b.mov'),1,2);
  const pa=attachNativeMotion(a,{uniform:{value:false},position:{value:[364.8160457611084/720,1066.3050842285156/1280]},height:{value:331.22640625/512*100}}),pb=attachNativeMotion(b,{uniform:{value:false},position:{value:[.5,.85]}});
@@ -249,6 +308,20 @@ test('legacy conversion rejects changed geometry, animation, reuse, effects and 
   if(reason==='split')f.legacy[0].manualSplit=true;
   if(reason==='trim')f.a.inPoint=new Time(.1);
   const result=f.stage(proof).result;assert.ok(result.error,reason);assert.equal(f.top.clips.length,0,reason);assert.equal(f.overwrites.length,0,reason);assert.ok(f.clips.includes(f.a)&&f.clips.includes(f.b),reason);
+ }
+});
+
+test('disabled legacy clips and muted caption tracks are rejected before staging without changing visibility',()=>{
+ for(const hidden of ['first-disabled','second-disabled','muted-track']){
+  const f=consolidationFixture(),proof=f.plan(),before=[nativeSnapshot(f.a),nativeSnapshot(f.b)];
+  if(hidden==='first-disabled')f.a.disabled=true;
+  if(hidden==='second-disabled')f.b.disabled=1;
+  f.track.isMuted=()=>hidden==='muted-track';
+  const read=f.plan();assert.match(read.error,/Enable every legacy caption clip and its video track/,hidden);
+  const result=f.stage(proof).result;assert.match(result.error,/Enable every legacy caption clip and its video track/,hidden);
+  assert.equal(result.rolledBack,true,hidden);assert.equal(f.top.clips.length,0,hidden);assert.equal(f.overwrites.length,0,hidden);assert.equal(f.imports.length,0,hidden);
+  assert.deepEqual([nativeSnapshot(f.a),nativeSnapshot(f.b)],before,hidden);assert.deepEqual(f.clips,[f.a,f.b],hidden);
+  assert.equal(!!f.a.disabled,hidden==='first-disabled',hidden);assert.equal(!!f.b.disabled,hidden==='second-disabled',hidden);assert.equal(f.track.isMuted(),hidden==='muted-track',hidden);
  }
 });
 
@@ -423,6 +496,60 @@ test('native seek failures and ignored seeks cannot report a successful Program 
   const f=hostFixture(),result=JSON.parse(f.host.seek(f.sequence.sequenceID,1.5,f.project.path));assert.equal(result.ok,true);assert.equal(result.time,1.5);
 });
 
+test('numeric caption timing including zero never accesses nullable native timing fallbacks',()=>{
+ const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,3/FPS);attachNativeMotion(clip,{uniform:{value:false}});
+ const file=motionPayload(f,clip,{captionBundle:true,startTime:0,endTime:3/FPS});
+ for(const name of ['start','end'])Object.defineProperty(clip,name,{get(){throw new Error('An unused native timing fallback was accessed');}});
+ const full=JSON.parse(f.host.readCaptionMotion(file)),cheap=JSON.parse(f.host.readCaptionGeometry(file));
+ assert.equal(full.ok,true,JSON.stringify(full));assert.equal(full.cues[0].motionProfile.samples.length,3);assert.equal(full.cues[0].motionProfile.samples[0].time,.5/FPS);
+ assert.equal(cheap.ok,true,JSON.stringify(cheap));assert.equal(full.cues[0].motionProfile.watchSignature,cheap.cues[0].watchSignature);assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);
+});
+test('absent timing endpoints fall back independently to the exact unsplit clip range',()=>{
+ for(const patch of [{startTime:undefined,endTime:undefined},{startTime:0,endTime:undefined},{startTime:undefined,endTime:90/FPS}]){
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),30/FPS,60/FPS);attachNativeMotion(clip,{uniform:{value:false}});
+  const file=motionPayload(f,clip,{captionBundle:true,...patch}),full=JSON.parse(f.host.readCaptionMotion(file)),cheap=JSON.parse(f.host.readCaptionGeometry(file));
+  const start=patch.startTime??30/FPS,end=patch.endTime??60/FPS;
+  assert.equal(full.ok,true,JSON.stringify(full));assert.equal(full.cues[0].motionProfile.samples.length,Math.round((end-start)*FPS));assert.equal(full.cues[0].motionProfile.samples[0].time,(Math.round(start*FPS)+.5)/FPS);
+  assert.equal(cheap.ok,true,JSON.stringify(cheap));assert.equal(full.cues[0].motionProfile.watchSignature,cheap.cues[0].watchSignature);assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);
+ }
+});
+test('missing requested bundle timing uses the full proven Razor range while invalid ranges remain rejected',()=>{
+ const f=razorFixture(),file=motionPayload(f,f.first,{captionBundle:true,startTime:undefined,endTime:undefined}),full=JSON.parse(f.host.readCaptionMotion(file)),cheap=JSON.parse(f.host.readCaptionGeometry(file));
+ assert.equal(full.ok,true,JSON.stringify(full));assert.equal(full.cues[0].motionProfile.samples.length,90);assert.equal(full.cues[0].motionProfile.samples[0].time,30.5/FPS);assert.equal(cheap.ok,true,JSON.stringify(cheap));assert.equal(full.cues[0].motionProfile.watchSignature,cheap.cues[0].watchSignature);
+ for(const patch of [{startTime:-1,endTime:1},{startTime:1,endTime:1},{startTime:2,endTime:1}]){
+  const invalid=motionPayload(f,f.first,{captionBundle:true,...patch});
+  assert.match(JSON.parse(f.host.readCaptionMotion(invalid)).error,/invalid.*timing/);assert.match(JSON.parse(f.host.readCaptionGeometry(invalid)).error,/invalid.*timing/);
+ }
+ assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);
+});
+test('native Motion failures retain bounded curve/sample phase and line without returning raw parameter data',()=>{
+ for(const failure of ['height','width','uniform','sample']){
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,3/FPS),params=attachNativeMotion(clip,{uniform:{value:false}});
+  const error=Object.assign(new TypeError('null is not an object '+ 'x'.repeat(2000)),{line:812});
+  if(failure==='sample'){
+   params.width.keys=[{time:0,value:100},{time:3/FPS,value:150}];
+   params.width.getValueAtTime=()=>{throw error;};
+  }else params[failure].getValue=()=>{throw error;};
+  const result=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip)));
+  assert.equal(result.phase,failure==='height'?'height curve':failure==='width'?'width curve':failure==='uniform'?'Uniform Scale curve':'width sample');
+  assert.equal(result.nativeLine,812);assert.equal(result.frame,failure==='sample'?0:null);assert.match(result.error,/null is not an object/);assert.match(result.error,/line 812/);assert.ok(result.error.length<650);
+  assert.equal(result.cues,undefined);assert.equal(result.motionInfo,undefined);assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);assert.ok(Object.values(params).every(param=>param.writes.length===0));
+ }
+});
+test('missing native Motion values fail closed with the exact curve phase instead of falling back to default scale',()=>{
+ for(const name of ['height','width','uniform']){
+  const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,3/FPS),params=attachNativeMotion(clip,{uniform:{value:false}});
+  params[name].getValue=()=>null;
+  const result=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip)));
+  assert.equal(result.phase,name==='uniform'?'Uniform Scale curve':name+' curve');assert.match(result.error,/invalid/);assert.equal(result.nativeLine,null);assert.equal(result.cues,undefined);assert.equal(f.imports.length,0);assert.equal(f.overwrites.length,0);
+ }
+});
+test('animated Motion without readable keys is rejected before any frame sampling',()=>{
+ const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),0,3/FPS),params=attachNativeMotion(clip);let samples=0;
+ params.width.isTimeVarying=()=>true;params.width.getKeys=()=>null;params.width.getValueAtTime=()=>{samples++;return 100;};
+ const result=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip)));
+ assert.equal(result.phase,'width curve');assert.match(result.error,/did not expose.*width keyframes/);assert.equal(samples,0);assert.equal(result.cues,undefined);
+});
 test('caption box profiles distinguish uniform and independent native width/height scales',()=>{
   const f=hostFixture(),clip=f.addClip(f.item('/managed/caption.mov'),300/FPS,302/FPS),params=attachNativeMotion(clip,{height:{value:125},width:{value:200}});
   const uniform=JSON.parse(f.host.readCaptionMotion(motionPayload(f,clip)));assert.equal(uniform.ok,true);const first=uniform.cues[0].motionProfile;
