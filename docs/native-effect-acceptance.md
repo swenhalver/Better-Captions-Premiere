@@ -66,32 +66,66 @@ Build hashes identify snapshots, not acceptance:
 | Standard own-layer-clock candidate | `53943c539d4b9ad6fc6120a8039a38c0bb736edadf647d4faf9c7a4552f41e47` |
 | Same mapping with opt-in numeric render diagnostics | `d23470ea5cc798a2de18d8d45bc47e544b57f5bee04e32bc3365748d116ad633` |
 | Installed panel-integration/control candidate | `688697ac134ff530f9e02121f4843a53b33346b50c7cba40615631a9c910ec03` |
+| Normal typography candidate restored after timing probes | `6312eaabae8795ca9f4efa20a116cac9bf11f09c299b18e0368518ed7f62f74d` |
 
-Regenerate hashes after rebuilding. The panel-integration/control candidate is
-currently installed for scratch testing; standard builds disable custom UI and
-all probe logging. The earlier diagnostic snapshots are retained as historical
+Regenerate hashes after rebuilding. The normal typography candidate (hash below) was restored after the timing probes;
+standard builds disable custom UI and all probe logging. The earlier diagnostic snapshots are retained as historical
 timing evidence.
 The optional global `.pkg` path was not scanned by this Premiere installation and
 is not the verified install route.
 
 ## Adjustment-layer timing failure under investigation
 
-The baseline layer is 0–10 s with source in 3600 s and persisted origin 3600 s. At
-sequence 5 s it renders the expected current word. After a QE Razor split at 4 s,
-the right half has start 4 s/in 3604 s and unchanged embedded data, but the exported
-frame at 5 s is blank. Moving that right half to 10 s, with rendered footage beneath
-it, produces the expected word at 11 s; its raw pixel hash exactly matches the
-baseline 5 s frame. Repeated exports, cache invalidation and reopening have not
-established correct unmoved-split rendering.
+Swen confirmed that captions must **move with their adjustment layer**. A fixed
+persisted origin preserves authored word times across edits, but a reliable
+per-render layer clock is still required. The current CPU mapping does not meet
+that requirement.
 
-Evidence: `artifacts/host-scratch/adjustment-final-frame-comparison.json`, baseline
-`adjustment-before-razor-final.png`, failing
-`adjustment-after-razor-stable-final.png`, matching
-`adjustment-after-move-stable-final.png`. These are local ignored test artifacts.
-Numeric SDK render diagnostics record only timing/geometry/status counts, no
-transcript text. Next host check must use Premiere's actual UI Razor/Add Edit to
-separate a QE mutation issue from the adapter's clock mapping. No mapping based
-on footage underneath the adjustment layer is accepted.
+The baseline layer is 0–10 s with source in 3600 s and origin 3600 s. At sequence
+5 s it renders the expected word. A real Premiere UI Razor cut at 4 s produces a
+right half at start 4 s/in 3604 s with identical embedded data, but its frame at
+5 s is blank. The exact render callback reports PF time 5 s, SDK sequence time
+9 s, clip start frame 108120, track start frame 120, and computed document time
+9 s. That is outside the eight-second document. This confirms the QE result is
+also reproducible through Premiere's UI.
+
+Moving the right half one frame away and back, applying a fresh effect instance,
+reopening, invalidating width and cutting the underlying footage at the same
+position did not repair it. One earlier moved sample at start 10 s above fresh
+footage at 10 s produces the expected word at 11 s, but that isolated passing
+sample is insufficient: moving a whole uncut layer to 4 s above continuous
+footage still displays word 5 at sequence 5 s, where word 1 is required. The move
+used the documented Time-object API and preserved the source in-point.
+
+Evidence lives in ignored `artifacts/host-scratch/`:
+
+- `ui-razor-timing-receipt.json` records actual UI cut metadata, callback values
+  and raw pixel hashes for baseline/failing variants.
+- `ui-razor-before.png` and `ui-razor-after.png` show the same requested frame
+  before/after the cut; baseline and moved-good sample hash is `2dfa0277…`,
+  while the failed blank hash is `20038153…`.
+- `whole-move-before.png` at sequence 1 s and `whole-move-after.png` at sequence
+  5 s should match after a 4 s move; their hashes differ.
+
+Numeric diagnostics match the exact SDK filter-instance ID. The Video Segment
+owner query fails on the adjustment wrapper with error -2147483643. The exact
+ancestor path is Compositor → Adjustment → Clip → Effect; its clip edge offset
+reflects the layer's start/in-point, but start/end properties are unavailable
+and tested time transforms are identities. Request-dependent root offsets do
+not supply an independent render clock. No nearby footage is substituted for
+the owning layer.
+
+A controlled `PF_OutFlag_WIDE_TIME_INPUT` build changed both Global Setup/PiPL
+flags from 4 to 6 and reproduced the same wrong time and blank pixels. It was
+rejected and is absent from the normal build. Diagnostic builds were removed;
+the normal typography candidate was restored for the parallel font acceptance.
+
+The next isolated probe adds the official GPU companion entry point to inspect
+`PrGPUFilterRenderParams.inClipTime`, `inSequenceTime` and `inRenderTicksPerFrame`.
+These explicit request clocks may provide a viable native path, but adjustment-
+layer host dispatch, parameter data representation and CPU fallback remain
+unverified. A diagnostic that returns no frame is never a usable renderer or
+proof of software fallback. No timing fix is accepted yet.
 
 ## Acceptance matrix
 
@@ -104,7 +138,7 @@ on footage underneath the adjustment layer is accepted.
 | Program Monitor move/resize | Optional probe draws 4 blue handles. Host drag delivered no click/drag callbacks and changed no native value. Input remains unverified; standard build keeps it off. |
 | Embedded document transfer/live update | Exact guarded CEP write/readback and changed native frames verified. Installed panel adoption and supported color update verified in 0.7.9; native keys/geometry stay host-owned. |
 | Save/reopen/clone | Transcript retained; BCAP 2 origin retained. Copy/paste, keys and complete pixel persistence remain open. |
-| Adjustment-layer trim/Razor/move | Move sample matches baseline pixels; unmoved QE Razor is failing. Not accepted. |
+| Adjustment-layer trim/Razor/move | Actual UI and QE Razor fail; one moved sample passes but whole-layer move over continuous footage fails. Not accepted. |
 | Adjustment-only application | Live transfer requires exact true role check; manual native effect selection remains a Premiere UI operation. |
 | Built-in Transcribe/editable word timing | Existing native document words/timing restore into the panel; timing edits have adapter/controller tests. Fresh transcription still follows the existing movie workflow; replacing a native embedded transcript is refused. Full installed native timing-edit acceptance pending. |
 | One adjustment container above footage | Manually created genuine layer verified. Automatic creation/migration pending. |

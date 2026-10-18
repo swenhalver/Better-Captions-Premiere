@@ -1,6 +1,6 @@
 #pragma once
 // Experimental ordinary 100%-speed trim mapping plus opt-in diagnostics.
-// Moved adjustment-layer rendering passed; unmoved QE Razor rendering still fails.
+// UI/QE adjustment-layer cuts and whole-layer moves fail controlled host timing.
 // Premiere and Adobe effect SDKs are external build dependencies.
 #include <PrSDKTimeSuite.h>
 #include <PrSDKAESupport.h>
@@ -31,9 +31,15 @@ struct Sample {
  PF_Err startError=-1,speedError=-1,syntheticError=-1;
 };
 struct OwnLayerClock {
- A_long startFrame=0,trackStartFrame=0;PrTime sequenceTime=0,frameTicks=0,ticksPerSecond=0;double speed=0;
+ A_long startFrame=0,trackStartFrame=0,clipStartFrame=0,filterInstanceId=0;PrTime sequenceTime=0,frameTicks=0,ticksPerSecond=0;double speed=0;
  PF_Err errSequence=-1,errTrack=-1,errStart=-1,errRate=-1,errSpeed=-1,errClock=-1;
+ PF_Err errClipStart=-1,errFilterInstance=-1;
 };
+} // namespace
+#if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
+#include "graph_time_diagnostics.hpp"
+#endif
+namespace better_captions::adobe::source_time_probe {
 inline void log(const Sample& s,const char* status) {
 #if (BC_ENABLE_SOURCE_TIME_PROBE || BC_ENABLE_ADJUSTMENT_TIME_PROBE) && !defined(BC_SOURCE_TIME_TEST_NO_LOG)
  if(!s.hostContext)return; // dlopen smoke harness has no host effect_ref.
@@ -73,18 +79,31 @@ inline PF_Err ordinaryMediaSeconds(PF_InData* in,double& seconds,OwnLayerClock* 
  Suite<PrSDKTimeSuite> clock(in,kPrSDKTimeSuite,kPrSDKTimeSuiteVersion);
  if(!utility||!clock||!utility->GetSequenceTime||!utility->GetTrackItemStart||!utility->GetUnscaledClipStart||!utility->GetMediaFrameRate||!utility->GetClipSpeed||!clock->GetTicksPerSecond)return PF_Err_INVALID_CALLBACK;
  OwnLayerClock local;auto& c=trace?*trace:local;c={};
+#if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
+ // Diagnostic metadata is never used to select or alter the time mapping.
+ // The SDK supplies a numeric filter ID; never expose host pointer addresses.
+ if(trace){
+  if(utility->GetClipStart)c.errClipStart=utility->GetClipStart(in->effect_ref,&c.clipStartFrame);
+  if(utility->GetFilterInstanceID)c.errFilterInstance=utility->GetFilterInstanceID(in->effect_ref,&c.filterInstanceId);
+ }
+#endif
  if((c.errSequence=utility->GetSequenceTime(in->effect_ref,&c.sequenceTime))||
     (c.errTrack=utility->GetTrackItemStart(in->effect_ref,&c.trackStartFrame))||
     (c.errStart=utility->GetUnscaledClipStart(in->effect_ref,&c.startFrame))||
     (c.errRate=utility->GetMediaFrameRate(in->effect_ref,&c.frameTicks))||
     (c.errSpeed=utility->GetClipSpeed(in->effect_ref,&c.speed))||
     (c.errClock=clock->GetTicksPerSecond(&c.ticksPerSecond)))return PF_Err_INVALID_CALLBACK;
+ #if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
+ if(trace)graphTimeDiagnostics(in,utility.operator->(),c);
+#endif
  // Retimed/reversed clips require separate host acceptance; never guess their map.
  if(!std::isfinite(c.speed)||std::abs(c.speed-1.0)>1e-9||c.frameTicks<=0||c.ticksPerSecond<=0)return PF_Err_BAD_CALLBACK_PARAM;
  // Query the render sequence clock and this layer's start rather than relying
- // on PF current_time. This formula has not resolved the observed unmoved QE
- // adjustment-layer split failure. Startup logs are speculative render requests,
- // not proof of the CTI; actual UI Add Edit comparison remains pending.
+ // on PF current_time. Controlled CTI5 exports after both actual UI and QE cuts
+ // reported PF5/GetSequenceTime9 with own track start4, producing blank captions.
+ // A whole-layer move from start0 to4 also failed the move-with-layer policy.
+ // No independent reliable CPU render clock has been established; keep this
+ // experimental formula unchanged while isolated GPU-clock evidence is pending.
  const long double mapped=(static_cast<long double>(c.sequenceTime)+
                            (static_cast<long double>(c.startFrame)-c.trackStartFrame)*c.frameTicks)/c.ticksPerSecond;
  const auto value=static_cast<double>(mapped);if(!std::isfinite(value))return PF_Err_BAD_CALLBACK_PARAM;

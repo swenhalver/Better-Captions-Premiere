@@ -1,4 +1,5 @@
 #define BC_SOURCE_TIME_TEST_NO_LOG 1
+#define BC_ENABLE_RENDER_TIME_DIAGNOSTICS 1
 #include "AEConfig.h"
 #include "AE_Effect.h"
 #include "AE_EffectCB.h"
@@ -13,6 +14,9 @@ PF_Err sequenceTime(PF_ProgPtr,PrTime* out){if(!sequenceOK)return PF_Err_INVALID
 PF_Err mediaTime(PF_ProgPtr,csSDK_uint32 index,bool sound,PrTime input,PrTime* out,PrTime* frame,PF_TimeDisplay* display){++queries;if(index||sound||input!=sequence||!mediaOK)return PF_Err_BAD_CALLBACK_PARAM;*out=media;*frame=40;*display=PF_TimeDisplay_25;return 0;}
 prSuiteError clockTime(PrTime* out){*out=ticks;return 0;}
 PF_Err clipStart(PF_ProgPtr,A_long* out){if(!startOK)return PF_Err_INVALID_CALLBACK;*out=startFrame;return 0;}
+prSuiteError failedGraphTransform(csSDK_int32,PrTime,PrTime*){return -1;}
+prSuiteError failedGraphProperty(csSDK_int32,const char*,PrMemoryPtr*){return -1;}
+PF_Err instanceId(PF_ProgPtr,A_long* out){*out=42;return 0;}
 PF_Err trackStart(PF_ProgPtr,A_long* out){if(!trackOK)return PF_Err_INVALID_CALLBACK;*out=trackStartFrame;return 0;}
 PF_Err frameRate(PF_ProgPtr,PrTime* out){*out=effectFrameTicks;return 0;}
 PF_Err clipSpeed(PF_ProgPtr,double* out){*out=speed;return 0;}
@@ -23,6 +27,13 @@ SPErr release(const char*,int32_t){return 0;}
 void check(bool ok){if(!ok)throw std::runtime_error("Source-time suite probe test failed");}
 }
 int main(){try{
+ PrSDKVideoSegmentSuite absentGraph{};PrSDKMemoryManagerSuite absentMemory{};
+ check(!better_captions::adobe::source_time_probe::graphCallbacksReady(nullptr,nullptr));
+ check(!better_captions::adobe::source_time_probe::graphCallbacksReady(&absentGraph,&absentMemory));
+ absentGraph.GetNodeProperty=failedGraphProperty;
+ better_captions::adobe::source_time_probe::GraphTrace failedTrace{&absentGraph,&absentMemory,-1,42,0,0};long long absentValue=123;
+ check(!failedTrace.number(1,kVideoSegmentProperty_Effect_RuntimeInstanceID,absentValue)&&absentValue==123);
+ absentGraph.TransformNodeTime=failedGraphTransform;failedTrace.path[0]={1,0,0};failedTrace.dumpPath(0,0); // unavailable type/properties and transform errors are diagnostic only
  utility.GetSequenceTime=sequenceTime;utility.GetSourceTrackCurrentMediaTimeInfo=mediaTime;clockSuite.GetTicksPerSecond=clockTime;
  SPBasicSuite basic{};basic.AcquireSuite=acquire;basic.ReleaseSuite=release;PF_InData in{};in.pica_basicP=&basic;in.current_time=25;in.time_scale=25;
  double value=1;check(better_captions::adobe::source_time_probe::mediaSeconds(&in,value)==0&&value==1&&queries==3);
@@ -34,9 +45,13 @@ int main(){try{
  ticks=0;check(better_captions::adobe::source_time_probe::mediaSeconds(&in,value)==0&&value==1);
  // Host calibration: actual24fps media in30fps sequence reports start120,
  // effect frame ticks8467200000 and clock254016000000. At local1 => source5.
- utility.GetUnscaledClipStart=clipStart;utility.GetTrackItemStart=trackStart;utility.GetMediaFrameRate=frameRate;utility.GetClipSpeed=clipSpeed;utility.GetOriginalClipFrameRate=originalRate;
+ utility.GetClipStart=clipStart;utility.GetFilterInstanceID=instanceId;utility.GetUnscaledClipStart=clipStart;utility.GetTrackItemStart=trackStart;utility.GetMediaFrameRate=frameRate;utility.GetClipSpeed=clipSpeed;utility.GetOriginalClipFrameRate=originalRate;
  ticks=254016000000LL;sequence=ticks;in.current_time=30;in.time_scale=30;value=-1;
  check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value)==0&&value==5&&originalRateCalls==0);
+ better_captions::adobe::source_time_probe::OwnLayerClock trace;
+ check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value,&trace)==0&&value==5&&trace.filterInstanceId==42&&trace.clipStartFrame==120&&trace.errFilterInstance==0&&trace.errClipStart==0);
+ utility.GetFilterInstanceID=nullptr;utility.GetClipStart=nullptr;
+ check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value,&trace)==0&&value==5&&trace.errFilterInstance==-1&&trace.errClipStart==-1);
  sequence=2794176000000LL;trackStartFrame=300; // same sourcein4, movedtrack10 at CTI11: still source5
  check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value)==0&&value==5);
  startFrame=0;trackStartFrame=0;sequence=5*ticks;in.current_time=150;check(better_captions::adobe::source_time_probe::ordinaryMediaSeconds(&in,value)==0&&value==5); // before Razor
