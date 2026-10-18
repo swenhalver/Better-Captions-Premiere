@@ -3,15 +3,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url),ts=require('../webview-ui/node_modules/typescript'),acorn=require('../webview-ui/node_modules/acorn');
 const source=fs.readFileSync(new URL('../webview-ui/src/cep-api.ts',import.meta.url),'utf8');
 const code=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 const methods=['context','seek','selectCaptionClip','readCaptionSelection','readCaptionGeometry','readCaptionMotion','readCaptionAreaDescriptor','patchCaptionKeyValues','preflight','prepareCaptionTrack','apply','readTimeline','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation'];
+const fixtureRoot=path.resolve(import.meta.dirname,'fixtures','host-readiness');
 function fixture(options={}){
- const context={ok:true,id:'seq-a',projectPath:'/project/edit.prproj',width:720,height:1280,fps:24},directory='/data/seq-a',jobs=new Map(),commands=[],loads=[],nativeCalls=[];
- const extension=options.extension??'/extension',root=extension.startsWith('file:')?fileURLToPath(extension):extension;
+ const context={ok:true,id:'seq-a',projectPath:path.join(fixtureRoot,'project','edit.prproj'),width:720,height:1280,fps:24},directory=path.join(fixtureRoot,'data','seq-a'),jobs=new Map(),commands=[],loads=[],nativeCalls=[];
+ const extension=options.extension??path.join(fixtureRoot,'extension'),root=extension.startsWith('file:')?fileURLToPath(extension):extension;
+ assert.equal(path.isAbsolute(root),true,'the mocked extension root must be absolute on the platform running this test');
  let changes=0,pending=null,clock=0;
  function namespace(legacy=false){return Object.fromEntries(methods.map(method=>[method,(file)=>{nativeCalls.push(method);if(method==='context')return JSON.stringify(context);if(method==='readTimeline')return JSON.stringify({ok:true,cues:(jobs.get(file)?.cues??[]).map(cue=>legacy?{id:cue.id,missing:true}:{id:cue.id,clipNodeId:cue.clipNodeId,projectItemId:cue.projectItemId,path:cue.mediaPath,missing:true})});if(method==='apply'){changes++;return options.ambiguousMutation?'EvalScript error.':JSON.stringify({ok:true,cues:[]});}return JSON.stringify({ok:true});}]));}
  function loadNamespace(file){
@@ -24,7 +26,8 @@ function fixture(options={}){
  }});
  native.$.global=vm.runInContext('this',native);
  if(options.ready||options.partial){native.BetterCaptionsHost=namespace(options.partial===true);if(options.partial)delete native.BetterCaptionsHost.readCaptionConsolidation;}
- const runtime={path,directory:()=>directory,writeJSON:(file,data)=>jobs.set(file,data),readJob:data=>{jobs.set('/private/read-job.json',data);return '/private/read-job.json';},disposeReadJob:file=>jobs.delete(file),fs:{lstatSync:()=>({isFile:()=>true,isSymbolicLink:()=>false}),realpathSync:file=>file}};
+ const readJobPath=path.join(fixtureRoot,'private','read-job.json');
+ const runtime={path,directory:()=>directory,writeJSON:(file,data)=>jobs.set(file,data),readJob:data=>{jobs.set(readJobPath,data);return readJobPath;},disposeReadJob:file=>jobs.delete(file),fs:{lstatSync:()=>({isFile:()=>true,isSymbolicLink:()=>false}),realpathSync:file=>file}};
  const window={require:name=>name==='node:path'?path:name==='node:url'?{fileURLToPath}:runtime,__adobe_cep__:{getSystemPath:()=>extension,evalScript(script,callback){
   commands.push(script);
   if(script==='"BC_NATIVE_EVAL_V1"'){
@@ -48,13 +51,13 @@ function fixture(options={}){
   callback(vm.runInContext(script,native));
  }}};
  const exports={};vm.runInNewContext(code,{exports,window,console,Date:class extends Date{static now(){return clock;}},require:()=>({})});
- const api=exports.createHostAPI(),caption={id:'cue',text:'caption',startTime:0,endTime:1,mediaPath:directory+'/caption-cue-run/caption.mov'};
+ const api=exports.createHostAPI(),caption={id:'cue',text:'caption',startTime:0,endTime:1,mediaPath:path.join(directory,'caption-cue-run','caption.mov')};
  return {api,caption,commands,loads,nativeCalls,native,get changes(){return changes;},advance:ms=>{clock+=ms;},release:()=>{assert.ok(pending);pending();}};
 }
 test('missing host namespace loads the one owned ES3 bridge once before any native method',async()=>{
  const h=fixture();assert.equal(h.commands.length,0,'initialization stays lazy until a host method is needed');
  await h.api.getActiveSequenceInfo();await h.api.getActiveSequenceInfo();
- assert.deepEqual(h.loads,['/extension/host/bridge.jsx']);assert.deepEqual(h.nativeCalls,['context','context']);assert.equal(h.commands.filter(script=>script.includes('/*better-captions-host-ready-v1*/')).length,1);assert.equal(h.commands.filter(script=>script.includes('/*better-captions-host-global-v1*/')).length,1);
+ assert.deepEqual(h.loads,[path.join(fixtureRoot,'extension','host','bridge.jsx')]);assert.deepEqual(h.nativeCalls,['context','context']);assert.equal(h.commands.filter(script=>script.includes('/*better-captions-host-ready-v1*/')).length,1);assert.equal(h.commands.filter(script=>script.includes('/*better-captions-host-global-v1*/')).length,1);
 });
 test('a complete namespace is verified without file evaluation, while an incomplete method set is reloaded',async()=>{
  const ready=fixture({ready:true});await ready.api.getActiveSequenceInfo();assert.equal(ready.loads.length,0);
@@ -96,7 +99,9 @@ test('concurrent first reads share one pending readiness check',async()=>{
  assert.equal(h.commands.length,2);assert.equal(h.commands[0],'"BC_NATIVE_EVAL_V1"');assert.equal(h.nativeCalls.length,0);h.release();await Promise.all([first,second]);assert.equal(h.loads.length,1);assert.deepEqual(h.nativeCalls,['context','context']);
 });
 test('fixed extension paths with quotes and Unicode remain data in the loader',async()=>{
- const h=fixture({extension:'file:///Extensions/Captions%20O%27Brien%20%22%E5%AD%97%22'});await h.api.getActiveSequenceInfo();assert.deepEqual(h.loads,['/Extensions/Captions O\'Brien "字"/host/bridge.jsx']);assert.equal(h.changes,0);
+ const extensionPath=path.join(fixtureRoot,'Extensions','Captions O\'Brien "字"'),extensionURL=pathToFileURL(extensionPath).href;
+ assert.equal(fileURLToPath(extensionURL),extensionPath,'the quoted Unicode file URL must round trip on the current platform');
+ const h=fixture({extension:extensionURL});await h.api.getActiveSequenceInfo();assert.deepEqual(h.loads,[path.join(extensionPath,'host','bridge.jsx')]);assert.equal(h.changes,0);
 });
 test('native script load failures retain bounded error and line details and prevent every host call',async()=>{
  const h=fixture({loadError:'Syntax "problem" \\ bad\n'+'x'.repeat(1000)});
