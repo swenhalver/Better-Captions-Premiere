@@ -177,14 +177,45 @@ effect frame ticks8467200000, speed1 and synthetic=true. Persisted document
 origin3600 produced word time5 and the expected visible caption in that moved case.
 Before splitting, the same document also rendered the expected word at timeline5.
 
-The unmoved QE Razor right half (timeline start4, source in3604) rendered blank at
-explicit CTI5, including after a native-control change forced invalidation. The
-current sequence-clock formula did not fix that failure. Diagnostic startup
-requests included PF181/30, sequence10.0333, track start4, source start3604 and
-origin3600, producing document10.0333 and zero caption alpha. Those startup
-requests may be speculative and cannot be labeled CTI5 evidence. Actual Premiere
-UI Add Edit comparison is pending while the Mac is locked. Compiled regressions
-verify arithmetic under supplied clocks; they do not establish host Razor success.
+Both an actual Premiere UI Razor cut and a QE cut at4 produce a right half at
+timeline start4/source in3604 that renders blank at explicit CTI5. Invalidating a
+native control, reopening, moving one frame away/back, applying a fresh effect
+instance and cutting the underlying footage at4 did not repair it. The exact UI
+cut render reports PF150/30, SDK sequence9, track start4, source start3604 and
+origin3600, producing document9 and zero caption alpha. This is correlated render
+evidence, not a speculative startup request.
+
+Moving a whole uncut layer from start0 to4 above continuous footage also fails:
+sequence5 produces document5 where document1 is required by the move-with-layer
+policy. The earlier split item at start10 above footage also starting10 remains
+an isolated passing case, not complete move acceptance. Compiled regressions
+verify arithmetic under supplied clocks; they do not establish host success.
+
+The bounded graph probe matches this effect's SDK filter-instance ID and finds
+Compositor → Adjustment → Clip → Effect. Its own clip edge offset tracks the
+layer's start/in-point, but the owner query fails, node start/end properties are
+unavailable, tested transforms are identities and root offsets depend on the
+requested graph time. None supplies an independent CPU render clock. A controlled
+WIDE_TIME_INPUT build reproduced the failure and was rejected.
+
+An isolated GPU companion probe inspects the SDK's explicit per-request sequence
+time, clip time and render ticks per frame. It also logs the arbitrary parameter's
+type/size/bounded binary prefix and native point units. Its CPU render diagnostics
+include optional sequence zero point/duration and PF total/local-step metadata;
+those fields never alter the mapping. Build it separately with:
+
+```sh
+AE_SDK_EXAMPLES="/path/to/AE/Examples" \
+  PREMIERE_SDK_HEADERS="/path/to/Premiere/Examples/Headers" \
+  bash native/adobe/build-gpu-clock-probe-macos.sh
+```
+
+The script snapshots committed HEAD (or `BC_NATIVE_PROBE_REF`), overlays only the
+owned timing diagnostics and runs SDK/GPU ABI checks. It does not modify the
+normal artifact, install or restart Premiere. The probe returns no GPU frame;
+it is not a renderer or evidence of software fallback. GPU host dispatch and
+correct adjustment-layer clock behavior remain unverified. Detailed test receipts
+are in [the acceptance record](../../docs/native-effect-acceptance.md).
 
 The adapter does not infer that every synthetic clip has origin3600. Adjustment
 layers need underlying rendered coverage; the host does not render the effect
