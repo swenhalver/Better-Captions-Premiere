@@ -41,7 +41,18 @@ function send(data) {
   webview.postMessage({ channel: CHANNEL, ...data });
 }
 function safeError(error) {
-  return { message: String(error && error.message || error || 'Premiere caption operation failed.').slice(0, 4000) };
+  const result = { message: String(error && error.message || error || 'Premiere caption operation failed.').slice(0, 4000) };
+  if (error && ['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE', 'BC_NATIVE_CLOSED'].includes(error.code)) {
+    result.code = error.code;
+    if (typeof error.recoverable === 'boolean') result.recoverable = error.recoverable;
+    if (typeof error.operationPending === 'boolean') result.operationPending = error.operationPending;
+    if (HOST_METHODS.has(error.method)) result.method = error.method;
+  }
+  return result;
+}
+function availability(snapshot) {
+  const state = snapshot || (typeof api.getTransportAvailability === 'function' && api.getTransportAvailability());
+  if (state && webview && !destroyed) { try { send({ type: 'better-captions-native-availability', ...state }); } catch {} }
 }
 function visibility(visible = panelVisible) {
   panelVisible = visible;
@@ -103,7 +114,7 @@ async function onMessage(event) {
   running.add(data.id);
   try {
     let result;
-    if (data.method === 'agent.ready') { uiReady = true; loadFailure = null; showStatus(''); await startAgent(); visibility(); result = { ready: true }; }
+    if (data.method === 'agent.ready') { uiReady = true; loadFailure = null; showStatus(''); await startAgent(); visibility(); availability(); result = { ready: true }; }
     else if (data.method === 'agent.stopped') { uiReady = false; result = { ready: false }; }
     else if (data.method === 'diagnostic') {
       const diagnostic = data.args[0];
@@ -153,6 +164,7 @@ function mount() {
       if (!uiReady && !loadFailure) showStatus('Caption editor loaded. Waiting for its controls…');
       Promise.resolve(api.getColorScheme()).then(scheme => notify('ui.colorScheme', [scheme])).catch(() => {});
       visibility();
+      availability();
     });
     webview.addEventListener('loaderror', event => {
       loadFailure = String(event.message || 'The local editor page did not load.') + (event.code === undefined ? '' : ' (code ' + event.code + ')');
@@ -161,6 +173,7 @@ function mount() {
     });
     webview.src = 'plugin:/client/index.html';
     document.getElementById('app').appendChild(webview);
+    if (typeof api.onTransportAvailability === 'function') cleanupListeners.push(api.onTransportAvailability(availability));
     sequenceEvents();
   } catch (error) {
     const message = document.createElement('div'); message.className = 'caption-host__error';

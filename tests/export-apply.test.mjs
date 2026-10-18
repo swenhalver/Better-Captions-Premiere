@@ -16,6 +16,7 @@ function loadTypeScript(file, replacements = {}) {
 const planner = loadTypeScript(path.join(root, 'webview-ui/src/lib/export/exporter.ts'), { '../canvas/engine': { CaptionRenderer: class {} } });
 const containers = loadTypeScript(path.join(root, 'webview-ui/src/lib/export/containers.ts'));
 const deletedLinks = loadTypeScript(path.join(root, 'webview-ui/src/lib/export/deleted-links.ts'));
+const liveOutput = loadTypeScript(path.join(root, 'webview-ui/src/lib/live-output.ts'));
 const profile = (signature, scaleX) => ({ signature, samples: [{ time: .5, scaleX, scaleY: 1 }] });
 function caption(id, start, end) {
   return { id, text: id, startTime: start, endTime: end, words: [{ text: id, startTime: start, endTime: end }],
@@ -24,7 +25,7 @@ function caption(id, start, end) {
 }
 
 /** Run the component's real Apply function; rune shims only supply its props and initial track selection. */
-function harness({ changeDuringRender = false, changeSelection = false, unlinked = false, differentPositions = false } = {}) {
+function harness({ changeDuringRender = false, changeSelection = false, unlinked = false, differentPositions = false, editorChanges = false, automaticLegacy = false, verificationFailure = false, mutationFailure = false, malformedMutation = false } = {}) {
   const source = [caption('first', 0, 1), caption('second', 1, 2)], events = [], saved = [], completed = [], busy = [];
   if (unlinked) for (const item of source) { delete item.clipNodeId; delete item.projectItemId; delete item.mediaPath; delete item.motionProfile; }
   if (differentPositions) source[1].position = { x:.1,y:.2 };
@@ -47,18 +48,24 @@ function harness({ changeDuringRender = false, changeSelection = false, unlinked
       else assert.equal(items[0].captionBundle,true);
     },
     applyCaptionClips: async items => {
+      if (mutationFailure) throw mutationFailure;
       events.push('apply'); applied = true;
+      if (malformedMutation) return { ok: true, cues: [] };
       if (!unlinked) assert.equal(items[0].motionProfile.signature, 'native-resized-60');
       currentProfile = unlinked ? profile('native-created-100',1) : profile('native-unlocked-60', .6);
       return { ok: true, cues: items.map(item => ({ id: item.id, clipNodeId: item.clipNodeId ?? 'new-clip-'+item.id, projectItemId: item.projectItemId ?? 'new-item-'+item.id, path: item.mediaPath, start: item.startTime, end: item.endTime, motionProfile: currentProfile })) };
     },
-    readTimeline: async items => ({ ok: true, cues: items.map(item => ({ id: item.id, clipNodeId:item.clipNodeId, projectItemId:item.projectItemId, path: item.mediaPath, start: item.startTime, end: item.endTime })) }),
+    readTimeline: async items => {
+      if (applied && verificationFailure) throw verificationFailure;
+      return { ok: true, cues: items.map(item => ({ id: item.id, clipNodeId:item.clipNodeId, projectItemId:item.projectItemId, path: item.mediaPath, start: item.startTime, end: item.endTime })) };
+    },
     readCaptionSelection: async () => ({ ok: true, captionId: changeSelection ? 'second' : 'first', time: .5 }),
     selectCaptionClip: async item => { events.push('select-' + item.id); },
   };
   const exporter = { ...planner, exportFrames: async items => {
-    events.push('render'); assert.equal(items.length, 1); if (!unlinked) assert.equal(items[0].motionProfile.signature, 'native-resized-60');
+    events.push('render'); assert.equal(items.length, automaticLegacy ? 2 : 1); if (!unlinked) assert.equal(items[0].motionProfile.signature, 'native-resized-60');
     if (changeDuringRender) currentProfile = profile('native-resized-70', .7);
+    if (editorChanges) props.style.fontSize = 88;
     return items.map(item => ({ ...item, mediaPath: '/generated/new-' + item.id + '/caption.mov' }));
   } };
   const props = { captions: source, style: { maxChars: 56 }, animation: {}, frameWidth: 720, frameHeight: 1280, frameRate: 24, duration: 2,
@@ -71,7 +78,7 @@ function componentApply(props, exporter, events, selectedTrack=-1) {
   const script = fs.readFileSync(sourceFile, 'utf8').match(/<script lang="ts">([\s\S]*?)<\/script>/)[1];
   const exports = {}, code = ts.transpileModule(script.replace('selectedTrack = $state(-1)', 'selectedTrack = $state('+selectedTrack+')'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   vm.runInNewContext(code, { exports, AbortController, $props: () => props, $state: value => value, $derived: value => value, $effect: () => {},
-    require: name => name === '../lib/export/exporter' ? exporter : name === '../lib/export/containers' ? containers : name === '../lib/export/deleted-links' ? deletedLinks : { refreshProgramMonitor: async () => { events.push('refresh'); } } });
+    require: name => name === '../lib/export/exporter' ? exporter : name === '../lib/export/containers' ? containers : name === '../lib/export/deleted-links' ? deletedLinks : name === '../lib/live-output' ? liveOutput : { refreshProgramMonitor: async () => { events.push('refresh'); } } });
   return exports.apply;
 }
 
@@ -100,6 +107,35 @@ test('actual first Apply renders and persists one full-transcript native clip fo
   assert.equal(h.saved.at(-1).length,1); assert.equal(h.saved.at(-1)[0].captionBundle,true);
   assert.equal(h.completed[0].items.length,1); assert.deepEqual(h.busy,[true,false]);
 });
+test('live output discards an obsolete rendered version before any timeline write', async () => {
+  const h = harness({ unlinked: true, editorChanges: true });
+  await assert.rejects(h.apply({ automatic: true }), error => error.code === 'BC_RENDER_SUPERSEDED');
+  assert.equal(h.applied, false); assert.equal(h.saved.length, 0);
+});
+test('a recoverable verification read after a successful placement cannot replay the placement', async () => {
+  const failure = Object.assign(new Error('slow verification read'), { code: 'BC_NATIVE_PENDING', method: 'readTimeline', recoverable: true });
+  const h = harness({ unlinked: true, verificationFailure: failure });
+  await assert.rejects(h.apply({ automatic: true }), error => error.code === 'BC_OUTPUT_UNCONFIRMED' && error.recoverable === false && error.outputApplied === true);
+  assert.equal(h.events.filter(event => event === 'apply').length, 1);
+  assert.equal(h.saved.length, 1, 'Save the known clip links before a later verification read can fail');
+  assert.equal(h.saved[0][0].clipNodeId, 'new-clip-first');
+});
+test('malformed placement acknowledgement is uncertain and cannot be treated as an ordinary retry', async () => {
+  const h = harness({ unlinked: true, malformedMutation: true });
+  await assert.rejects(h.apply({ automatic: true }), error => error.code === 'BC_OUTPUT_UNCONFIRMED' && error.recoverable === false);
+  assert.equal(h.saved.length, 0);
+});
+test('known unstarted native placement errors retain their safe retry metadata', async () => {
+  const failure = Object.assign(new Error('another operation is pending'), { code: 'BC_NATIVE_WAITING', recoverable: true });
+  const h = harness({ unlinked: true, mutationFailure: failure });
+  await assert.rejects(h.apply({ automatic: true }), error => error === failure);
+  assert.equal(h.applied, false);
+});
+test('automatic styling preserves legacy containers instead of converting human animation', async () => {
+  const h = harness({ automaticLegacy: true }), updated = await h.apply({ automatic: true });
+  assert.equal(updated.length, 2); assert.deepEqual(plain(updated.map(item => item.clipNodeId)), ['clip-first', 'clip-second']);
+  assert.ok(!h.events.includes('plan')); assert.ok(!h.events.includes('consolidate')); assert.ok(!h.events.some(item => item.startsWith('select-')));
+});
 test('bundle validation failure releases the actual Apply busy gate before any native writes', async () => {
   const h=harness({unlinked:true,differentPositions:true});
   await assert.rejects(h.apply(),/different frame positions/);
@@ -114,7 +150,7 @@ test('full Apply converts legacy captions only through verified native consolida
 });
 
 test('legacy geometry changed while rendering cannot persist a replacement or discard the original links',async()=>{
- const h=harness({changeDuringRender:true});await assert.rejects(h.apply(),/Legacy caption geometry changed/);
+ const h=harness({changeDuringRender:true});await assert.rejects(h.apply(),error=>error.code==='BC_OUTPUT_UNCONFIRMED'&&/Legacy caption geometry changed/.test(error.detail));
  assert.equal(h.applied,false);assert.equal(h.saved.length,0);assert.ok(h.source.every(item=>item.clipNodeId.startsWith('clip-')));assert.deepEqual(h.busy,[true,false]);
 });
 
@@ -168,9 +204,9 @@ test('missing, duplicate, stale and unsuccessful read receipts cannot authorize 
  }
 });
 test('Undo during rendering preserves old links and cannot persist duplicate recreated captions',async()=>{
- const h=recoveryHarness({duringRender:(live,before)=>live.set(before[0].clipNodeId,before[0])});await assert.rejects(h.apply(),/returned during rendering/);assert.equal(h.saved.length,0);assert.equal(h.live.size,1);assert.deepEqual(h.source,h.before);
+ const h=recoveryHarness({duringRender:(live,before)=>live.set(before[0].clipNodeId,before[0])});await assert.rejects(h.apply(),error=>error.code==='BC_OUTPUT_UNCONFIRMED'&&/returned during rendering/.test(error.detail));assert.equal(h.saved.length,0);assert.equal(h.live.size,1);assert.deepEqual(h.source,h.before);
 });
 test('new links are saved before interrupted verification so retry updates instead of inserting again',async()=>{
- const h=recoveryHarness({failReadback:true});await assert.rejects(h.apply(),/Readback interrupted/);assert.equal(h.saved.length,1);assert.equal(h.saved[0][0].clipNodeId,'restored-bundle');assert.equal(h.live.size,1);
+ const h=recoveryHarness({failReadback:true});await assert.rejects(h.apply(),error=>error.code==='BC_OUTPUT_UNCONFIRMED'&&error.outputApplied===true&&/Readback interrupted/.test(error.detail));assert.equal(h.saved.length,1);assert.equal(h.saved[0][0].clipNodeId,'restored-bundle');assert.equal(h.live.size,1);
  const retry=recoveryHarness({source:h.saved[0],live:h.live}),updated=await retry.apply();assert.equal(updated[0].clipNodeId,'restored-bundle');assert.equal(retry.live.size,1);assert.equal(retry.writes.at(-1).deleted.length,0);assert.equal(retry.renders[0][0].clipNodeId,'restored-bundle');
 });

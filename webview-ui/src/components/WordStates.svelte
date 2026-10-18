@@ -24,7 +24,7 @@
     <label class="caption-field"><span>Text color</span><input type="color" value={appearance.color} onchange={(event) => update({color:value(event)})} /></label>
     <label class="caption-field"><span>Opacity, %</span><input type="number" min="0" max="100" value={Math.round(appearance.opacity*100)} onchange={(event) => update({opacity:numeric(event)/100})} /></label>
     <label class="caption-field"><span>Letter spacing, px</span><input type="number" min="-10" max="40" step=".5" value={appearance.letterSpacing} onchange={(event) => update({letterSpacing:numeric(event)})} /></label>
-    <label class="caption-field"><span>Case</span><select value={appearance.textTransform} onchange={(event) => update({textTransform:value(event) as WordAppearance['textTransform']})}><option value="none">As typed</option><option value="uppercase">UPPERCASE</option><option value="lowercase">lowercase</option></select></label>
+    <label class="caption-field"><span>Case</span><select value={appearance.textTransform} onchange={(event) => update({textTransform:value(event) as WordAppearance['textTransform']})}><option value="none">As typed</option><option value="uppercase">UPPERCASE</option><option value="lowercase">lowercase</option><option value="titlecase">Title Case</option></select></label>
     <label class="caption-check"><input type="checkbox" checked={appearance.italic} onchange={(event) => update({italic:event.currentTarget.checked})} /><span>Italic</span></label>
   </div>
 </details>

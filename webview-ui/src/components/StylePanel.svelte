@@ -5,6 +5,7 @@
   function value(event: Event) { return (event.target as HTMLInputElement).value; }
   function number(event: Event) { return Number(value(event)); }
   function checked(event: Event) { return (event.target as HTMLInputElement).checked; }
+  function wordSpacing(event: Event) { const spacing = (event.target as HTMLInputElement).valueAsNumber; if (Number.isFinite(spacing)) onUpdate({ wordSpacing: Math.max(0, Math.min(300, spacing)) }); }
 </script>
 
 <details class="caption-section style-panel" >
@@ -13,6 +14,9 @@
     <div class="caption-controls">
       <label class="caption-field"><span>Alignment</span><select value={style.textAlign} onchange={(event) => onUpdate({ textAlign: value(event) as CanvasTextAlign })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
       <label class="caption-field"><span>Line height</span><input type="number" min=".8" max="3" step=".05" value={style.lineHeight} onchange={(event) => onUpdate({ lineHeight: Math.max(.8, Math.min(3, number(event))) })} /></label>
+      <label class="caption-field"><span>Word spacing, %</span><input type="number" min="0" max="300" step="5" value={style.wordSpacing ?? 100} title="100% uses the font’s normal space. Bubble and outline clearance is preserved." oninput={wordSpacing} /></label>
+      <label class="caption-field"><span>Default case</span><select value={style.textTransform} onchange={(event) => onUpdate({ textTransform: value(event) as StyleConfig['textTransform'] })}><option value="none">As typed</option><option value="uppercase">UPPERCASE</option><option value="lowercase">lowercase</option><option value="titlecase">Title Case</option></select></label>
+      {#if style.wordSpacing === undefined}<button type="button" onclick={() => onUpdate({ wordSpacing: 100 })}>Use normal spacing</button>{/if}
       <label class="caption-field caption-field--wide"><span>Maximum line width — {Math.round(style.maxWidth * 100)}% of frame</span><input type="range" min=".1" max="1" step=".01" value={style.maxWidth} oninput={(event) => onUpdate({ maxWidth: number(event) })} /></label>
     </div>
     <label class="caption-check"><input type="checkbox" checked={style.backgroundEnabled} onchange={(event) => onUpdate({ backgroundEnabled: checked(event) })} /><span>Whole caption background</span></label>

@@ -39,3 +39,40 @@ test('a frame-aligned leading gap advances inside speech instead of showing an e
   const result = exports.programMonitorPosition([phrase], 0, options);
   assert.ok(result.time >= .04 && result.time < .5);
 });
+test('automatic refresh restores the actual playhead in a gap or after captions without selecting a spoken frame', async () => {
+  for(const playhead of [0,1.75,3.5,4,5.25]){
+    const calls=[],api={getActiveSequenceInfo:async()=>({id:'sequence',playhead}),showInPremiere:async(...args)=>calls.push(args)};
+    const result=await exports.refreshProgramMonitor(api,captions,'sequence',{...options,currentTime:2.4,preservePlayhead:true});
+    assert.equal(result,playhead);assert.deepEqual(calls.at(-1),[playhead,'sequence']);assert.equal(calls.length,2);
+    assert.ok(Math.abs(calls[0][0]-playhead)<=1/24+1e-9,'the refresh jog stays within one frame of the actual native playhead');
+  }
+});
+test('automatic refresh refuses an unreadable native playhead without jumping to the selected caption', async () => {
+  for(const playhead of [undefined,null,NaN,Infinity,-1,'2.5']){
+    const calls=[],api={getActiveSequenceInfo:async()=>({id:'sequence',playhead}),showInPremiere:async(...args)=>calls.push(args)};
+    await assert.rejects(exports.refreshProgramMonitor(api,captions,'sequence',{...options,preservePlayhead:true}),/playhead/i);
+    assert.equal(calls.length,0);
+  }
+});
+test('automatic refresh validates sequence frame timing before it can issue a native seek', async () => {
+  for(const timing of [{frameRate:0},{frameRate:NaN},{frameRate:Infinity},{duration:0},{duration:NaN}]){
+    const calls=[],api={getActiveSequenceInfo:async()=>({id:'sequence',playhead:1.75}),showInPremiere:async(...args)=>calls.push(args)};
+    await assert.rejects(exports.refreshProgramMonitor(api,captions,'sequence',{...options,...timing,preservePlayhead:true}),/frame|sequence|timing/i);
+    assert.equal(calls.length,0);
+  }
+});
+test('automatic refresh checks the active sequence even when its playhead and selected phrase are valid', async () => {
+  for(const info of [null,{id:'other',playhead:1.75}]){
+    const calls=[],api={getActiveSequenceInfo:async()=>info,showInPremiere:async(...args)=>calls.push(args)};
+    await assert.rejects(exports.refreshProgramMonitor(api,captions,'sequence',{...options,preservePlayhead:true}),/active sequence changed/);
+    assert.equal(calls.length,0);
+  }
+});
+test('both refresh seeks keep the captured sequence identity if the user switches sequences during the jog', async () => {
+  let active='sequence';const calls=[];
+  const api={getActiveSequenceInfo:async()=>({id:active,playhead:1.75}),showInPremiere:async(time,id)=>{
+    calls.push([time,id]);if(active!==id)throw new Error('The active sequence changed.');active='other';
+  }};
+  await assert.rejects(exports.refreshProgramMonitor(api,captions,'sequence',{...options,preservePlayhead:true}),/active sequence changed/);
+  assert.equal(calls.length,2);assert.ok(calls.every(([,id])=>id==='sequence'));
+});

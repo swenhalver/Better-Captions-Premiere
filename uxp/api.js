@@ -20,30 +20,48 @@ function createHostAPI(options = {}) {
   const startupPoll = Math.min(250, Math.max(1, Number.isFinite(options.serviceStartupPollMs) ? options.serviceStartupPollMs : 150));
   const waiting = [];
   let active = null, unresolved = null, disposed = false;
+  const availabilityListeners = new Set();
+  let availability = { version: 1, revision: 0, state: 'ready', method: null, reason: 'idle' };
+  function transportError(message, code, method, recoverable, operationPending) {
+    return Object.assign(new Error(message), { code, method, recoverable, operationPending });
+  }
+  function publishAvailability(state, method, reason) {
+    if (availability.state === state && availability.method === method && availability.reason === reason) return;
+    availability = { version: 1, revision: availability.revision + 1, state, method, reason };
+    for (const listener of availabilityListeners) {
+      try { listener({ ...availability }); } catch { /* Observers cannot interrupt native serialization. */ }
+    }
+  }
+  function waitingError(method) {
+    return transportError('A previous Premiere operation has not finished. Native requests are paused until it returns; the timeout did not cancel that operation.', 'BC_NATIVE_WAITING', method, true, true);
+  }
   function drain() {
     if (active || disposed || unresolved || !waiting.length) return;
     const job = waiting.shift(); active = job;
     Promise.resolve().then(job.run).then(job.resolve, job.reject).finally(() => {
       clearTimeout(job.timer);
       if (unresolved === job) unresolved = null;
-      active = null; drain();
+      active = null;
+      if (!disposed) publishAvailability('ready', null, 'idle');
+      drain();
     });
   }
   function serial(method, run) {
-    if (disposed) return Promise.reject(new Error('The Better Captions plugin is closed.'));
-    if (unresolved) return Promise.reject(new Error('A previous Premiere read has not finished. Native requests are paused until it returns; the timeout did not cancel that operation.'));
-    if (waiting.length >= 8) return Promise.reject(new Error('Better Captions is busy. Wait for the current operation before requesting more native work.'));
+    if (disposed) return Promise.reject(transportError('The Better Captions plugin is closed.', 'BC_NATIVE_CLOSED', method, false, false));
+    if (unresolved) return Promise.reject(waitingError(method));
+    if (waiting.length >= 8) return Promise.reject(transportError('Better Captions is busy. Wait for the current operation before requesting more native work.', 'BC_NATIVE_BUSY', method, true, false));
     const timeout = READ_METHODS.has(method) ? readTimeout : method === 'transcribeSequence' ? 60 * 60 * 1000 : ['finishCaption','applyCaptionClips','applyConsolidatedCaption'].includes(method) ? 30 * 60 * 1000 : 60000;
     return new Promise((resolve, reject) => {
-      const job = { run, resolve, reject, timer: null, deadline: Date.now() + timeout };
+      const job = { method, run, resolve, reject, timer: null, deadline: Date.now() + timeout };
       job.timer = setTimeout(() => {
         if (active === job) {
           unresolved = job;
-          reject(new Error('Premiere did not finish ' + method + ' within its time limit. Native requests are paused until it returns. This timeout did not cancel Premiere’s operation.'));
-          for (const queued of waiting.splice(0)) { clearTimeout(queued.timer); queued.reject(new Error('Native requests paused while a previous Premiere operation is unresolved.')); }
+          publishAvailability('waiting', method, 'native-timeout');
+          reject(transportError('Premiere did not finish ' + method + ' within its time limit. Native requests are paused until it returns. This timeout did not cancel Premiere’s operation.', 'BC_NATIVE_PENDING', method, READ_METHODS.has(method), true));
+          for (const queued of waiting.splice(0)) { clearTimeout(queued.timer); queued.reject(waitingError(queued.method)); }
         } else {
           const index = waiting.indexOf(job); if (index >= 0) waiting.splice(index, 1);
-          reject(new Error('The caption read expired while waiting for the current native operation. No new native call was started.'));
+          reject(transportError('The caption read expired while waiting for the current native operation. No new native call was started.', 'BC_NATIVE_QUEUE_EXPIRED', method, true, false));
         }
       }, timeout);
       waiting.push(job); drain();
@@ -71,7 +89,7 @@ function createHostAPI(options = {}) {
     return ensureFolder(parent.replace(/\/$/, '') + '/Better Captions/' + context.id);
   }
   async function requireService(root, action) {
-    const unavailable = () => new Error('The Better Captions background renderer is unavailable or out of date. Save your work, restart Premiere, then reopen Better Captions to start it.');
+    const unavailable = () => transportError('The Better Captions background renderer is unavailable or out of date. Save your work, restart Premiere, then reopen Better Captions to start it.', 'BC_RENDERER_UNAVAILABLE', active?.method ?? action, !active?.mutationStarted, false);
     // Startup checks read only the private heartbeat. Leave time for the serial
     // deadline to reject a missing renderer normally, before any request exists.
     const reserve = Math.min(1000, Math.max(0, readTimeout / 2));
@@ -105,6 +123,9 @@ function createHostAPI(options = {}) {
     const requests = await ensureFolder(root.nativePath + '/requests'), responses = await ensureFolder(root.nativePath + '/responses');
     const id = randomId(), name = id + '.json';
     const createdAt = Date.now();
+    // A later service outage in this multi-step job cannot prove its earlier
+    // submitted writes did nothing. Never label that partial job safe to replay.
+    if (!SERVICE_READS.has(action) && active) active.mutationStarted = true;
     await writeJSON(requests, name, { version: 1, id, createdAt, ...(SERVICE_READS.has(action) ? { expiresAt: createdAt + Math.min(10000, readTimeout) } : {}), sequenceId: context.id, projectPath: context.projectPath, action, args });
     let input = null, output = null;
     try { input = await requests.getEntry(name); } catch { /* The renderer may already have claimed it. */ }
@@ -242,6 +263,7 @@ function createHostAPI(options = {}) {
       // Call the internal backend directly while this native lane is occupied.
       // Re-entering the public serialized API here would deadlock the edit.
       const patchKeyValues=patch=>backend('patchCaptionKeyValues',[link,patch],id);
+      if (active) active.mutationStarted = true;
       return require('./text-area.js').editArea(ppro,project,sequence,descriptor,request,revalidate,{patchKeyValues});
     },
     async getColorScheme() { return { theme: 'darkest', colors: {} }; },
@@ -257,10 +279,21 @@ function createHostAPI(options = {}) {
       return serial(method, () => nativeAPI[method](...args));
     };
   }
+  // These observers inspect only this instance's lane; they never issue native
+  // calls or replay a timed-out operation. Ready means its real promise settled.
+  api.getTransportAvailability = () => ({ ...availability });
+  api.onTransportAvailability = listener => {
+    if (typeof listener !== 'function') throw new TypeError('A transport availability listener is required.');
+    availabilityListeners.add(listener);
+    try { listener({ ...availability }); } catch {}
+    return () => availabilityListeners.delete(listener);
+  };
   api.dispose = () => {
     disposed = true;
-    for (const queued of waiting.splice(0)) { clearTimeout(queued.timer); queued.reject(new Error('The Better Captions plugin was closed.')); }
-    if (active) { clearTimeout(active.timer); active.reject(new Error('The Better Captions plugin closed; its native operation was not cancelled.')); }
+    publishAvailability('closed', active?.method ?? null, 'closed');
+    availabilityListeners.clear();
+    for (const queued of waiting.splice(0)) { clearTimeout(queued.timer); queued.reject(transportError('The Better Captions plugin was closed.', 'BC_NATIVE_CLOSED', queued.method, false, false)); }
+    if (active) { clearTimeout(active.timer); active.reject(transportError('The Better Captions plugin closed; its native operation was not cancelled.', 'BC_NATIVE_CLOSED', active.method, false, true)); }
   };
   return api;
 }

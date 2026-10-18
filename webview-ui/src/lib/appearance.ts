@@ -5,7 +5,7 @@ export type ResolvedAppearance = Required<WordAppearance>;
 /** Missing per-state effects inherit the old global values when loading earlier sessions. */
 export function resolveAppearance(style: StyleConfig, key: WordStateKey): ResolvedAppearance {
   const base: ResolvedAppearance = {
-    fontFamily: style.fontFamily, fontWeight: style.fontWeight, fontSize: style.fontSize,
+    fontFamily: style.fontFamily, fontWeight: style.fontWeight, fontWeightOffset: null, fontSize: style.fontSize,
     sizeScale: 1, color: style.textColor, opacity: 1, italic: false, letterSpacing: 0,
     textTransform: style.textTransform, bubble: false, bubbleColor: '#000000',
     bubbleOpacity: 1, padding: 8, radius: 10,
@@ -17,6 +17,9 @@ export function resolveAppearance(style: StyleConfig, key: WordStateKey): Resolv
   };
   const saved = style[key];
   return { ...base, ...saved, fontFamily: saved?.fontFamily || style.fontFamily,
+    fontWeight: saved?.fontWeightOffset === 0 || saved?.fontWeightOffset === 100
+      ? Math.min(1000, Math.max(100, style.fontWeight + saved.fontWeightOffset))
+      : saved?.fontWeight ?? style.fontWeight,
     fontSize: saved?.fontSize ?? style.fontSize * (saved?.sizeScale ?? 1) };
 }
 

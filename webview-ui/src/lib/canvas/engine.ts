@@ -1,10 +1,10 @@
 import {resolveAppearance,effectPadding,type ResolvedAppearance} from '../appearance.ts';
+import {transformCaptionText} from '../typography.ts';
 import type {CaptionItem,CaptionWord,StyleConfig,AnimationConfig,WordAppearance} from '../types';
 
 export function wordState(word:CaptionWord,time:number):'upcoming'|'active'|'spoken' {
   return time>=word.endTime?'spoken':time>=word.startTime?'active':'upcoming';
 }
-const transformText=(text:string,transform:string)=>transform==='uppercase'?text.toUpperCase():transform==='lowercase'?text.toLowerCase():text;
 const clamp=(n:number,a:number,b:number)=>Math.max(a,Math.min(b,n));
 function easeOutBounce(t:number){
   const n=7.5625,d=2.75;
@@ -24,7 +24,8 @@ export function captionAtRenderTime(caption:CaptionItem|null,time:number):Captio
   const segment=caption.renderSegments.find(group=>time>=group.startTime&&time<group.endTime);
   return segment?{...caption,...segment}:null;
 }
-interface MeasuredWord { word:CaptionWord; text:string; width:number; continuation:boolean; gapBefore:number; }
+type WordState = 'upcoming'|'active'|'spoken';
+interface MeasuredWord { word:CaptionWord; text:string; precedingText:string; width:number; outerWidth:number; extents:Record<WordState,number>; continuation:boolean; gapBefore:number; }
 export class CaptionRenderer {
   private ctx:CanvasRenderingContext2D;
   private width:number;
@@ -44,6 +45,7 @@ export class CaptionRenderer {
   renderFrame(caption:CaptionItem|null,time:number,style:StyleConfig,animation:AnimationConfig,area?:RenderArea):RenderLayout|undefined{
     this.clear();caption=captionAtRenderTime(caption,time);if(!caption||this.width<=0||this.height<=0)return;
     const c=this.ctx,all=['upcoming','active','spoken'] as const;
+    const naturalSpacing=typeof style.wordSpacing==='number'&&Number.isFinite(style.wordSpacing);
     const maxSize=Math.max(...all.map(state=>appearance(style,state).fontSize));
     const bounceLift=animation.preset==='bounce'?appearance(style,'active').fontSize*.25:0;
     let rowHeight=maxSize*style.lineHeight;
@@ -51,41 +53,62 @@ export class CaptionRenderer {
     const maxWidth=Math.max(1,area?.width??this.width*style.maxWidth);
     const backgroundPad=style.backgroundEnabled?style.backgroundPadding:0;
     const contentWidth=Math.max(1,maxWidth-2*backgroundPad);
-    const measure=(word:CaptionWord,text:string,continuation=false):MeasuredWord=>{
-      let width=0;
-      // Reserve each word's largest possible appearance, including its bubble.
-      // Changing the active word must never reflow or shift surrounding words.
+    const measure=(word:CaptionWord,text:string,continuation=false,precedingText=''):MeasuredWord=>{
+      let glyphWidth=0,outerWidth=0;
+      const extents={upcoming:0,active:0,spoken:0};
+      // Glyph cells stay fixed across all three appearances. In new layouts,
+      // bubble/effect padding uses the shared word gap instead of being added
+      // twice to every word, which made unhighlighted words look far apart.
       for(const state of all){
         const a=appearance(style,state),pad=(a.bubble?a.padding:0)+effectPadding(a);
-        c.font=this.font(style,a);const transformed=transformText(text,a.textTransform),metrics=c.measureText(transformed);
-        width=Math.max(width,this.measureText(transformed,a)+2*pad);
+        c.font=this.font(style,a);const transformed=transformCaptionText(text,a.textTransform,precedingText),metrics=c.measureText(transformed);
+        const textWidth=this.measureText(transformed,a);
+        glyphWidth=Math.max(glyphWidth,textWidth);outerWidth=Math.max(outerWidth,textWidth+2*pad);
+        extents[state]=textWidth/2+pad;
         const halfHeight=Math.max(a.fontSize*.6,metrics.actualBoundingBoxAscent||0,metrics.actualBoundingBoxDescent||0);
         rowHeight=Math.max(rowHeight,2*(halfHeight+pad));
       }
-      return {word,text,width,continuation,gapBefore:0};
+      return {word,text,precedingText,width:naturalSpacing?glyphWidth:outerWidth,outerWidth,extents,continuation,gapBefore:0};
     };
     const measured:MeasuredWord[]=[];
     for(const word of caption.words){
       const text=word.text,whole=measure(word,text);
-      if(!area||whole.width<=contentWidth){measured.push(whole);continue;}
+      if(!area||whole.outerWidth<=contentWidth){measured.push(whole);continue;}
       // Break long words at grapheme boundaries, keeping one spoken-word state
       // across the pieces. A narrow text area must never reduce the font size.
       const graphemes=typeof Intl.Segmenter==='function'?Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(text),part=>part.segment):Array.from(text);
-      let chunk='',continuation=false;
+      let chunk='',precedingText='',continuation=false;
       for(const grapheme of graphemes){
-        if(chunk&&measure(word,chunk+grapheme).width>contentWidth){measured.push(measure(word,chunk,continuation));chunk='';continuation=true;}
+        if(chunk&&measure(word,chunk+grapheme,continuation,precedingText).outerWidth>contentWidth){measured.push(measure(word,chunk,continuation,precedingText));precedingText+=chunk;chunk='';continuation=true;}
         chunk+=grapheme;
       }
-      if(chunk)measured.push(measure(word,chunk,continuation));
+      if(chunk)measured.push(measure(word,chunk,continuation,precedingText));
     }
     // Reserve motion space for the entire caption, independent of which word
     // is active, so the bounce cannot move adjacent rows or clip at frame edges.
     rowHeight+=bounceLift*2;
     c.font=this.font(style,appearance(style,'upcoming'));
-    const space=Math.max(c.measureText(' ').width,3);
-    const rows:typeof measured[]=[];let row:typeof measured=[],rw=0;
-    for(const m of measured){const gap=m.continuation?0:space;if(row.length&&rw+gap+m.width>contentWidth){rows.push(row);row=[];rw=0;}m.gapBefore=row.length?gap:0;rw+=m.gapBefore;row.push(m);rw+=m.width;}if(row.length)rows.push(row);
-    const rowWidths=rows.map(r=>r.reduce((n,w)=>n+w.width+w.gapBefore,0));
+    const measuredSpace=c.measureText(' ').width;
+    const space=naturalSpacing?Math.max(measuredSpace,0)*clamp(style.wordSpacing!,0,300)/100:Math.max(measuredSpace,3);
+    const overhang=(word:MeasuredWord)=>naturalSpacing?Math.max(0,word.outerWidth-word.width)/2:0;
+    const gapBetween=(left:MeasuredWord,right:MeasuredWord)=>{
+      if(right.continuation)return 0;
+      if(!naturalSpacing)return space;
+      // Only one timed word can be current at once. Reserve all states that
+      // adjacent words can actually occupy, not two simultaneous current bubbles.
+      const pairs:[WordState,WordState][]=[['upcoming','upcoming'],['active','upcoming'],['spoken','upcoming'],['spoken','active'],['spoken','spoken']];
+      const clearance=Math.max(...pairs.map(([a,b])=>left.extents[a]+right.extents[b]-(left.width+right.width)/2));
+      return Math.max(space,clearance,0);
+    };
+    const rows:typeof measured[]=[];let row:typeof measured=[],rw=0,leftPad=0;
+    for(const m of measured){
+      let gap=row.length?gapBetween(row[row.length-1],m):0;
+      if(row.length&&leftPad+rw+gap+m.width+overhang(m)>contentWidth){rows.push(row);row=[];rw=0;gap=0;}
+      if(!row.length)leftPad=overhang(m);
+      m.gapBefore=gap;rw+=gap+m.width;row.push(m);
+    }
+    if(row.length)rows.push(row);
+    const rowWidths=rows.map(r=>overhang(r[0])+r.reduce((n,w)=>n+w.width+w.gapBefore,0)+overhang(r[r.length-1]));
     const widest=Math.max(1,...rowWidths),height=rows.length*rowHeight;
     const layoutWidth=widest+2*backgroundPad,layoutHeight=height+2*backgroundPad;
     const layout:RenderLayout={width:layoutWidth,height:layoutHeight,rowHeight,rows:rows.map(row=>row.map(part=>({...part.word,text:part.text})))};
@@ -107,11 +130,12 @@ export class CaptionRenderer {
     rows.forEach((r,ri)=>{
       const alignmentWidth=area?contentWidth:widest;
       let x=style.textAlign==='left'?-alignmentWidth/2:style.textAlign==='right'?alignmentWidth/2-rowWidths[ri]:-rowWidths[ri]/2;
+      x+=overhang(r[0]);
       const y=-height/2+(ri+.5)*rowHeight;
       for(const wm of r){
         x+=wm.gapBefore;
         const state=wordState(wm.word,time),a=appearance(style,state);c.save();c.font=this.font(style,a);
-        const visibleText=transformText(wm.text,a.textTransform),actualWidth=this.measureText(visibleText,a),tx=x+(wm.width-actualWidth)/2;
+        const visibleText=transformCaptionText(wm.text,a.textTransform,wm.precedingText),actualWidth=this.measureText(visibleText,a),tx=x+(wm.width-actualWidth)/2;
         c.globalAlpha=clamp(alpha,0,1)*clamp(a.opacity,0,1);
         const started=time>=wm.word.startTime;
         if((animation.preset==='typewriter'||animation.preset==='pop'||animation.preset==='bounce')&&!started){c.restore();x+=wm.width;continue;}

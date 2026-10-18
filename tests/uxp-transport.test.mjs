@@ -29,7 +29,11 @@ function harness(t, nativeOverrides = {}) {
   let setup, proxy, stops = 0, activated = 0, closed = 0, theme = 0;
   const status = { textContent: '', style: {} };
   const state = { sequenceId: 'native-sequence', captions: [], style: { fontSize: 64 } };
+  let nativeAvailability={version:1,revision:0,state:'ready',method:null,reason:'idle'};
+  const nativeObservers=new Set();
   const native = {
+    getTransportAvailability() { return {...nativeAvailability}; },
+    onTransportAvailability(listener) { nativeObservers.add(listener);listener({...nativeAvailability});return ()=>nativeObservers.delete(listener); },
     async getActiveSequenceInfo() { calls.push(['getActiveSequenceInfo']); return { id: 'native-sequence', name: 'Native Premiere sequence' }; },
     async fetchTranscriptJSON(id) { calls.push(['fetchTranscriptJSON', id]); return '{"segments":[]}'; },
     async transcribeSequence(id) { calls.push(['transcribeSequence', id]); return '{"segments":[{"words":[]}]}'; },
@@ -85,6 +89,8 @@ function harness(t, nativeOverrides = {}) {
   t.after(async () => { stop(); await setup.plugin.destroy(); for (const timer of timers.keys()) clearTimeout(timer); });
   return { api, frame, status, setup, state, calls, replies, logs, hostWindow, uiWindow, sequenceEvents,
     handler, proxy: () => proxy, stops: () => stops, counters: () => ({ activated, closed, theme }), stop,
+    availability(status) { nativeAvailability={...status};for(const listener of nativeObservers)listener({...status}); },
+    availabilityObservers:()=>nativeObservers.size,
     fireTimeout(ms) { const found=[...timers].find(([,value])=>value.ms===ms);assert.ok(found,'expected timeout '+ms);cancel(found[0]);found[1].callback(); },
     runBootstrap() { vm.runInNewContext(source('webview-ui/public/bootstrap.js'), { window: uiWindow, Date }); },
   };
@@ -152,6 +158,11 @@ test('host method allowlist rejects unrelated native functions and ignores other
   await tick();
   assert.match(app.replies.find(reply => reply.id === 'ui-denied').error.message, /Unsupported Premiere caption method/);
   assert.equal(app.replies.some(reply => reply.id === 'ui-other-source'), false);
+  for(const method of ['getTransportAvailability','onTransportAvailability']){
+    const id='ui-local-only-'+method;
+    app.hostWindow.emit('message',{source:app.frame,data:{channel:'better-captions',id,method,args:[]}});await tick();
+    assert.match(app.replies.find(reply=>reply.id===id)?.error?.message,/Unsupported Premiere caption method/,'availability helpers are local observers, never RPC methods');
+  }
 });
 
 test('sequence and theme events use documented window messaging', async t => {
@@ -189,6 +200,7 @@ test('hiding the panel preserves hooks; plugin destruction and UI unmount clean 
   await app.setup.plugin.destroy();
   assert.equal(app.stops(), 1);
   assert.equal(app.hostWindow.count('message'), 0);
+  assert.equal(app.availabilityObservers(),0,'plugin destruction removes its native availability subscription');
   // Avoid calling the plugin destroy hook a second time in the fixture cleanup.
   app.setup.plugin.destroy = async () => {};
 });
@@ -204,8 +216,72 @@ test('a lost frontend read response trips a circuit instead of issuing overlappi
   const app=harness(t,{readCaptionGeometry:()=>gate});await tick();
   const read=app.api.readCaptionGeometry([],'native-sequence');await tick();app.fireTimeout(15000);
   await assert.rejects(read,/timeout did not cancel/);const calls=app.calls.length;
-  await assert.rejects(app.api.getActiveSequenceInfo(),/previous Premiere read has not returned/);assert.equal(app.calls.length,calls);
+  await assert.rejects(app.api.getActiveSequenceInfo(),error=>error.code==='BC_NATIVE_WAITING'&&error.recoverable===true&&error.operationPending===true);assert.equal(app.calls.length,calls);
   finish({ok:true,cues:[]});await tick();assert.equal((await app.api.getActiveSequenceInfo()).id,'native-sequence');
+});
+test('native timeout availability reaches the editor and its real completion wakes subscribers without retrying work',async t=>{
+  const app=harness(t);await tick();const statuses=[];
+  const unsubscribe=app.api.onTransportAvailability(status=>statuses.push(status));
+  assert.equal(app.api.getTransportAvailability().state,'ready');assert.equal(app.availabilityObservers(),1);
+  const calls=app.calls.length;
+  app.availability({version:1,revision:1,state:'waiting',method:'readCaptionSelection',reason:'native-timeout'});await tick();
+  assert.equal(statuses.at(-1).state,'waiting');assert.equal(statuses.at(-1).method,'readCaptionSelection');
+  await assert.rejects(app.api.saveSession({}),{code:'BC_NATIVE_WAITING'});assert.equal(app.calls.length,calls);
+  app.availability({version:1,revision:2,state:'ready',method:null,reason:'idle'});await tick();
+  assert.deepEqual(statuses.map(status=>status.state),['ready','waiting','ready']);assert.equal(app.calls.length,calls,'ready is a notification, never a replay');
+  assert.equal((await app.api.getActiveSequenceInfo()).id,'native-sequence');
+  unsubscribe();const count=statuses.length;
+  app.availability({version:1,revision:3,state:'waiting',method:'readCaptionSelection',reason:'native-timeout'});await tick();assert.equal(statuses.length,count);
+});
+test('all late read IDs must return before a native-ready event can reopen the webview circuit',async t=>{
+  let finishGeometry,finishSelection;const geometry=new Promise(resolve=>{finishGeometry=resolve;}),selection=new Promise(resolve=>{finishSelection=resolve;});
+  const app=harness(t,{readCaptionGeometry:()=>geometry,readCaptionSelection:()=>selection});await tick();
+  const statuses=[];app.api.onTransportAvailability(status=>statuses.push(status));
+  const a=app.api.readCaptionGeometry([],'native-sequence'),b=app.api.readCaptionSelection([],'native-sequence');await tick();
+  app.fireTimeout(15000);app.fireTimeout(15000);await assert.rejects(a,{code:'BC_NATIVE_PENDING'});await assert.rejects(b,{code:'BC_NATIVE_PENDING'});
+  app.availability({version:1,revision:1,state:'waiting',method:'readCaptionSelection',reason:'native-timeout'});await tick();
+  finishGeometry({ok:true,cues:[]});await tick();
+  app.availability({version:1,revision:2,state:'ready',method:null,reason:'idle'});await tick();
+  assert.equal(app.api.getTransportAvailability().state,'waiting');assert.equal(app.api.getTransportAvailability().reason,'panel-timeout');
+  app.frame.postMessage({channel:'better-captions',id:'ui-unrelated',result:{ok:true}});await tick();
+  await assert.rejects(app.api.getActiveSequenceInfo(),{code:'BC_NATIVE_WAITING'});
+  finishSelection({ok:true,captionId:null});await tick();
+  assert.equal(app.api.getTransportAvailability().state,'ready');assert.equal(statuses.filter(status=>status.state==='ready').length,2);
+  assert.equal((await app.api.getActiveSequenceInfo()).id,'native-sequence');
+});
+test('an ambiguous mutation timeout cannot be retried or released by a generic availability event',async t=>{
+  let finish;const gate=new Promise(resolve=>{finish=resolve;});let applies=0;
+  const app=harness(t,{applyCaptionClips:()=>{applies++;return gate;}});await tick();
+  const write=app.api.applyCaptionClips([],0,'native-sequence');await tick();app.fireTimeout(30*60*1000);
+  await assert.rejects(write,error=>error.code==='BC_NATIVE_PENDING'&&error.method==='applyCaptionClips'&&error.recoverable===false&&error.operationPending===true);
+  app.availability({version:1,revision:1,state:'ready',method:null,reason:'idle'});await tick();
+  await assert.rejects(app.api.applyCaptionClips([],0,'native-sequence'),{code:'BC_NATIVE_WAITING'});assert.equal(applies,1);
+  finish({ok:true,cues:[]});await tick();assert.equal(app.api.getTransportAvailability().state,'ready');assert.equal(applies,1);
+});
+test('only validated monotonic availability notifications change the lane and close remains terminal',async t=>{
+  const app=harness(t);await tick();const statuses=[];
+  app.api.onTransportAvailability(status=>{statuses.push({...status});status.state='closed';});
+  const message=status=>app.frame.postMessage({channel:'better-captions',type:'better-captions-native-availability',...status});
+  message({version:1,revision:10,state:'waiting',method:'readCaptionSelection',reason:'native-timeout'});
+  for(const invalid of [
+    {version:1,revision:9,state:'ready',method:null,reason:'idle'},
+    {version:1,revision:10,state:'ready',method:null,reason:'idle'},
+    {version:2,revision:11,state:'ready',method:null,reason:'idle'},
+    {version:1,revision:11,state:'ready',method:'readCaptionSelection',reason:'idle'},
+    {version:1,revision:Infinity,state:'ready',method:null,reason:'idle'},
+    {version:1,revision:11,state:'waiting',method:'exec',reason:'native-timeout'},
+  ])message(invalid);
+  assert.equal(app.api.getTransportAvailability().state,'waiting');assert.equal(statuses.length,2);
+  message({version:1,revision:11,state:'ready',method:null,reason:'idle'});assert.equal(app.api.getTransportAvailability().state,'ready');
+  message({version:1,revision:12,state:'closed',method:null,reason:'closed'});message({version:1,revision:13,state:'ready',method:null,reason:'idle'});
+  assert.equal(app.api.getTransportAvailability().state,'closed');await assert.rejects(app.api.getActiveSequenceInfo(),{code:'BC_NATIVE_CLOSED'});
+});
+test('structured transport errors preserve safe retry evidence while mutation timeouts stay nonrecoverable',async t=>{
+  const failure=(method,recoverable)=>Object.assign(new Error('The native operation is still running.'),{code:'BC_NATIVE_PENDING',method,recoverable,operationPending:true,privateDetails:'never serialize'});
+  const app=harness(t,{readCaptionSelection:async()=>{throw failure('readCaptionSelection',true);},applyCaptionClips:async()=>{throw failure('applyCaptionClips',true);}});await tick();
+  await assert.rejects(app.api.readCaptionSelection([],'native-sequence'),error=>error.code==='BC_NATIVE_PENDING'&&error.recoverable===true&&error.operationPending===true&&error.privateDetails===undefined);
+  await assert.rejects(app.api.applyCaptionClips([],0,'native-sequence'),error=>error.code==='BC_NATIVE_PENDING'&&error.recoverable===false&&error.operationPending===true);
+  assert.equal(app.api.getTransportAvailability().state,'ready','an error never fabricates native completion or a new replay');
 });
 
 test('fixed area agent requests round trip as data while the internal CEP patch stays private', async t => {

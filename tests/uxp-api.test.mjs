@@ -11,6 +11,9 @@ function harness(t, options = {}) {
   let active='one',projectPath='/projects/edit.prproj',counter=0;
   let projectReads=0,serviceReads=0,clockOffset=0;
   const writes=[],requests=[];
+  const timers=new Map();
+  const schedule=(callback,ms)=>{const timer=setTimeout(()=>{timers.delete(timer);callback();},ms);timers.set(timer,{callback,ms});return timer;};
+  const cancel=timer=>{timers.delete(timer);clearTimeout(timer);};
   const sequences=['one','two'].map(id=>({guid:{toString:()=>id},name:id,getSettings:async()=>({getVideoFrameRect:async()=>({width:720,height:1280})}),getTimebase:async()=>10584000000,getEndTime:async()=>({seconds:10}),getPlayerPosition:async()=>({seconds:id==='one'?2.5:7}),getVideoTrackCount:async()=>0}));
   const project={get path(){return projectPath;},getSequences:async()=>sequences,getActiveSequence:async()=>sequences.find(s=>s.name===active)};
   const folders=new Map();
@@ -38,14 +41,14 @@ function harness(t, options = {}) {
       }else parent.entries.set(name,{data:value,delete:async()=>{}});
     },
   };
-  function respond(request= requests.at(-1),result={ok:true,cues:[]}){
+  function respond(request= requests.at(-1),result={ok:true,cues:[]},extra={}){
     const name=request.id+'.json',responses=folder('/private/service/responses');
     folder('/private/service/requests').entries.delete(name);
-    responses.entries.set(name,{data:{version:1,id:request.id,sequenceId:request.sequenceId,projectPath:request.projectPath,result},delete:async()=>responses.entries.delete(name)});
+    responses.entries.set(name,{data:{version:1,id:request.id,sequenceId:request.sequenceId,projectPath:request.projectPath,result,...extra},delete:async()=>responses.entries.delete(name)});
   }
   const native={fetchTranscript:async sequence=>sequence.name,transcribe:async sequence=>options.transcribe?options.transcribe(sequence):sequence.name};
   const module={exports:{}};
-  const context={module,exports:module.exports,setTimeout,clearTimeout,Date:{now:()=>Date.now()+clockOffset},Map,Set,require:name=>{
+  const context={module,exports:module.exports,setTimeout:schedule,clearTimeout:cancel,Date:{now:()=>Date.now()+clockOffset},Map,Set,require:name=>{
     if(name==='premierepro')return {Project:{getActiveProject:async()=>{projectReads++;return project;}},Constants:{TrackItemType:{CLIP:1}}};
     if(name==='uxp')return {storage:{localFileSystem:{getDataFolder:async()=>folder('/plugin-data')}}};
     if(name==='./style-presets.js')return require('../uxp/style-presets.js');
@@ -58,7 +61,7 @@ function harness(t, options = {}) {
   }};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/api.js',import.meta.url),'utf8'),context);
   const api=module.exports.createHostAPI({readTimeoutMs:options.readTimeoutMs??12000,serviceStartupGraceMs:options.serviceStartupGraceMs??0,serviceStartupPollMs:options.serviceStartupPollMs??5});t.after(()=>api.dispose());
-  return {api,writes,requests,respond,setService,healthyService,advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},get projectReads(){return projectReads;},get serviceReads(){return serviceReads;}};
+  return {api,writes,requests,respond,setService,healthyService,fireTimeout(ms){const entry=[...timers].find(([,value])=>value.ms===ms);assert.ok(entry,'Expected timer '+ms);cancel(entry[0]);entry[1].callback();},advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},get projectReads(){return projectReads;},get serviceReads(){return serviceReads;}};
 }
 
 test('style preset storage works without a project or renderer and serializes stale writers', async t => {
@@ -174,10 +177,56 @@ test('a native read timeout blocks later calls until the original claimed reques
   const pending=h.api.readCaptionGeometry([{id:'caption'}],'one');
   await assert.rejects(pending,/Native requests are paused/);
   assert.equal(h.requests.length,1);const reads=h.projectReads;
-  await assert.rejects(h.api.getActiveSequenceInfo(),/previous Premiere read has not finished/);
+  await assert.rejects(h.api.getActiveSequenceInfo(),{code:'BC_NATIVE_WAITING'});
   assert.equal(h.projectReads,reads,'a timeout cannot release the native lane and issue another call');
   h.respond();await delay(180);
   assert.equal((await h.api.getActiveSequenceInfo()).id,'one','the lane may resume only after the real response arrives');
+});
+test('a late native selection reply wakes observers only after real completion and never repeats its request',async t=>{
+  const h=harness(t,{autoRespond:false,readTimeoutMs:30000});await h.api.getActiveSequenceInfo();
+  const statuses=[];let resume;
+  h.api.onTransportAvailability(status=>{statuses.push(status);if(status.state==='ready'&&statuses.some(item=>item.state==='waiting'))resume=h.api.getActiveSequenceInfo();});
+  h.api.onTransportAvailability(()=>{throw new Error('An observer cannot interrupt the native lane');});
+  assert.equal(h.api.getTransportAvailability().state,'ready');
+  const read=h.api.readCaptionSelection([{id:'caption'}],'one');await tick();h.fireTimeout(30000);
+  await assert.rejects(read,error=>error.code==='BC_NATIVE_PENDING'&&error.method==='readCaptionSelection'&&error.recoverable===true&&error.operationPending===true);
+  assert.equal(statuses.at(-1).state,'waiting');assert.equal(statuses.at(-1).reason,'native-timeout');assert.equal(statuses.at(-1).method,'readCaptionSelection');
+  const nativeReads=h.projectReads;
+  await assert.rejects(h.api.getActiveSequenceInfo(),error=>error.code==='BC_NATIVE_WAITING'&&error.recoverable===true&&error.operationPending===true);
+  assert.equal(h.projectReads,nativeReads);assert.equal(resume,undefined);assert.equal(h.requests.length,1);
+  h.respond();h.fireTimeout(150);await tick();await tick();
+  assert.equal(statuses.at(-1).state,'ready');assert.ok(statuses.at(-1).revision>statuses[1].revision);
+  assert.equal((await resume).id,'one','a recovery callback can use the lane only after its real promise has settled');
+  assert.deepEqual(h.requests.map(request=>request.action),['readCaptionSelection']);
+  assert.equal(h.api.getTransportAvailability().state,'ready');
+});
+test('a late native failure also releases the availability circuit without replaying the expired read',async t=>{
+  const h=harness(t,{autoRespond:false,readTimeoutMs:30000});await h.api.getActiveSequenceInfo();
+  const statuses=[];h.api.onTransportAvailability(status=>statuses.push(status));
+  const read=h.api.readCaptionGeometry([],'one');await tick();h.fireTimeout(30000);await assert.rejects(read,{code:'BC_NATIVE_PENDING'});
+  h.respond(undefined,undefined,{error:'The original native read failed.'});h.fireTimeout(150);await tick();await tick();
+  assert.deepEqual(statuses.map(status=>status.state),['ready','waiting','ready']);assert.equal(h.requests.length,1);
+  assert.equal((await h.api.getActiveSequenceInfo()).id,'one');
+});
+test('timed-out mutations stay occupied, report an uncertain result and are never retried on recovery',async t=>{
+  const h=harness(t,{autoRespond:false,readTimeoutMs:30000});await h.api.getActiveSequenceInfo();
+  const statuses=[];h.api.onTransportAvailability(status=>statuses.push(status));
+  const write=h.api.beginCaption('caption','one');await tick();h.fireTimeout(60000);
+  await assert.rejects(write,error=>error.code==='BC_NATIVE_PENDING'&&error.method==='beginCaption'&&error.recoverable===false&&error.operationPending===true);
+  assert.equal(statuses.at(-1).state,'waiting');assert.equal(statuses.at(-1).method,'beginCaption');
+  await assert.rejects(h.api.beginCaption('caption','one'),{code:'BC_NATIVE_WAITING'});assert.equal(h.requests.length,1);
+  h.respond();h.fireTimeout(150);await tick();await tick();assert.equal(statuses.at(-1).state,'ready');
+  assert.deepEqual(h.requests.map(request=>request.action),['beginCaption']);
+});
+test('availability helpers are local snapshots, unsubscribe cleanly and never resurrect a disposed lane',async t=>{
+  const h=harness(t,{autoRespond:false,readTimeoutMs:30000});await h.api.getActiveSequenceInfo();
+  const initialReads=h.projectReads,statuses=[];
+  const unsubscribe=h.api.onTransportAvailability(status=>{statuses.push(status);status.state='closed';});
+  assert.equal(h.api.getTransportAvailability().state,'ready');assert.equal(h.projectReads,initialReads);assert.equal(h.requests.length,0);
+  const read=h.api.readCaptionSelection([],'one');await tick();h.fireTimeout(30000);await assert.rejects(read,{code:'BC_NATIVE_PENDING'});
+  unsubscribe();const count=statuses.length;h.api.dispose();h.respond();h.fireTimeout(150);await tick();await tick();
+  assert.equal(statuses.length,count);assert.equal(h.api.getTransportAvailability().state,'closed');
+  await assert.rejects(h.api.getActiveSequenceInfo(),error=>error.code==='BC_NATIVE_CLOSED'&&error.recoverable===false);
 });
 test('queued reads expire without starting native work while long transcription retains its separate deadline',async t=>{
   let finish;const gate=new Promise(resolve=>{finish=resolve;});
@@ -222,6 +271,17 @@ for(const unavailable of ['missing','stale','unsupported'])test(`an unavailable 
 test('a fresh busy background renderer is available and retains the existing in-flight deadline protections',async t=>{
   const h=harness(t),status=h.healthyService();status.busy=true;h.setService(status);
   assert.deepEqual(Array.from(await h.api.getFonts()),['Arial','Georgia']);assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,'getFonts');
+});
+test('a renderer outage is safe to retry only before any mutation in the serialized job was submitted',async t=>{
+  const first=harness(t,{service:null});await first.api.getActiveSequenceInfo();
+  await assert.rejects(first.api.applyCaptionClips([{id:'bundle'}],0,'one'),error=>error.code==='BC_RENDERER_UNAVAILABLE'&&error.method==='applyCaptionClips'&&error.recoverable===true&&error.operationPending===false);
+  assert.equal(first.requests.length,0);
+  let second;second=harness(t,{serviceResult:request=>{
+    assert.equal(request.action,'prepareCaptionTrack');second.setService(null);
+    return {ok:true,sequenceId:'one',projectPath:'/projects/edit.prproj',destination:{mode:'reuse',trackIndex:2}};
+  }});await second.api.getActiveSequenceInfo();
+  await assert.rejects(second.api.applyCaptionClips([{id:'bundle'}],-1,'one'),error=>error.code==='BC_RENDERER_UNAVAILABLE'&&error.method==='applyCaptionClips'&&error.recoverable===false&&error.operationPending===false);
+  assert.deepEqual(second.requests.map(request=>request.action),['prepareCaptionTrack'],'a partial job must not replay its completed preparation or start final Apply');
 });
 test('startup grace waits only for the private heartbeat and sends one request once the renderer is ready',async t=>{
   const h=harness(t,{service:null,serviceStartupGraceMs:100});

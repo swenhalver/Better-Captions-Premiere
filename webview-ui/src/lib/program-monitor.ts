@@ -91,7 +91,7 @@ export function legacyMotionBaseline(saved: MotionProfile | undefined, live: Mot
       [sample.scaleX, sample.scaleY].every(value => Number.isFinite(value) && value >= .01 && value <= 100) &&
       (index === 0 || sample.time > profile.samples[index - 1].time));
   };
-  const update = () => { throw new Error('Use Update Program Monitor once to establish this older caption’s rendered text-box baseline.'); };
+  const update = () => { throw new Error('This older caption needs a fresh rendered text-box baseline.'); };
   if (!valid(saved) || !valid(live) || typeof live.watchSignature !== 'string' || !live.watchSignature || live.watchSignature.length > 4096) return update();
   // Do not infer a curve from incomplete or differently timed samples.
   if (saved!.samples.length !== live.samples.length || live.samples.some((sample, index) => Math.abs(sample.time - saved!.samples[index].time) > 1e-6)) return update();
@@ -120,17 +120,40 @@ interface WatchOptions {
   autoStart?: boolean;
 }
 const identity = (context: MotionWatchContext) => JSON.stringify([context.sequenceId, context.captionId, context.clipNodeId]);
+const recoverableReadMethods = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation']);
 export function startProgramMonitorWatcher(options: WatchOptions) {
   const now = options.now ?? Date.now;
   let alive = true, visible = true, inFlight = false, generation = 0, selectionPaused = false;
   let retryRevision: string | number | undefined;
   const automatic = options.autoStart !== false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  const uncertainSequences = new Set<string>();
+  function uncertainWrite(problem: unknown) {
+    const error = problem as { code?: string; method?: string; recoverable?: boolean } | null;
+    return error?.code === 'BC_OUTPUT_UNCONFIRMED' ||
+      error?.code === 'BC_NATIVE_PENDING' && !recoverableReadMethods.has(error.method ?? '') || error?.recoverable === false &&
+      (error.code?.startsWith('BC_NATIVE_') || error.code === 'BC_RENDERER_UNAVAILABLE');
+  }
+  function mutationPaused() {
+    const context = options.current();
+    return !!context && uncertainSequences.has(context.sequenceId);
+  }
+  const mutationStatus = () => options.onStatus({ phase: 'error', message: 'Premiere did not confirm a previous caption update. Review that sequence before allowing more automatic text-box updates.' });
+  function recoverRead(problem: unknown) {
+    const error = problem as { code?: string; method?: string; recoverable?: boolean };
+    if (error?.recoverable !== true || !['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE'].includes(error.code ?? '')) return false;
+    if (error.code === 'BC_NATIVE_PENDING' && !recoverableReadMethods.has(error.method ?? '')) return false;
+    if (recoveryTimer === undefined) recoveryTimer = setTimeout(() => { recoveryTimer = undefined; if (alive) reset(); }, 1500);
+    return true;
+  }
   let key = '', baseline: string | null = null, lastSaved: string | null = null, revision = '';
   let candidate: string | null = null, candidateSince = 0, failed: string | null = null, readPaused = false, lastObserved: string | null = null;
   const idle = () => options.onStatus({ phase: 'idle', message: '' });
   function reset() {
+    if (recoveryTimer !== undefined) { clearTimeout(recoveryTimer); recoveryTimer = undefined; }
     generation++; key = ''; baseline = null; lastSaved = null; candidate = null; failed = null; readPaused = false; selectionPaused = false; lastObserved = null; revision = ''; idle();
+    if (mutationPaused()) mutationStatus();
     schedule();
   }
   function stillCurrent(expected: string, expectedGeneration: number) {
@@ -175,16 +198,24 @@ export function startProgramMonitorWatcher(options: WatchOptions) {
       baseline = observed; candidate = null; failed = null;
       options.onStatus({ phase: 'ready', message: 'Selected caption reflow updated. Position and box-size keyframes stay in Premiere.' });
     } catch (error) {
+      // Native availability or selection may disappear during the write. Keep
+      // its uncertain outcome even when its UI context has become stale.
+      if (applying && uncertainWrite(error)) {
+        uncertainSequences.add(context.sequenceId);
+        if (recoveryTimer !== undefined) { clearTimeout(recoveryTimer); recoveryTimer = undefined; }
+      }
       if (!stillCurrent(nextKey, requestGeneration)) return;
       if (applying) failed = observed;
       else readPaused = true;
       candidate = null;
       const detail = error instanceof Error ? error.message : String(error);
-      options.onStatus({ phase: 'error', message: 'Text-box reflow paused: ' + detail + ' Use Update Program Monitor to retry.' });
+      const recovering = recoverRead(error);
+      if (recovering) readPaused = true;
+      options.onStatus({ phase: recovering ? 'waiting' : 'error', message: recovering ? 'Waiting for Premiere… Box wrapping will resume automatically.' : 'Text-box wrapping paused: ' + detail });
     }
   }
   async function tick() {
-    if (!alive || !visible || inFlight || selectionPaused || readPaused) return;
+    if (!alive || !visible || inFlight || selectionPaused || readPaused || mutationPaused()) return;
     const requestGeneration = generation;
     inFlight = true;
     try {
@@ -196,11 +227,12 @@ export function startProgramMonitorWatcher(options: WatchOptions) {
       selectionPaused = true;
       candidate = null;
       const detail = error instanceof Error ? error.message : String(error);
-      options.onStatus({ phase: 'error', message: 'Caption selection paused: ' + detail + ' Use Update Program Monitor to retry.' });
+      const recovering = recoverRead(error);
+      options.onStatus({ phase: recovering ? 'waiting' : 'error', message: recovering ? 'Waiting for Premiere… Box wrapping will resume automatically.' : 'Caption selection unavailable: ' + detail });
     } finally { inFlight = false; schedule(); }
   }
   function schedule() {
-    if (!automatic || !alive || !visible || inFlight || selectionPaused || readPaused || timer !== undefined) return;
+    if (!automatic || !alive || !visible || inFlight || selectionPaused || readPaused || mutationPaused() || timer !== undefined) return;
     timer = setTimeout(() => { timer = undefined; void tick(); }, options.interval ?? 750);
   }
   schedule();
@@ -210,6 +242,7 @@ export function startProgramMonitorWatcher(options: WatchOptions) {
     diagnostics() {
       const short = (value: string | null) => value === null ? null : value.slice(0, 160);
       return { alive, visible, inFlight, timerScheduled: timer !== undefined, readPaused, selectionPaused,
+        mutationPaused: mutationPaused(),
         baseline: short(baseline), candidate: short(candidate), lastObserved: short(lastObserved) };
     },
     notifyRevision(value: string | number) { if (retryRevision !== value) { retryRevision = value; reset(); } },
@@ -220,6 +253,6 @@ export function startProgramMonitorWatcher(options: WatchOptions) {
       if (visible) schedule();
       else if (!selectionPaused && !readPaused) idle();
     },
-    stop() { alive = false; generation++; if (timer !== undefined) clearTimeout(timer); },
+    stop() { alive = false; generation++; if (timer !== undefined) clearTimeout(timer); if (recoveryTimer !== undefined) clearTimeout(recoveryTimer); },
   };
 }
