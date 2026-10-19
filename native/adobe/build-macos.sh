@@ -52,6 +52,9 @@ xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]
 xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
   "$root/native/adobe/render_style_test.cpp" "$root/native/core/caption_core.cpp" -o "$build_dir/render_style_test"
 "$build_dir/render_style_test"
+xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
+  "$root/native/adobe/parameter_sections_test.cpp" -o "$build_dir/parameter_sections_test"
+"$build_dir/parameter_sections_test"
 if test "$probe" = 1 || test "$bounds_ui" = 1; then
   xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
     "$root/native/adobe/custom_ui_test.cpp" -o "$build_dir/custom_ui_test"

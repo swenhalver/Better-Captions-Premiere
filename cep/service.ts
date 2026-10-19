@@ -103,6 +103,12 @@ export function startBackendService(options: ServiceOptions = {}) {
   const lock = path.join(base, 'worker.lock.json'), recoveryLock = path.join(base, 'worker-recovery.lock.json');
   const owner = { version: 1, instanceId, pid: processAPI.pid };
   let busy = false, alive = true, ownsLock = false, currentRequest: string | null = null;
+  let watcher:any=null,wakeTimer:ReturnType<typeof setTimeout>|undefined,wakePending=false;
+  function wake(){
+    if(!alive)return;wakePending=true;if(busy||wakeTimer!==undefined)return;
+    wakeTimer=setTimeout(()=>{wakeTimer=undefined;if(alive)void poll().catch(console.error);},0);
+    (wakeTimer as any)?.unref?.();
+  }
   function lockOwner(file: string) {
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) throw new Error('Invalid caption worker ownership file.');
@@ -155,7 +161,7 @@ export function startBackendService(options: ServiceOptions = {}) {
   }
   async function poll() {
     if (!alive || busy || !acquire()) return;
-    busy = true;
+    busy = true;wakePending=false;
     try {
       const pending = fs.readdirSync(requests).filter((name: string) => /^[a-f0-9]{32}\.json$/.test(name)).sort();
       const started = Date.now(), quota = Math.max(1, Math.min(4, options.maxRequestsPerPoll ?? 4));
@@ -185,14 +191,26 @@ export function startBackendService(options: ServiceOptions = {}) {
           atomic(output, { version: 1, id, sequenceId: request?.sequenceId ?? null, projectPath: request?.projectPath ?? null, error: failure instanceof Error ? failure.message : String(failure),...metadata });
         } finally { currentRequest = null; try { fs.unlinkSync(claimed); } catch {} }
       }
-    } finally { busy = false; if (alive) announce(); else release(); }
+    } finally { busy = false; if (alive) { announce(); if(wakePending)wake(); } else release(); }
   }
   acquire();
   announce();
   const timer = setInterval(() => { void poll().catch(console.error); }, options.intervalMs ?? 250);
+  // Wake for completed atomic request-file renames instead of making native
+  // drags wait up to the 250ms fallback tick. No fast idle polling is added.
+  // The unchanged claim/validation path still serializes and bounds every job.
+  try { if(typeof fs.watch==='function'){
+    watcher=fs.watch(requests,{persistent:false},(_event:unknown,filename:unknown)=>{
+      if(!alive||typeof filename!=='string'||!/^[a-f0-9]{32}\.json$/.test(filename))return;
+      if(fs.existsSync(path.join(requests,filename)))wake();
+    });
+    watcher.on?.('error',()=>{try{watcher?.close();}catch{}watcher=null;});
+  }}catch{watcher=null;}
   const heartbeatTimer = setInterval(() => { if (alive) announce(); }, 3000);
   const stop = () => {
     alive = false; clearInterval(timer); clearInterval(heartbeatTimer);
+    if(wakeTimer!==undefined){clearTimeout(wakeTimer);wakeTimer=undefined;}
+    try{watcher?.close();}catch{}watcher=null;
     if (!busy) release();
   };
   win?.addEventListener('unload', stop, { once: true });

@@ -5,33 +5,45 @@ interface Options {
  current:()=>GeometryContext; read:(snapshot:NativeCaptionSnapshot,id:string)=>Promise<NativeCaptionControls>;
  edit:(snapshot:NativeCaptionSnapshot,request:NativeCaptionControlEdit,id:string)=>Promise<NativeCaptionControls>;
  seek?:(snapshot:NativeCaptionSnapshot,request:NativeCaptionKeyframeSeek,id:string)=>Promise<NativeCaptionControls>;
- state:(value:NativeCaptionControls|null)=>void; error:(message:string)=>void;
+ state:(value:NativeCaptionControls|null)=>void; error:(message:string)=>void; now?:()=>number; interacting?:(active:boolean)=>void;
 }
 /** One host call at a time. Scrubbing keeps only the latest intent, bound to
  * the original clip/document/clock; stale replies never enter a new session. */
 export function createNativeGeometryController(options:Options){
  let alive=true,generation=0,key='',active=false,dragging=false,blocked=false;
+ const now=options.now??Date.now;let receiptAt=-Infinity,lastInteraction=false;
  let activeKind:'read'|'edit'|'seek'|null=null;
  let pendingSeek:{parameter:GeometryParameter;direction:'previous'|'next';context:GeometryContext;generation:number;identity:string;receipt:NativeCaptionControls;resolve:(value:NativeCaptionControls|null)=>void}|null=null;
- let state:NativeCaptionControls|null=null,pending:{parameter:GeometryParameter;operation:'set'|'reset';value?:number|[number,number]}|null=null;
+ let state:NativeCaptionControls|null=null,pending:{parameter:GeometryParameter;operation:'set'|'reset';value?:number|[number,number];axes?:Partial<Record<0|1,number>>}|null=null;
  const enabled=(c:GeometryContext)=>alive&&c.visible&&!c.disabled;
  const current=(c:GeometryContext,g:number)=>alive&&generation===g&&options.current().key===c.key;
- function publish(next:NativeCaptionControls|null){state=next;if(alive)options.state(next);}
+ function publish(next:NativeCaptionControls|null){state=next;receiptAt=next?now():-Infinity;if(alive)options.state(next);}
  function cancelSeek(){const queued=pendingSeek;pendingSeek=null;queued?.resolve(null);}
- function drain(){if(pending){cancelSeek();void flush();}else if(pendingSeek)void flushSeek();}
+ function notifyInteraction(){const next=alive&&(dragging||!!pending||activeKind==='edit'||activeKind==='seek');if(next!==lastInteraction){lastInteraction=next;options.interacting?.(next);}}
+ function drain(){if(pending){cancelSeek();void flush();}else if(pendingSeek)void flushSeek();notifyInteraction();}
  function sync(){const c=options.current();if(c.key!==key){key=c.key;generation++;pending=null;cancelSeek();blocked=false;publish(null);}return c;}
- async function read(){const c=sync(),g=generation;if(!enabled(c)){pending=null;cancelSeek();return;}if(active||dragging||pending||blocked)return;active=true;activeKind='read';
+ async function read(){const c=sync(),g=generation;if(!enabled(c)){pending=null;cancelSeek();if(!c.visible)dragging=false;notifyInteraction();return;}if(active||dragging||pending||blocked)return;active=true;activeKind='read';
   try{const next=await options.read(c.snapshot,c.sequenceId);if(current(c,g)&&enabled(options.current())){if(next.clipNodeId!==c.snapshot.locator.clipNodeId)throw new Error('The native caption clip changed.');publish(next);options.error('');}}
-  catch(e){cancelSeek();if(current(c,g))options.error(e instanceof Error?e.message:String(e));}finally{active=false;activeKind=null;drain();}}
+  catch(e){cancelSeek();if(current(c,g)){pending=null;receiptAt=-Infinity;options.error(e instanceof Error?e.message:String(e));}}finally{active=false;activeKind=null;drain();}}
  async function flush(){const c=sync(),g=generation;if(active||!pending||!enabled(c)||blocked)return;
-  const next=pending;pending=null;if(!state){options.error('Wait for Position & size to finish loading.');return;}
-  const receipt=state;if(!receipt.insideClip){options.error('Move the Premiere playhead inside this caption clip.');return;}
-  active=true;activeKind='edit';
+  const intent=pending;pending=null;if(!state){options.error('Wait for Position & size to finish loading.');notifyInteraction();return;}
+  const receipt=state;if(!receipt.insideClip){options.error('Move the Premiere playhead inside this caption clip.');notifyInteraction();return;}
+  const next={parameter:intent.parameter,operation:intent.operation,...(intent.value===undefined?{}:{value:intent.value})};
+  if(intent.axes){const point=[...(receipt.position.value as [number,number])] as [number,number];for(const axis of [0,1] as const)if(intent.axes[axis]!==undefined)point[axis]=intent.axes[axis]!;next.value=point;}
+  active=true;activeKind='edit';notifyInteraction();
   try{const result=await options.edit(c.snapshot,{...next,revision:receipt.revision,atTicks:receipt.timelineTicks},c.sequenceId);
    if(current(c,g)){if(!result.readbackVerified||result.clipNodeId!==c.snapshot.locator.clipNodeId)throw Object.assign(new Error('Premiere did not confirm this geometry change.'),{code:'BC_OUTPUT_UNCONFIRMED'});publish(result);options.error('');}}
   catch(e){if(current(c,g)){pending=null;blocked=(e as {code?:string})?.code==='BC_OUTPUT_UNCONFIRMED';options.error(blocked?'Premiere could not confirm this change. Check Effect Controls before trying again.':e instanceof Error?e.message:String(e));}}
   finally{active=false;activeKind=null;drain();}}
- function queue(parameter:GeometryParameter,value?:number|[number,number]){const c=sync();if(blocked||!enabled(c))return;cancelSeek();pending={parameter,operation:value===undefined?'reset':'set',...(value===undefined?{}:{value:Array.isArray(value)?[...value] as [number,number]:value})};void flush();}
+ function enqueue(intent:NonNullable<typeof pending>){const c=sync();if(blocked||!enabled(c))return;cancelSeek();
+  // Typed edits after a scrub also need a fresh clock. Pointer gestures take
+  // one fresh read at their start, then stream confirmed/coalesced edits.
+  if(!active&&!dragging&&now()-receiptAt>250)void read();pending=intent;notifyInteraction();void flush();}
+ function queue(parameter:GeometryParameter,value?:number|[number,number]){enqueue({parameter,operation:value===undefined?'reset':'set',...(value===undefined?{}:{value:Array.isArray(value)?[...value] as [number,number]:value})});}
+ function queuePositionAxis(axis:0|1,value:number){sync();if(!Number.isFinite(value))return;
+  if(pending?.parameter==='position'&&Array.isArray(pending.value)){const point=[...pending.value] as [number,number];point[axis]=value;queue('position',point);return;}
+  const axes=pending?.parameter==='position'?{...pending.axes}:{};axes[axis]=value;enqueue({parameter:'position',operation:'set',axes});}
+
  async function flushSeek(){
   if(active||!pendingSeek)return;
   const intent=pendingSeek;pendingSeek=null;
@@ -40,7 +52,7 @@ export function createNativeGeometryController(options:Options){
    if(enabled(c)&&current(intent.context,intent.generation))options.error('The playhead or caption controls changed. Click the keyframe arrow again at the current position.');
    intent.resolve(null);return;
   }
-  active=true;activeKind='seek';
+  active=true;activeKind='seek';notifyInteraction();
   try{const next=await options.seek(c.snapshot,{revision:receipt.revision,parameter:intent.parameter,direction:intent.direction,atTicks:receipt.timelineTicks},c.sequenceId);if(current(c,g)){if(!next.readbackVerified||next.clipNodeId!==c.snapshot.locator.clipNodeId)throw new Error('Premiere did not confirm the keyframe position.');publish(next);options.error('');intent.resolve(next);return;}}
   catch(e){if(current(c,g))options.error(e instanceof Error?e.message:String(e));}finally{active=false;activeKind=null;intent.resolve(null);drain();}
  }
@@ -50,7 +62,7 @@ export function createNativeGeometryController(options:Options){
   cancelSeek();
   return new Promise(resolve=>{pendingSeek={parameter,direction,context:c,generation:g,identity:JSON.stringify([c.sequenceId,c.snapshot]),receipt,resolve};if(!active)void flushSeek();});
  }
- return {read,queue,seek,setDragging(value:boolean){dragging=value;},dispose(){alive=false;generation++;pending=null;cancelSeek();},get active(){return active;}};
+ return {read,queue,queuePositionAxis,seek,setDragging(value:boolean){if(value&&!dragging)void read();dragging=value;notifyInteraction();},dispose(){alive=false;generation++;pending=null;cancelSeek();if(lastInteraction){lastInteraction=false;options.interacting?.(false);}},get active(){return active;}};
 }
 
 export function canSeekGeometryKeyframe(state:NativeCaptionControls|null,parameter:GeometryParameter,direction:'previous'|'next'):boolean{

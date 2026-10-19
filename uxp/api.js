@@ -18,6 +18,9 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
 const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'readTimelinePlayhead', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'readCaptionArea', 'readCaptionConsolidation']);
 const SERVICE_READS = new Set(['getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
+// Interactive geometry uses the same validated serial lane, with responsive
+// response checks only while that one request is actually outstanding.
+const INTERACTIVE_ACTIONS=new Set(['readNativeCaptionControls','editNativeCaptionControl','seekNativeCaptionKeyframe']);
 
 function createHostAPI(options = {}) {
   const contexts = new Map();
@@ -156,7 +159,7 @@ function createHostAPI(options = {}) {
           if (!SERVICE_READS.has(action)) await sequenceContext(context.id);
           return response.result;
         }
-        await sleep(unresolved ? 1000 : 150);
+        await sleep(unresolved ? 1000 : INTERACTIVE_ACTIONS.has(action) ? 16 : 150);
       }
     } finally {
       for (const file of [input, output]) if (file) try { await file.delete(); } catch {}

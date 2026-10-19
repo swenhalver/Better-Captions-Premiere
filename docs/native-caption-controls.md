@@ -35,3 +35,7 @@ native group-count keyframes are rounded/clamped by the CPU/GPU renderer.
 Explicit edits select the owned caption clip if needed so Premiere can show its
 non-rendered on-screen area controls. Background reads and polling never select
 clips or alter the workspace/panel widths.
+
+Interactive position/size edits use event-driven CEP request wakeups (`fs.watch`) with the normal 250 ms polling fallback. Only outstanding native geometry read/edit/keyframe-seek responses are checked every 16 ms; ordinary requests retain their normal interval and there is no fast idle filesystem polling. This removes the previous 250 ms request/150 ms response transport bottleneck while preserving the existing serial claim, revision validation and no-retry mutation rules. It does not guarantee a particular live Premiere frame rate.
+
+A numeric drag captures fresh controls once at its start. Values arriving during that read or a setter coalesce to the latest intent, and the final queued value is retained after pointer release. X/Y edits merge with the latest confirmed other axis rather than a stale UI pair. Failed preparatory reads discard queued edits. While an interaction or its final write is pending, background reconnection and document output wait; the geometry controls remain enabled. These changes require loading the updated panel/service, and live-host acceptance remains separate from transport/controller fixtures.

@@ -1,8 +1,12 @@
 <script lang="ts">
   import App from "./main-webview.svelte";
+  import DesignReview from './DesignReview.svelte';
   let width = $state("360");
 </script>
 
+{#if new URLSearchParams(window.location.search).has('designs')}
+  <DesignReview />
+{:else}
 <div class="browser-preview">
   <header class="browser-preview__toolbar">
     <div><strong>Better Captions</strong><p>Interactive interface review</p></div>
@@ -10,6 +14,7 @@
   </header>
   <div class="browser-preview__stage"><div class="browser-preview__panel" style:max-inline-size={width === "wide" ? "100%" : `${Number(width) / 13}rem`}><App /></div></div>
 </div>
+{/if}
 
 <style>
   .browser-preview { display: grid; grid-template-rows: auto minmax(0, 1fr); block-size: 100%; background: #161616; }

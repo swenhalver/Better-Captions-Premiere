@@ -31,7 +31,7 @@ function system(t){
  const runtime={path,directory:info=>info.projectPath.replace(/\/[^/]*$/,'')+'/Better Captions/'+info.id,readJob:data=>{const file='/ipc-'+ ++nextJob+'.json';payloads.set(file,JSON.stringify(data));return file;},disposeReadJob:file=>payloads.delete(file),load:()=>savedSession,save:(folder,data)=>cepSaves.push({folder,data})};
  const cepExports={};vm.runInNewContext(compile('webview-ui/src/cep-api.ts'),{exports:cepExports,console,require:()=>({}),window:{require:name=>name==='node:path'?path:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript(script,callback){callback(vm.runInContext(script,nativeContext));}}}});
  const cep=cepExports.createHostAPI();
- const service={};vm.runInNewContext(compile('cep/service.ts'),{exports:service,console,require:()=>({createHostAPI:()=>cep}),setTimeout,setInterval,clearInterval});
+ const service={};vm.runInNewContext(compile('cep/service.ts'),{exports:service,console,require:()=>({createHostAPI:()=>cep}),setTimeout,clearTimeout,setInterval,clearInterval});
  function folder(name){if(ipcFolders.has(name))return ipcFolders.get(name);const entries=new Map();const value={nativePath:name,entries,getEntry:async file=>{if(name==='/private/service'&&file==='service.json')return{data:{version:1,instanceId:'a'.repeat(24),updatedAt:Date.now(),actions:service.SERVICE_ACTIONS}};if(file==='captions.better-captions.json'&&savedSession!==null)return{data:savedSession};if(!entries.has(file))throw new Error('Not found');return entries.get(file);}};ipcFolders.set(name,value);return value;}
  const storage={ensureFolder:async name=>folder(name),privateRoot:async name=>folder('/private/'+name),randomId:()=>String(++nextRequest).padStart(32,'0'),readJSON:async file=>file.data,
   async writeJSON(parent,name,data){
@@ -132,7 +132,7 @@ test('saved sidecar GUIDs accept only equivalent balanced GUID forms and normali
 test('the actual private service preserves unconfirmed-write metadata and completed request IDs never execute again',async t=>{
  const directory=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'better-captions-connections-'))),service={};
  let writes=0,outputApplied=false;
- vm.runInNewContext(compile('cep/service.ts'),{exports:service,console,setTimeout,setInterval,clearInterval,require:()=>({createHostAPI(){throw new Error('The test API must be injected.');}})});
+ vm.runInNewContext(compile('cep/service.ts'),{exports:service,console,setTimeout,clearTimeout,setInterval,clearInterval,require:()=>({createHostAPI(){throw new Error('The test API must be injected.');}})});
  const worker=service.startBackendService({api:{getActiveSequenceInfo:async id=>({id,projectPath:'/first/edit.prproj'}),writeNativeCaptionDocument:async()=>{writes++;throw Object.assign(new Error('Native document readback was not confirmed.'),{code:'BC_OUTPUT_UNCONFIRMED',recoverable:false,outputApplied});}},
   fs,path,os,crypto,process,platform:require('../cep/platform.cjs'),root:path.join(directory,'service'),intervalMs:60000});
  t.after(()=>{worker.stop();fs.rmSync(directory,{recursive:true,force:true});});

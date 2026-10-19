@@ -9,6 +9,7 @@
 #include "caption_arbitrary.hpp"
 #include "render_style.hpp"
 #include "parameters.hpp"
+#include "parameter_sections.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -44,7 +45,7 @@ PF_Err parameters(PF_InData* in_data, PF_OutData* out_data) {
  PF_ADD_FLOAT_SLIDERX("Width",1,8192,1,3840,1536,PF_Precision_TENTHS,0,0,WidthId);
  PF_ADD_FLOAT_SLIDERX("Height",1,8192,1,2160,150,PF_Precision_TENTHS,0,0,HeightId);
  PF_ADD_FLOAT_SLIDERX("Characters per caption",1,500,1,100,56,PF_Precision_INTEGER,0,0,MaxCharsId);
- PF_ADD_FLOAT_SLIDERX("Global font size (64 = 1x)",1,512,1,200,64,PF_Precision_TENTHS,0,0,SizeId);
+ BC_ADD_SECTION_SLIDER("Global font size (64 = 1x)",1,512,1,200,64,PF_Precision_TENTHS,0,0,SizeId);
  std::memset(&def,0,sizeof(def));PF_ADD_COLOR("Global text tint",255,255,255,ColorId);
  std::memset(&def,0,sizeof(def));
  auto defaultDocument=better_captions::adobe::make(in_data,better_captions::encode(demo()));
@@ -52,9 +53,9 @@ PF_Err parameters(PF_InData* in_data, PF_OutData* out_data) {
  PF_Err err=wordParameters(in_data,"Current word",CurrentSizeId,CurrentGroupId,CurrentEndId);if(err)return err;
  err=wordParameters(in_data,"Previously spoken words",SpokenSizeId,SpokenGroupId,SpokenEndId);if(err)return err;
  err=wordParameters(in_data,"Upcoming words",UpcomingSizeId,UpcomingGroupId,UpcomingEndId);if(err)return err;
- PF_ADD_FLOAT_SLIDERX("Groups per page",1,100,1,10,1,PF_Precision_INTEGER,0,0,GroupsPerPageId);
+ BC_ADD_SECTION_SLIDER("Groups per page",1,100,1,10,1,PF_Precision_INTEGER,0,0,GroupsPerPageId);
  PF_ADD_FLOAT_SLIDERX("Smart line fit",0,1,0,1,0,PF_Precision_INTEGER,0,0,SmartLineFitId);
- PF_ADD_FLOAT_SLIDERX("Roll-up enabled",0,1,0,1,0,PF_Precision_INTEGER,0,0,RollUpEnabledId);
+ BC_ADD_SECTION_SLIDER("Roll-up enabled",0,1,0,1,0,PF_Precision_INTEGER,0,0,RollUpEnabledId);
  PF_ADD_FLOAT_SLIDERX("Visible lines",1,8,1,8,2,PF_Precision_INTEGER,0,0,RollUpLinesId);
  PF_ADD_FLOAT_SLIDERX("Scroll duration",0,2,0,1,.18,PF_Precision_HUNDREDTHS,0,0,RollUpDurationId);
  PF_ADD_FLOAT_SLIDERX("Soft fade boundary",0,1,0,1,1,PF_Precision_INTEGER,0,0,RollUpBoundaryId);

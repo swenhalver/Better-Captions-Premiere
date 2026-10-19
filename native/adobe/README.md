@@ -5,6 +5,28 @@ against Adobe's official 26.5 SDK headers. `BetterCaptionsPiPL.r` uses the SDK's
 resource types. No SDK header, utility implementation or sample project is
 vendored. Keep SDK downloads outside this repository and retain their license.
 
+## Effect Controls sections without changing saved parameters
+
+Premiere's documented `PF_PUI_ECW_SEPARATOR` groups existing controls visually
+without adding parameter rows. Separators begin the global typography controls,
+phrase/page controls and roll-up/transition controls; the initial position/size
+controls remain together. The existing Current word, Previously spoken words
+and Upcoming words topics remain genuinely collapsible.
+
+These new section breaks are visual separators, not additional collapsible
+topics. Inserting `PF_Param_GROUP_START`/`PF_Param_GROUP_END` rows would move
+subsequent PF/GPU/CEP indexes. This implementation preserves every existing
+index, disk ID, display name, default, range and keyframe capability. It changes
+only the supported separator UI flag; rendering and the embedded transcript are
+unchanged. Existing parameter order is intentionally retained.
+
+`parameter_sections_test.cpp` compares the stock SDK float-slider registrations
+with section registrations byte for byte after removing that UI flag and checks
+all existing index boundaries. The standard Mac build runs this test with
+AddressSanitizer and UndefinedBehaviorSanitizer. SDK structure tests establish
+registration compatibility; actual Premiere screenshots are separate host
+verification.
+
 ## Current experimental Mac status
 
 The opt-in straight-alpha Metal compositor is the installed experimental effect;

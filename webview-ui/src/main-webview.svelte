@@ -55,6 +55,7 @@
   let isRefreshing = $state(false);
   let isSyncing = $state(false);
   let transcriptDraftActive = $state(false);
+  let nativeGeometryInteracting = $state(false);
   let timelineBusy = $state(false);
   let exportBusy = $state(false);
   let areaBusy = $state(false);
@@ -103,7 +104,7 @@
     // selection alone never change outputSignature or schedule a new render.
     const session = sessionManager.current;
     if (session) { outputSignature(session); appliedSignatures[outputKey(session)]; }
-    void timelineBusy; void isRefreshing; void isSyncing; void hostPanelVisible; void documentVisible; void nativeAvailable; void exportButton;
+    void nativeGeometryInteracting; void timelineBusy; void isRefreshing; void isSyncing; void hostPanelVisible; void documentVisible; void nativeAvailable; void exportButton;
     liveOutput?.notify();
   });
   $effect(() => {
@@ -214,7 +215,7 @@
   }
   function connectionReady(allowPendingEdits = false) {
     const session = sessionManager.current;
-    return !api.isDemo && nativeAvailable && hostPanelVisible && !document.hidden && !timelineBusy && !isRefreshing && !isSyncing && !session?.isLoading && !isEditingTranscript()
+    return !api.isDemo && nativeAvailable && hostPanelVisible && !document.hidden && !timelineBusy && !nativeGeometryInteracting && !isRefreshing && !isSyncing && !session?.isLoading && !isEditingTranscript()
       && (allowPendingEdits || !session?.captions.length || appliedSignatures[outputKey(session)] === outputSignature(session));
   }
   async function readConnections(info: SequenceInfo, includeDocuments = true): Promise<CaptionConnections | null> {
@@ -850,7 +851,7 @@
         const signature = outputSignature(session);
         return { sequenceId: outputKey(session), signature,
           needed: appliedSignatures[outputKey(session)] !== signature,
-          ready: nativeAvailable && hostPanelVisible && documentVisible && !timelineBusy && !isRefreshing && !isSyncing && !session.isLoading && !!(nativeBinding || nativeOutputKind(session) === "new-native" || exportButton) };
+          ready: nativeAvailable && hostPanelVisible && documentVisible && !timelineBusy && !nativeGeometryInteracting && !isRefreshing && !isSyncing && !session.isLoading && !!(nativeBinding || nativeOutputKind(session) === "new-native" || exportButton) };
       },
       async apply(context) {
         await flushSave();
@@ -957,7 +958,7 @@
             <StylePresets nativeMode={!!session.nativeClipId} style={session.style} animation={session.animation} load={api.loadStylePresets} save={api.saveStylePresets} onApply={applyStylePreset} isDemo={api.isDemo} disabled={editsLocked || isRefreshing || isSyncing || session.isLoading} />
           {/key}
           {#snippet nativeAlignment()}{#if session.nativeClipId && nativeBinding}<NativeAlignmentControls snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}{/snippet}
-          {#snippet nativeLayout()}{#if session.nativeClipId && nativeBinding}<NativeEffectControls snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}{/snippet}
+          {#snippet nativeLayout()}{#if session.nativeClipId && nativeBinding}<NativeEffectControls onInteracting={active=>{nativeGeometryInteracting=active;if(!active){reconnect?.notify();liveOutput?.notify();}}} snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}{/snippet}
           <TextStyleToolbar style={session.style} {fonts} {fontCatalog} {fontsLoading} {fontsError} onRefreshFonts={() => { void refreshFonts(); }} scope={wordState} nativeMode={!!session.nativeClipId} {nativeLayout} {nativeAlignment} onScopeChange={changeWordState} onUpdate={handleStyle} />
           {#if session.nativeClipId && nativeBinding}<NativeRollUpControls snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}
           {#if selected && !session.nativeClipId}

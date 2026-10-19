@@ -461,3 +461,10 @@ test('range transcription retains the hour deadline rather than the ordinary mut
  const pending=h.api.transcribeSequenceRange(3,10,'one');await tick();h.fireTimeout(3600000);await assert.rejects(pending,e=>e.code==='BC_NATIVE_PENDING'&&e.method==='transcribeSequenceRange'&&e.recoverable===false&&e.operationPending===true);
  finish('tail');await tick();await tick();assert.deepEqual(h.requests,[]);
 });
+
+test('only outstanding interactive geometry responses use a16ms check; other actions retain normal polling',async t=>{
+ const h=harness(t,{manualTimers:true,autoRespond:false});await h.api.getActiveSequenceInfo();const healthy=h.healthyService();healthy.actions.push('readNativeCaptionControls');h.setService(healthy);
+ const geometry=h.api.readNativeCaptionControls({locator:{clipNodeId:'caption'},revision:'doc'},'one');await tick();assert.equal(h.requests.at(-1).action,'readNativeCaptionControls');
+ h.respond(h.requests.at(-1),{ok:true});h.fireTimeout(16);assert.equal((await geometry).ok,true);
+ const fonts=h.api.getFonts();await tick();h.respond(h.requests.at(-1),['Arial']);h.fireTimeout(150);assert.deepEqual(await fonts,['Arial']);
+});

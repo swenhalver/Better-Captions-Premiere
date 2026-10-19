@@ -7,12 +7,12 @@
     snapshot:NativeCaptionSnapshot;sequenceId:string;frameWidth:number;frameHeight:number;currentTime:number;visible:boolean;disabled?:boolean;
     read:(snapshot:NativeCaptionSnapshot,id:string)=>Promise<NativeCaptionControls>;
     edit:(snapshot:NativeCaptionSnapshot,request:NativeCaptionControlEdit,id:string)=>Promise<NativeCaptionControls>;
-    seek:(snapshot:NativeCaptionSnapshot,request:NativeCaptionKeyframeSeek,id:string)=>Promise<NativeCaptionControls>;onTimeChange?:(seconds:number)=>void;
+    seek:(snapshot:NativeCaptionSnapshot,request:NativeCaptionKeyframeSeek,id:string)=>Promise<NativeCaptionControls>;onTimeChange?:(seconds:number)=>void;onInteracting?:(active:boolean)=>void;
   }
-  let {snapshot,sequenceId,frameWidth,frameHeight,currentTime,visible,disabled=false,read,edit,seek,onTimeChange=()=>{}}:Props=$props();
+  let {snapshot,sequenceId,frameWidth,frameHeight,currentTime,visible,disabled=false,read,edit,seek,onTimeChange=()=>{},onInteracting=()=>{}}:Props=$props();
   let controls=$state.raw<NativeCaptionControls|null>(null),error=$state(''),dragging=$state(false);
   const identity=()=>JSON.stringify([sequenceId,snapshot.locator,snapshot.revision]);
-  const controller=createNativeGeometryController({current:()=>({key:identity(),sequenceId,snapshot,visible,disabled}),read:(s,id)=>read(s,id),edit:(s,r,id)=>edit(s,r,id),seek:(s,r,id)=>seek(s,r,id),state:value=>controls=value,error:message=>error=message});
+  const controller=createNativeGeometryController({current:()=>({key:identity(),sequenceId,snapshot,visible,disabled}),read:(s,id)=>read(s,id),edit:(s,r,id)=>edit(s,r,id),seek:(s,r,id)=>seek(s,r,id),state:value=>controls=value,error:message=>error=message,interacting:active=>onInteracting(active)});
   let readTimer:ReturnType<typeof setTimeout>|undefined;
   $effect(()=>{void currentTime;void snapshot;void visible;void disabled;
     if(!visible||disabled){if(readTimer!==undefined)clearTimeout(readTimer);readTimer=undefined;return;}
@@ -21,7 +21,7 @@
   });
   onMount(()=>{const timer=setInterval(()=>{void controller.read();},1200);return()=>{clearInterval(timer);if(readTimer!==undefined)clearTimeout(readTimer);controller.dispose();};});
   function drag(value:boolean){dragging=value;controller.setDragging(value);}
-  function axis(index:0|1,value:number){if(!controls)return;const point=[...(controls.position.value as [number,number])] as [number,number];point[index]=value/(index===0?frameWidth:frameHeight);controller.queue('position',point);}
+  function axis(index:0|1,value:number){if(!controls)return;controller.queuePositionAxis(index,value/(index===0?frameWidth:frameHeight));}
   function scalar(parameter:'width'|'height'|'groups',value:number){controller.queue(parameter,parameter==='groups'?Math.round(value):value);}
   async function navigate(parameter:GeometryParameter,direction:'previous'|'next'){const next=await controller.seek(parameter,direction);if(next)onTimeChange(Number(next.timelineTicks)/254016000000);}
   const rows=['position','width','height','groups'] as const;

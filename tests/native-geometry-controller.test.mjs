@@ -7,7 +7,7 @@ function receipt(revision='r0',width=600){const d=value=>({value,defaultValue:va
 function fixture(edit){let context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'document'},visible:true,disabled:false};const states=[],errors=[];let reads=0;const c=createNativeGeometryController({current:()=>context,read:async()=>{reads++;return receipt();},edit,state:s=>states.push(s),error:e=>errors.push(e)});return{c,states,errors,get reads(){return reads;},set context(v){context={...context,...v};}};}
 test('native geometry drag serializes host writes and coalesces to the latest value using confirmed revisions',async()=>{
  const calls=[],wait=deferred();let active=0,maxActive=0;const f=fixture(async(s,r)=>{calls.push(r);active++;maxActive=Math.max(maxActive,active);if(calls.length===1)await wait.promise;active--;return{...receipt('r'+calls.length,r.value),readbackVerified:true};});
- await f.c.read();f.c.setDragging(true);f.c.queue('width',610);f.c.queue('width',620);f.c.queue('width',630);await f.c.read();assert.equal(f.reads,1);
+ await f.c.read();f.c.setDragging(true);await tick();f.c.queue('width',610);f.c.queue('width',620);f.c.queue('width',630);await f.c.read();assert.equal(f.reads,2);
  wait.resolve();await tick();await tick();assert.equal(maxActive,1);assert.deepEqual(calls.map(r=>r.value),[610,630]);assert.deepEqual(calls.map(r=>r.revision),['r0','r1']);assert.equal(f.states.at(-1).width.value,630);f.c.dispose();
 });
 test('stale geometry replies cannot replace a new caption and reset sends no invented value',async()=>{
@@ -63,4 +63,35 @@ test('failed polling read cancels queued navigation without seek retries',async(
  const c=createNativeGeometryController({current:()=>context,read:async()=>++reads===1?receipt():wait.promise,edit:async()=>{},seek:async(s,r)=>{calls.push(r);throw new Error('seek failed');},state:()=>{},error:()=>{}});
  await c.read();const polling=c.read(),navigation=c.seek('width','previous');wait.reject(new Error('read failed'));await polling;assert.equal(await navigation,null);assert.deepEqual(calls,[]);
  assert.equal(await c.seek('width','next'),null);assert.equal(calls.length,1);await tick();assert.equal(calls.length,1);c.dispose();
+});
+
+test('a pointer gesture refreshes the timeline clock before streaming its first coalesced edit',async()=>{
+ const refresh=deferred(),calls=[];let reads=0;const initial=receipt(),fresh={...receipt('fresh'),timelineTicks:'508032000000',sourceTicks:'508032000000'};
+ const context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+ const c=createNativeGeometryController({current:()=>context,read:async()=>++reads===1?initial:refresh.promise,edit:async(s,r)=>{calls.push(r);return{...fresh,readbackVerified:true};},state:()=>{},error:()=>{}});
+ await c.read();c.setDragging(true);c.queue('width',610);c.queue('width',650);assert.deepEqual(calls,[]);refresh.resolve(fresh);await tick();await tick();assert.equal(reads,2);assert.equal(calls.length,1);assert.equal(calls[0].value,650);assert.equal(calls[0].revision,'fresh');assert.equal(calls[0].atTicks,'508032000000');c.dispose();
+});
+test('failed pre-gesture refresh drops queued values instead of writing with an obsolete receipt',async()=>{
+ const refresh=deferred(),writes=[];let reads=0;const context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+ const c=createNativeGeometryController({current:()=>context,read:async()=>++reads===1?receipt():refresh.promise,edit:async(s,r)=>{writes.push(r);return{...receipt(),readbackVerified:true};},state:()=>{},error:()=>{}});
+ await c.read();c.setDragging(true);c.queue('width',500);refresh.reject(new Error('playhead moved'));await tick();await tick();assert.deepEqual(writes,[]);c.dispose();
+});
+test('position-axis edits compose against the latest confirmed other axis, including values queued behind a fresh read',async()=>{
+ const refresh=deferred(),first=deferred(),calls=[];let reads=0;
+ const context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+ const fresh=receipt('fresh');fresh.position.value=[.7,.8];
+ const c=createNativeGeometryController({current:()=>context,read:async()=>++reads===1?receipt():refresh.promise,edit:async(s,r)=>{calls.push(r);if(calls.length===1)await first.promise;const next=receipt('edit'+calls.length);next.position.value=r.value;return{...next,readbackVerified:true};},state:()=>{},error:()=>{}});
+ await c.read();c.setDragging(true);c.queuePositionAxis(1,.4);refresh.resolve(fresh);await tick();assert.deepEqual(calls[0].value,[.7,.4]);c.queuePositionAxis(0,.9);first.resolve();await tick();await tick();assert.deepEqual(calls[1].value,[.9,.4]);c.dispose();
+});
+test('typed geometry edits older than 250ms refresh once before mutation without replaying a setter',async()=>{
+ let clock=1000,reads=0;const refresh=deferred(),calls=[];const context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+ const c=createNativeGeometryController({current:()=>context,now:()=>clock,read:async()=>++reads===1?receipt():refresh.promise,edit:async(s,r)=>{calls.push(r);return{...receipt('after'),readbackVerified:true};},state:()=>{},error:()=>{}});
+ await c.read();clock=1500;c.queue('height',180);assert.deepEqual(calls,[]);refresh.resolve(receipt('fresh'));await tick();await tick();assert.equal(reads,2);assert.equal(calls.length,1);assert.equal(calls[0].revision,'fresh');c.dispose();
+});
+
+test('interaction priority stays active through the final coalesced write after pointer release',async()=>{
+ const final=deferred(),phases=[],calls=[];let context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+ const c=createNativeGeometryController({current:()=>context,read:async()=>receipt(),edit:async(s,r)=>{calls.push(r);if(calls.length===1)await final.promise;return{...receipt('done'+calls.length,r.value),readbackVerified:true};},state:()=>{},error:()=>{},interacting:active=>phases.push(active)});
+ await c.read();assert.deepEqual(phases,[]);c.setDragging(true);await tick();c.queue('width',610);c.queue('width',650);c.setDragging(false);assert.deepEqual(phases,[true]);
+ final.resolve();await tick();await tick();assert.deepEqual(calls.map(r=>r.value),[610,650]);assert.deepEqual(phases,[true,false]);c.dispose();
 });
