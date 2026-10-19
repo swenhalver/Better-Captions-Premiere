@@ -1,5 +1,5 @@
 'use strict';
-const { localPath } = require('./paths.js');
+const { hostProjectPath, localPath } = require('./paths.js');
 const key = value => String(value).replace(/[{}]/g, '').toLowerCase();
 const ticks = value => typeof value === 'string' && /^(0|[1-9]\d{0,23})$/.test(value);
 function samePath(left, right) {
@@ -94,7 +94,7 @@ async function createCaptionTrack(ppro, project, sequence, prepared) {
   async function guard() {
     const activeProject = await nativeRead('active project read', () => ppro.Project.getActiveProject(), context);
     const activeSequence = activeProject && await nativeRead('active sequence read', () => activeProject.getActiveSequence(), context);
-    if (!activeProject || activeProject.path !== prepared.projectPath || project.path !== prepared.projectPath
+    if (!activeProject || hostProjectPath(activeProject.path) !== prepared.projectPath || hostProjectPath(project.path) !== prepared.projectPath
         || !activeSequence || key(activeSequence.guid) !== key(prepared.sequenceId) || key(sequence.guid) !== key(prepared.sequenceId)) {
       throw new Error('The active project or sequence changed before creating the caption track. Refresh Better Captions.');
     }

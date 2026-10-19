@@ -12,7 +12,7 @@ const compile=file=>ts.transpileModule(source(file),{compilerOptions:{module:ts.
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const collection=(values,key='numItems')=>Object.defineProperty(values,key,{get:()=>values.length});
 function events(){const handlers=new Map();return{addEventListener(type,fn){if(!handlers.has(type))handlers.set(type,new Set());handlers.get(type).add(fn);},removeEventListener(type,fn){handlers.get(type)?.delete(fn);},emit(type,event){for(const fn of handlers.get(type)??[])void fn(event);}};}
-function system(t){
+function system(t,options={}){
  let projectPath='/first/edit.prproj',nextJob=0,nextRequest=0,documentText='BCDOC1:424341500200000000000000',setterMode='normal',transcribe=async()=>null,savedSession=null;
  const payloads=new Map(),requests=[],nativeWrites=[],cepSaves=[],sidecars=[],ipcFolders=new Map();
  const time=seconds=>({seconds,ticks:String(seconds*254016000000)});
@@ -21,10 +21,10 @@ function system(t){
   components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([documentParam])}])};
  const nativeTrack={clips:collection([nativeClip]),isLocked:()=>false};
  const nativeSequence={sequenceID:'seq-a',name:'Captions',timebase:'10584000000',frameSizeHorizontal:720,frameSizeVertical:1280,end:String(2*254016000000),getPlayerPosition:()=>time(.5),videoTracks:collection([nativeTrack],'numTracks'),audioTracks:collection([],'numTracks')};
- const nativeProject={get path(){return projectPath;},activeSequence:nativeSequence};
+ const nativeProject={get path(){return options.cepPath?options.cepPath(projectPath):projectPath;},activeSequence:nativeSequence};
  const nativeContext=vm.createContext({app:{project:nativeProject},File:function(file){this.length=(payloads.get(file)??'').length;this.open=()=>payloads.has(file);this.read=()=>payloads.get(file);this.close=()=>{};}});
  vm.runInContext(source('cep/host/bridge.jsx'),nativeContext);nativeContext.$={global:vm.runInContext('this',nativeContext)};
- const runtime={path,directory:info=>info.projectPath.replace(/\/[^/]*$/,'')+'/Better Captions/'+info.id,readJob:data=>{const file='/ipc-'+ ++nextJob+'.json';payloads.set(file,JSON.stringify(data));return file;},disposeReadJob:file=>payloads.delete(file),load:()=>savedSession,save:(folder,data)=>cepSaves.push({folder,data})};
+ const runtime={path,directory:info=>info.projectPath.replaceAll('\\','/').replace(/\/[^/]*$/,'')+'/Better Captions/'+info.id,readJob:data=>{const file='/ipc-'+ ++nextJob+'.json';payloads.set(file,JSON.stringify(data));return file;},disposeReadJob:file=>payloads.delete(file),load:()=>savedSession,save:(folder,data)=>cepSaves.push({folder,data})};
  const cepExports={};vm.runInNewContext(compile('webview-ui/src/cep-api.ts'),{exports:cepExports,console,require:()=>({}),window:{require:name=>name==='node:path'?path:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript(script,callback){callback(vm.runInContext(script,nativeContext));}}}});
  const cep=cepExports.createHostAPI();
  const service={};vm.runInNewContext(compile('cep/service.ts'),{exports:service,console,require:()=>({createHostAPI:()=>cep}),setTimeout,setInterval,clearInterval});
@@ -70,6 +70,27 @@ test('connection reads and existing native edits round trip through actual webvi
  for(const request of h.requests.slice(0,2)){assert.equal(request.sequenceId,'seq-a');assert.equal(request.projectPath,'/first/edit.prproj');assert.equal(request.expiresAt-request.createdAt,10000);}
  assert.equal(Object.hasOwn(h.requests[2],'expiresAt'),false,'the setter must never acquire the expiring-read contract');assert.equal(h.payloads.size,0,'private host jobs are cleaned after reads and writes');
 });
+for(const cepExtended of [false,true])test('extended UXP drive paths share exact service and CEP identity ('+(cepExtended?'extended':'ordinary')+' CEP host path)',async t=>{
+ const ordinary='C:\\Project Data\\Café\\Edit.prproj',h=system(t,{cepPath:cepExtended?undefined:value=>value.startsWith('\\\\?\\')?value.slice(4):value});
+ h.projectPath='\\\\?\\'+ordinary;await tick();
+ assert.equal((await h.api.getActiveSequenceInfo()).projectPath,ordinary);
+ assert.equal((await h.cep.getActiveSequenceInfo()).projectPath,ordinary);
+ assert.equal((await h.nativeApi.readPlayheadIfIdle()).projectPath,ordinary);
+ const full=await h.api.readCaptionConnections(),entry=full.native[0];
+ assert.equal(full.projectPath,ordinary);assert.equal(entry.locator.projectPath,ordinary);assert.equal(JSON.parse(entry.revision).projectPath,ordinary);
+ const updated=await h.api.writeNativeCaptionDocument({locator:entry.locator,revision:entry.revision},'BCDOC1:ab');
+ assert.equal(updated.readbackVerified,true);assert.deepEqual(h.nativeWrites,['BCDOC1:ab']);
+ assert.ok(h.requests.every(request=>request.projectPath===ordinary));
+ const saved={sequenceId:'seq-a',projectPath:ordinary,captions:[]};
+ await h.nativeApi.saveSession(saved);assert.equal(h.sidecars[0].folder,'C:/Project Data/Café/Better Captions/seq-a');
+ await h.cep.saveSession(saved);assert.equal(h.cepSaves[0].folder,'C:/Project Data/Café/Better Captions/seq-a');
+ h.projectPath='\\\\?\\C:\\Saved As\\Edit.prproj';
+ await assert.rejects(h.api.writeNativeCaptionDocument({locator:entry.locator,revision:entry.revision},'BCDOC1:cd'),/project location changed|project changed/i);
+ await h.nativeApi.getActiveSequenceInfo();await h.cep.getActiveSequenceInfo();
+ await assert.rejects(h.nativeApi.saveSession(saved),/another project path/);await assert.rejects(h.cep.saveSession(saved),/another project path/);
+ assert.equal(h.nativeWrites.length,1);assert.equal(h.requests.length,2);assert.equal(h.sidecars.length,1);assert.equal(h.cepSaves.length,1);
+});
+
 test('a native setter readback failure stays typed and nonrecoverable across all actual transport adapters',async t=>{
  const h=system(t);await tick();await h.api.getActiveSequenceInfo();const full=await h.api.readCaptionConnections();h.setterMode='ignored';
  await assert.rejects(h.api.writeNativeCaptionDocument({locator:full.native[0].locator,revision:full.native[0].revision},'BCDOC1:ab'),error=>error.code==='BC_OUTPUT_UNCONFIRMED'&&error.method==='writeNativeCaptionDocument'&&error.recoverable===false&&error.operationPending===false&&error.outputApplied===false);

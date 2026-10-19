@@ -92,6 +92,32 @@ test('Windows saved-media matching preserves exact returned path while normalizi
  const result=f.read({generatedRoot:'C:\\Project\\Better Captions\\seq-a',knownLinks:[{id:'saved',projectItemId:clip.projectItem.nodeId,mediaPath:'d:/old project/caption.mov'}]});
  assert.equal(result.ok,true);assert.equal(result.legacy[0].path,path);
 });
+test('CEP host drive prefixes normalize context, discovery locators and revisions without changing request identity',()=>{
+ const ordinary='C:\\Project\\Edit.prproj',f=fixture({projectPath:ordinary});f.native();f.project.path='\\\\?\\'+ordinary;
+ assert.equal(JSON.parse(f.context.BetterCaptionsHost.context()).projectPath,ordinary);
+ const result=f.read({generatedRoot:'C:\\Project\\Better Captions\\seq-a'}),entry=result.native[0];
+ assert.equal(result.ok,true);assert.equal(result.projectPath,ordinary);assert.equal(entry.locator.projectPath,ordinary);assert.equal(JSON.parse(entry.revision).projectPath,ordinary);
+ f.context.JSON=JSON;
+ const existing=JSON.parse(vm.runInContext(buildCepNativeReadScript(entry.locator),f.context));
+ assert.equal(existing.ok,true);assert.equal(existing.revision,entry.revision,'the standalone native script and discovery retain the same opaque revision');
+ assert.equal(f.write(snapshot(entry)).readbackVerified,true);assert.equal(f.writes.length,1);assert.equal(f.project.path,'\\\\?\\'+ordinary);
+ assert.ok(f.read({projectPath:f.project.path}).error,'caller-supplied device paths remain invalid');
+ for(const changed of ['C:\\Other\\Edit.prproj','C:\\Project\\edit.prproj']){
+  f.project.path='\\\\?\\'+changed;
+  assert.ok(f.read().error);assert.ok(f.write(snapshot(entry)).error);
+  assert.equal(JSON.parse(vm.runInContext(buildCepNativeReadScript(entry.locator),f.context)).ok,false);
+ }
+ assert.equal(f.writes.length,1);assert.deepEqual(f.sideEffects,[]);
+});
+
+test('CEP host normalization does not accept UNC, device, file URL or traversal project identities',()=>{
+ const f=fixture({projectPath:'C:\\Project\\Edit.prproj'});f.native();
+ for(const unsafe of ['\\\\?\\UNC\\server\\Edit.prproj','\\\\.\\C:\\Project\\Edit.prproj','\\\\?\\Volume{123}\\Edit.prproj','\\\\?\\C:Edit.prproj','\\\\?\\C:/Project/Edit.prproj','file:///C:/Project/Edit.prproj','\\\\server\\Edit.prproj','\\\\?\\C:\\Project\\..\\Edit.prproj']){
+  f.project.path=unsafe;assert.ok(f.read().error,unsafe);assert.ok(f.read({projectPath:unsafe}).error,unsafe);
+ }
+ assert.equal(f.writes.length,0);assert.deepEqual(f.sideEffects,[]);
+});
+
 test('discovery echoes a GUID-equivalent requested identity while native locators retain exact CEP identity',()=>{
  const actual='{A1234567-B123-C123-D123-E123456789AB}',requested='a1234567-b123-c123-d123-e123456789ab',f=fixture({sequenceId:actual});f.native();
  const result=f.read({sequenceId:requested});assert.equal(result.ok,true);assert.equal(result.sequenceId,requested);assert.equal(result.nativeSequenceId,actual);assert.equal(result.native[0].locator.sequenceId,actual);

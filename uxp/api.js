@@ -3,7 +3,7 @@ const ppro = require('premierepro');
 const fs = require('uxp').storage.localFileSystem;
 const { ensureFolder, privateRoot, readJSON, writeJSON, randomId } = require('./storage.js');
 const native = require('./transcript.js');
-const { localPath, parentPath } = require('./paths.js');
+const { hostProjectPath, localPath, parentPath } = require('./paths.js');
 const key = id => String(id).replace(/[{}]/g, '').toLowerCase();
 const guid = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 function sameSavedSequence(a, b) {
@@ -82,7 +82,7 @@ function createHostAPI(options = {}) {
     const sequence = id ? (await project.getSequences()).find(item => key(item.guid.toString()) === key(id)) : await project.getActiveSequence();
     if (!sequence) throw new Error('The requested sequence is no longer open. Refresh Better Captions.');
     const idKey=key(sequence.guid.toString()),expected=active?.context&&key(active.context.id)===idKey?active.context:contexts.get(idKey);
-    if (expected && expected.projectPath !== project.path) throw new Error('The Premiere project location changed before this request completed. Refresh Better Captions.');
+    if (expected && expected.projectPath !== hostProjectPath(project.path)) throw new Error('The Premiere project location changed before this request completed. Refresh Better Captions.');
     return { project, sequence };
   }
   function captured(id = currentId) {
@@ -194,7 +194,7 @@ function createHostAPI(options = {}) {
         const track = await sequence.getVideoTrack(index);
         tracks.push({ index, name: track.name || 'Video ' + (index + 1), clips: (await track.getTrackItems(ppro.Constants.TrackItemType.CLIP, false)).length, locked: false });
       }
-      const info = { id, name: sequence.name, projectPath: project.path, duration, playhead, frameRate: 254016000000 / timebase, frameWidth: rect.width, frameHeight: rect.height, tracks };
+      const info = { id, name: sequence.name, projectPath: hostProjectPath(project.path), duration, playhead, frameRate: 254016000000 / timebase, frameWidth: rect.width, frameHeight: rect.height, tracks };
       contexts.set(id, info); currentId = id;
       return info;
     },
@@ -329,7 +329,7 @@ function createHostAPI(options = {}) {
     return serial('readTimelinePlayhead', async () => {
       const project = await ppro.Project.getActiveProject();
       if (!project) return null;
-      const projectPath = project.path;
+      const projectPath = hostProjectPath(project.path);
       const sequence = await project.getActiveSequence();
       if (!sequence) return null;
       const sequenceId = key(sequence.guid.toString());

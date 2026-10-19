@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
+import { connectionKey } from '../webview-ui/src/lib/clip-connections.ts';
 const require = createRequire(import.meta.url);
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -251,6 +252,38 @@ test('Windows sessions save beside the captured project and preserve raw project
   const h=harness(t);h.relocate('D:\\Project Data\\Café\\edit.prproj');await h.api.getActiveSequenceInfo();
   await h.api.saveSession({sequenceId:'one',captions:[]});assert.equal(h.writes.at(-1).path,'D:/Project Data/Café/Better Captions/one');
   await h.api.getFonts();assert.equal(h.requests.at(-1).projectPath,'D:\\Project Data\\Café\\edit.prproj');
+});
+
+test('extended host drive paths produce the same editor, playhead, sidecar and service identity',async t=>{
+  const h=harness(t),ordinary='C:\\Project Data\\Café\\Edit.prproj',extended='\\\\?\\'+ordinary;
+  h.relocate(extended);
+  const info=await h.api.getActiveSequenceInfo();
+  assert.equal(info.projectPath,ordinary);
+  assert.equal(connectionKey(info),connectionKey({id:'one',projectPath:ordinary}));
+  assert.equal((await h.api.readPlayheadIfIdle()).projectPath,ordinary);
+  await h.api.saveSession({sequenceId:'one',projectPath:ordinary,captions:[]});
+  assert.equal(h.writes.at(-1).path,'C:/Project Data/Café/Better Captions/one');
+  await h.api.getFonts();assert.equal(h.requests.at(-1).projectPath,ordinary);
+  assert.equal(await h.api.fetchTranscriptJSON('one'),'one');
+  h.relocate(ordinary);assert.equal(await h.api.fetchTranscriptJSON('one'),'one','host prefix presence alone does not change identity');
+  await assert.rejects(h.api.saveSession({sequenceId:'one',projectPath:extended,captions:[]}),/another project path/,'only native host values are normalized');
+  h.relocate('\\\\?\\'+ordinary.replace('Edit.prproj','edit.prproj'));
+  await assert.rejects(h.api.beginCaption('caption','one'),/project location changed/,'case remains exact');
+  assert.equal(h.requests.length,1);
+});
+
+test('extended host paths retain Save As guards before and after a fresh context read',async t=>{
+  const h=harness(t),original='D:\\First\\Edit.prproj',moved='D:\\Second\\Edit.prproj';
+  h.relocate('\\\\?\\'+original);await h.api.getActiveSequenceInfo();
+  const saved={sequenceId:'one',projectPath:original,captions:[]};
+  h.relocate('\\\\?\\'+moved);
+  await assert.rejects(h.api.saveSession(saved),/project location changed/);
+  await assert.rejects(h.api.beginCaption('caption','one'),/project location changed/);
+  assert.equal(h.writes.length,0);assert.equal(h.requests.length,0);
+  assert.equal((await h.api.getActiveSequenceInfo()).projectPath,moved);
+  await assert.rejects(h.api.saveSession(saved),/another project path/);
+  await h.api.saveSession({...saved,projectPath:moved});
+  assert.equal(h.writes.at(-1).path,'D:/Second/Better Captions/one');
 });
 
 test('font loading initializes native context and accepts a renderer that claims immediately',async t=>{

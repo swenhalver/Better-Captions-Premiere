@@ -128,6 +128,20 @@ test('seed lookup requires a unique exact local path and a non-sequence project 
   assert.ok(error instanceof Error,kind);assert.match(error.message,/items=\d+, folders=\d+, matches=\d+, sequences=\d+/);assert.equal(h.trackItems.length,1,kind);assert.deepEqual(h.events,[],kind);
  }
 });
+test('caption-track guards normalize only host drive prefixes and still reject foreign or changed projects',async()=>{
+ const h=harness({windows:true});h.project.path='\\\\?\\'+h.plan.projectPath;
+ assert.equal(await createCaptionTrack(h.ppro,h.project,h.sequence,h.plan),1);assert.equal(h.trackItems[0][0],h.footage);assert.equal(h.trackItems[1].length,0);
+ for(const changed of ['D:\\Other\\edit.prproj','D:\\Project\\Edit.prproj']){
+  const f=harness({windows:true});f.project.path='\\\\?\\'+changed;
+  await assert.rejects(createCaptionTrack(f.ppro,f.project,f.sequence,f.plan),/project or sequence changed/);
+  assert.deepEqual(f.events,[]);assert.equal(f.trackItems.length,1);
+ }
+ const moved=harness({windows:true});moved.project.path='\\\\?\\'+moved.plan.projectPath;const read=moved.root.getItems;
+ moved.root.getItems=async()=>{moved.project.path='\\\\?\\D:\\Saved As\\edit.prproj';return read();};
+ await assert.rejects(createCaptionTrack(moved.ppro,moved.project,moved.sequence,moved.plan),/project or sequence changed/);
+ assert.deepEqual(moved.events,[]);assert.equal(moved.trackItems.length,1);
+});
+
 test('project media traversal bounds every folder, item and depth before timeline mutation',async()=>{
  for(const kind of ['items','folders','depth','unreadable-folder','null-item','unreadable-path']){
   const h=harness();

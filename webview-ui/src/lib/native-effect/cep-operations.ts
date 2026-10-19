@@ -31,7 +31,10 @@ var r=${literal(request)};
 function fail(message){throw new Error(message);}
 function canonical(name){return name===${literal(NATIVE_EFFECT_MATCH_NAME)}||name===${literal('AE.' + NATIVE_EFFECT_MATCH_NAME)};}
 function read(){
- var p=app.project;if(!p||String(p.path)!==r.locator.projectPath)fail('Native project changed.');
+ var p=app.project,projectPath=p?String(p.path):'';
+ // Match the host bridge's local-drive prefix normalization without changing locator identity.
+ if(projectPath.slice(0,4)===${literal('\\\\?\\')}&&/^[a-z]:$/i.test(projectPath.slice(4,6))&&projectPath.charCodeAt(6)===92)projectPath=projectPath.slice(4);
+ if(!p||projectPath!==r.locator.projectPath)fail('Native project changed.');
  var s=p.activeSequence;if(!s||String(s.sequenceID)!==r.locator.sequenceId)fail('Native sequence changed.');
  var tracks=s.videoTracks;if(r.locator.trackIndex>=tracks.numTracks)fail('Native track changed.');
  var clips=tracks[r.locator.trackIndex].clips;if(r.locator.clipIndex>=clips.numItems)fail('Native clip changed.');
@@ -45,7 +48,7 @@ function read(){
  var text=param.getValue();if(typeof text!=='string'||!/^BCDOC1:[0-9a-f]+$/.test(text)||text.length%2!==1||(text.length+1)*2>${MAX_NATIVE_CARRIER_BYTES})fail('Native document is not a bounded text carrier.');
  var names=[],nativeCount=0;for(var i=0;i<components.numItems;i++){var name=String(components[i].matchName);names.push(name);if(canonical(name))nativeCount++;}
  if(nativeCount!==1)fail('Ambiguous native component instances.');
- var revision=JSON.stringify({projectPath:String(p.path),sequenceId:String(s.sequenceID),clipNodeId:String(c.nodeId),adjustmentLayer:true,start:String(c.start.ticks),end:String(c.end.ticks),inPoint:String(c.inPoint.ticks),outPoint:String(c.outPoint.ticks),components:names,documentIndex:r.locator.documentParamIndex,documentText:text});
+ var revision=JSON.stringify({projectPath:projectPath,sequenceId:String(s.sequenceID),clipNodeId:String(c.nodeId),adjustmentLayer:true,start:String(c.start.ticks),end:String(c.end.ticks),inPoint:String(c.inPoint.ticks),outPoint:String(c.outPoint.ticks),components:names,documentIndex:r.locator.documentParamIndex,documentText:text});
  return {param:param,text:text,revision:revision};
 }
 var attempted=false;

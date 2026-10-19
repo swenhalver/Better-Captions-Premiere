@@ -101,8 +101,9 @@ test('lost or mismatched import receipts remain unconfirmed with no retry or inv
 });
 
 function hostFixture(options={}){
- const p={version:1,sequenceId:sourceContext.id,projectPath:sourceContext.projectPath,generatedRoot:'/project/Better Captions/seq-a',generationId:generation,sequenceName:'Better Captions graphics '+generation,width:1920,height:1080,fps:30};
- p.xmlPath=p.generatedRoot+'/native-graphics-'+generation+'/graphics.xml';p.xmlText=generator.prepareNativeGraphicsGeneration(source(),{mode:'import-new-sequence'},sourceContext,generation).xml;
+ const context={...sourceContext,projectPath:options.projectPath??sourceContext.projectPath};
+ const p={version:1,sequenceId:context.id,projectPath:context.projectPath,generatedRoot:context.projectPath.replaceAll('\\','/').replace(/\/[^/]*$/,'')+'/Better Captions/seq-a',generationId:generation,sequenceName:'Better Captions graphics '+generation,width:1920,height:1080,fps:30};
+ p.xmlPath=p.generatedRoot+'/native-graphics-'+generation+'/graphics.xml';p.xmlText=generator.prepareNativeGraphicsGeneration(source(context),{mode:'import-new-sequence'},context,generation).xml;
  const files=new Map([[p.xmlPath,p.xmlText]]),imports=[],clips=[{id:'original-clip',start:0,end:20}],original={sequenceID:'seq-a',name:'Original',frameSizeHorizontal:1920,frameSizeVertical:1080,timebase:String(254016000000/30),clips};
  const sequences=[original];Object.defineProperty(sequences,'numSequences',{get:()=>sequences.length});
  const project={path:p.projectPath,activeSequence:original,sequences,rootItem:{name:'Project root'},importFiles(paths,suppress,target,stills){
@@ -121,6 +122,27 @@ test('the public XML import adds one separate sequence and leaves original timel
  assert.equal(result.status,'imported');assert.equal(result.importAttempted,true);assert.equal(result.nativeSequence.id,'generated-native-id');assert.equal(result.nativeSequence.name,h.p.sequenceName);assert.equal(JSON.stringify(h.original),before);
  assert.equal(h.project.activeSequence,h.original);assert.equal(h.imports.length,1);assert.deepEqual(JSON.parse(JSON.stringify(h.imports[0].paths)),[h.p.xmlPath]);assert.equal(h.imports[0].target,h.project.rootItem);assert.equal(h.imports[0].stills,false);
  const repeat=h.invoke();assert.equal(repeat.status,'saved');assert.equal(repeat.importAttempted,false);assert.equal(h.imports.length,1);assert.match(repeat.warnings.join(' '),/already has a sequence/);
+});
+
+test('native graphics imports share normalized host drive identity and preserve the source and canonical receipt',()=>{
+ const ordinary='C:\\Project Data\\Edit.prproj',h=hostFixture({projectPath:ordinary});
+ h.project.path='\\\\?\\'+ordinary;
+ const before=JSON.stringify(h.original),result=h.invoke();
+ assert.equal(result.status,'imported');assert.equal(result.importAttempted,true);assert.equal(result.projectPath,ordinary);assert.equal(h.imports.length,1);assert.equal(JSON.stringify(h.original),before);assert.equal(h.project.activeSequence,h.original);
+ const foreign=hostFixture({projectPath:ordinary});foreign.project.path='\\\\?\\C:\\Other\\Edit.prproj';
+ assert.equal(foreign.invoke().status,'saved');assert.equal(foreign.imports.length,0);
+ const raw=hostFixture({projectPath:ordinary});raw.project.path='\\\\?\\'+ordinary;
+ assert.equal(raw.invoke({projectPath:raw.project.path}).status,'saved');assert.equal(raw.imports.length,0,'request paths are not normalized');
+});
+
+test('Save As during a native import remains unconfirmed after host prefix normalization',()=>{
+ const ordinary='C:\\Project Data\\Edit.prproj',h=hostFixture({projectPath:ordinary,onImport:({project,sequences,original,p})=>{
+  sequences.push({...original,sequenceID:'new',name:p.sequenceName});project.path='\\\\?\\C:\\Saved As\\Edit.prproj';return true;
+ }});
+ h.project.path='\\\\?\\'+ordinary;
+ const before=JSON.stringify(h.original),result=h.invoke();
+ assert.equal(result.status,'import-unconfirmed');assert.equal(result.importAttempted,true);assert.equal(result.projectPath,ordinary);assert.equal(result.nativeSequence,undefined);assert.equal(h.imports.length,1);assert.equal(JSON.stringify(h.original),before);
+ assert.match(result.warnings.join(' '),/active project changed.*Do not automatically retry/);
 });
 
 test('unavailable import, foreign paths/content, and changed source identity return saved artifacts without mutation',()=>{

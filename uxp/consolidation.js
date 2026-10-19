@@ -1,5 +1,5 @@
 'use strict';
-const { localPath } = require('./paths.js');
+const { hostProjectPath, localPath } = require('./paths.js');
 const same = (a,b) => JSON.stringify(a)===JSON.stringify(b);
 const ticks = value => typeof value==='string' && /^(0|[1-9]\d{0,23})$/.test(value);
 const key = value => String(value).replace(/[{}]/g,'').toLowerCase();
@@ -26,7 +26,7 @@ async function removeLegacyClips(ppro, project, sequence, plan, verify) {
     selected.push(matches[0]);
   }
   const editor=await ppro.SequenceEditor.getEditor(sequence), active=await ppro.Project.getActiveProject();
-  if(!active || active.path!==plan.projectPath || project.path!==plan.projectPath || key((await active.getActiveSequence())?.guid)!==key(plan.sequenceId) || key(sequence.guid)!==key(plan.sequenceId))throw new Error('The active project or sequence changed before caption conversion.');
+  if(!active || hostProjectPath(active.path)!==plan.projectPath || hostProjectPath(project.path)!==plan.projectPath || key((await active.getActiveSequence())?.guid)!==key(plan.sequenceId) || key(sequence.guid)!==key(plan.sequenceId))throw new Error('The active project or sequence changed before caption conversion.');
   // This is the final asynchronous check. CEP proves exact node IDs, paths,
   // Motion and replacement holds immediately before the synchronous transaction.
   const receipt=await verify();

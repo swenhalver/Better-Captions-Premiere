@@ -96,18 +96,22 @@ var BetterCaptionsHost = (function () {
         var normalized = canonicalSequenceId(a);
         return normalized !== null && normalized === canonicalSequenceId(b);
     }
+    function hostProjectPath(value) {
+        // Normalize only Premiere's extended local-drive prefix, never request paths.
+        return typeof value === 'string' && /^\\\\\?\\[a-z]:\\/i.test(value) ? value.slice(4) : value;
+    }
     function sequence(id, projectPath) {
         var s = app.project.activeSequence;
         if (!s) throw new Error('Open a sequence in Premiere.');
         if (id && !sameSequenceId(s.sequenceID, id)) throw new Error('The active sequence changed. Refresh Better Captions before continuing.');
-        if (projectPath && app.project.path !== projectPath) throw new Error('The Premiere project changed. Refresh Better Captions before continuing.');
+        if (projectPath && hostProjectPath(app.project.path) !== projectPath) throw new Error('The Premiere project changed. Refresh Better Captions before continuing.');
         return s;
     }
     function context(id) {
         try {
             var s = sequence(id), tracks = [];
             for (var i = 0; i < s.videoTracks.numTracks; i++) tracks.push({ index: i, name: s.videoTracks[i].name, clips: s.videoTracks[i].clips.numItems, locked: s.videoTracks[i].isLocked() });
-            return reply({ ok: true, id: id ? String(id) : String(s.sequenceID), name: s.name, projectPath: app.project.path, width: s.frameSizeHorizontal, height: s.frameSizeVertical, fps: TICKS / Number(s.timebase), ticksPerFrame: String(s.timebase), duration: Number(s.end) / TICKS, tracks: tracks, playhead: s.getPlayerPosition().seconds });
+            return reply({ ok: true, id: id ? String(id) : String(s.sequenceID), name: s.name, projectPath: hostProjectPath(app.project.path), width: s.frameSizeHorizontal, height: s.frameSizeVertical, fps: TICKS / Number(s.timebase), ticksPerFrame: String(s.timebase), duration: Number(s.end) / TICKS, tracks: tracks, playhead: s.getPlayerPosition().seconds });
         } catch (e) { return reply({ error: e.toString() }); }
     }
     function seek(id, t, projectPath) {
@@ -1326,7 +1330,7 @@ var BetterCaptionsHost = (function () {
             documentIndex = p;
         }
         if (documentIndex < 0 || typeof properties[documentIndex].isTimeVarying !== 'function' || properties[documentIndex].isTimeVarying()) throw new Error('The native caption document parameter is missing or animated.');
-        var timing = connectionTiming(clip), projectPath = String(app.project.path), sequenceId = String(s.sequenceID), clipNodeId = connectionId(clip.nodeId);
+        var timing = connectionTiming(clip), projectPath = hostProjectPath(String(app.project.path)), sequenceId = String(s.sequenceID), clipNodeId = connectionId(clip.nodeId);
         var locator = { projectPath: projectPath, sequenceId: sequenceId, clipNodeId: clipNodeId, trackIndex: trackIndex, clipIndex: clipIndex, componentIndex: componentIndex, documentParamIndex: documentIndex };
         var selected = typeof clip.isSelected === 'function' && clip.isSelected() === true;
         var result = { kind: 'native-effect', clipNodeId: clipNodeId, projectItemId: connectionId(clip.projectItem && clip.projectItem.nodeId), trackIndex: trackIndex, clipIndex: clipIndex,
@@ -1409,7 +1413,7 @@ var BetterCaptionsHost = (function () {
             var position = s.getPlayerPosition(), ticks = position && String(position.ticks), seconds = Number(ticks) / TICKS;
             if (typeof ticks !== 'string' || !/^\d{1,21}$/.test(ticks) || !isFinite(seconds) || seconds < 0) throw new Error('Premiere did not expose its playhead during caption discovery.');
             sequence(p.sequenceId, p.projectPath);
-            var response = reply({ ok: true, version: 1, readOnly: true, projectPath: String(app.project.path), sequenceId: p.sequenceId, nativeSequenceId: String(s.sequenceID), playhead: seconds, playheadTicks: ticks, selectedClipNodeIds: selected, "native": nativeEntries, legacy: legacy, warnings: warnings });
+            var response = reply({ ok: true, version: 1, readOnly: true, projectPath: hostProjectPath(String(app.project.path)), sequenceId: p.sequenceId, nativeSequenceId: String(s.sequenceID), playhead: seconds, playheadTicks: ticks, selectedClipNodeIds: selected, "native": nativeEntries, legacy: legacy, warnings: warnings });
             if (response.length > 29360128) throw new Error('Caption connection response exceeds the bounded transport size.');
             return response;
         } catch (e) { return reply({ error: e.toString() }); }
@@ -1494,7 +1498,7 @@ var BetterCaptionsHost = (function () {
             if (!graphicsSettings(sequence(p.sequenceId, p.projectPath), p)) throw new Error('The source sequence settings changed before import.');
             started = true; result.importAttempted = true;
             if (!project.importFiles([p.xmlPath], true, project.rootItem, false)) throw new Error('Premiere did not confirm completion of the XML import.');
-            if (!app.project || app.project.path !== p.projectPath) throw new Error('The active project changed while importing native graphics.');
+            if (!app.project || hostProjectPath(app.project.path) !== p.projectPath) throw new Error('The active project changed while importing native graphics.');
             var after = graphicsSequences(app.project), found = [], present = {}, sourcePresent = false;
             for (i = 0; i < after.length; i++) {
                 present['$' + after[i].identity] = true;

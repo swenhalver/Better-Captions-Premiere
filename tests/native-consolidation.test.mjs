@@ -23,6 +23,16 @@ test('legacy Windows media identity tolerates native path casing without relaxin
  const mac=harness();mac.items[0].getProjectItem=async()=>({getMediaFilePath:async()=>'/PROJECT/0.mov'});
  await assert.rejects(removeLegacyClips(mac.ppro,mac.project,mac.sequence,mac.plan,mac.verify),/changed/);assert.equal(mac.items.length,2);
 });
+test('legacy conversion normalizes host drive prefixes while preserving exact project guards',async()=>{
+ const h=harness();h.plan.projectPath='D:\\Project\\Edit.prproj';h.project.path='\\\\?\\'+h.plan.projectPath;
+ await removeLegacyClips(h.ppro,h.project,h.sequence,h.plan,h.verify);assert.equal(h.items.length,0);
+ for(const changed of ['D:\\Other\\Edit.prproj','D:\\Project\\edit.prproj']){
+  const f=harness();f.plan.projectPath='D:\\Project\\Edit.prproj';f.project.path='\\\\?\\'+changed;
+  await assert.rejects(removeLegacyClips(f.ppro,f.project,f.sequence,f.plan,f.verify),/project or sequence changed/);
+  assert.equal(f.items.length,2);assert.deepEqual(f.events,[]);
+ }
+});
+
 test('changed receipts and native timings cannot remove any legacy clips',async()=>{
  for(const option of ['stale','timing','project']){
   const h=harness({[option]:true});if(option==='timing')h.items[0].getOutPoint=async()=>({ticks:'90'});if(option==='project')h.project.path='/other/project.prproj';

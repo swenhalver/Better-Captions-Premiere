@@ -13,6 +13,21 @@ test('UXP accepts local Mac/Windows paths and rejects traversal, relative, devic
   for (const value of ['C:edit.prproj', '\\\\server\\share', '//server/share', '\\\\?\\C:\\edit', 'C:/a/../b', '/a/./b', 'C:/trailing./edit', 'relative', 'file:/C:/edit', '/bad\0path']) assert.throws(() => paths.localPath(value));
 });
 
+test('only host local-drive prefixes normalize and strict caller path validation stays intact', () => {
+  const ordinary = 'C:\\Project Data\\Café #1\\Edit.prproj', extended = '\\\\?\\' + ordinary;
+  assert.equal(paths.hostProjectPath(extended), ordinary);
+  for (const value of [ordinary, 'd:\\Mixed Case\\Edit.prproj', '/Users/Editor/Edit.prproj', '', undefined]) assert.equal(paths.hostProjectPath(value), value);
+  assert.throws(() => paths.localPath(extended), 'untrusted input does not gain extended-path support');
+  assert.equal(paths.localPath(paths.hostProjectPath(extended)), 'C:/Project Data/Café #1/Edit.prproj');
+  for (const value of ['\\\\?\\UNC\\server\\edit.prproj', '\\\\.\\C:\\edit.prproj', '\\\\?\\Volume{123}\\edit.prproj', '\\\\?\\GLOBALROOT\\Device\\edit.prproj', '\\\\?\\C:edit.prproj', '\\\\?\\C:/edit.prproj', '\\\\server\\edit.prproj', 'file:///C:/edit.prproj']) {
+    assert.equal(paths.hostProjectPath(value), value);
+    assert.throws(() => paths.localPath(paths.hostProjectPath(value)), value);
+  }
+  for (const suffix of ['a\\..\\edit.prproj', '.\\edit.prproj', 'bad?\\edit.prproj', 'trailing.\\edit.prproj', 'bad\0path']) {
+    assert.throws(() => paths.localPath(paths.hostProjectPath('\\\\?\\C:\\' + suffix)), suffix);
+  }
+});
+
 test('UXP discovers the same platform private root as the background worker', () => {
   assert.equal(paths.privateBase('C:\\Users\\Éditeur\\AppData\\Roaming\\Adobe\\UXP\\PluginsStorage\\PPRO\\data'), 'C:/Users/Éditeur/AppData/Roaming/Better Captions');
   assert.equal(paths.privateBase('/Users/editor/Library/Application Support/Adobe/UXP/PluginsStorage/data'), '/Users/editor/Library/Application Support/Better Captions');

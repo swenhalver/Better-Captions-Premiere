@@ -1,4 +1,9 @@
 'use strict';
+// Premiere can expose a local drive with the Windows extended-path prefix.
+// Apply only at host project reads; keep caller/media validation and case exact.
+function hostProjectPath(value) {
+  return typeof value === 'string' && /^\\\\\?\\[a-z]:\\/i.test(value) ? value.slice(4) : value;
+}
 // UXP has no Node path module. Keep local path validation independent of the host OS.
 function localPath(value) {
   if (typeof value !== 'string' || !value || value.length > 4096 || /[\u0000-\u001f]/.test(value)) throw new Error('Expected a local absolute caption path.');
@@ -28,4 +33,4 @@ function privateBase(dataPath) {
   if (index < 1) throw new Error('Cannot locate the private Better Captions folder from Adobe UXP storage.');
   return normalized.slice(0, index) + (marker === '/Adobe/UXP/' ? '' : '/Library/Application Support') + '/Better Captions';
 }
-module.exports = { localPath, parentPath, fileUrl, privateBase };
+module.exports = { hostProjectPath, localPath, parentPath, fileUrl, privateBase };
