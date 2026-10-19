@@ -1,7 +1,7 @@
 # Mac verification — 0.7.16
 
 Verified in installed Premiere Pro 26.5.2 on Apple Silicon. The production native
-clip `000f42ec` reconnects as one physical clip with 78 timed words and 15 phrase
+clip `000f42ec` reconnects as one physical clip with 76 timed words and 15 phrase
 rows at 56 characters. Existing native clips need no retranscription.
 
 The installed Caption grouping input was changed to 24. The panel displayed 24
