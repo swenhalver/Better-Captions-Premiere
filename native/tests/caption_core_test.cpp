@@ -2,6 +2,7 @@
 #undef NDEBUG // Test checks remain active in Release builds.
 #endif
 #include "../core/caption_core.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -217,11 +218,15 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
   auto creative=roll;creative.transition=transition;
   const auto before=rollFrame(.5,creative),during=rollFrame(1.09,creative),after=rollFrame(1.18,creative);
   assert(before.words.size()==initialRoll.words.size()&&before.words[0].x==initialRoll.words[0].x&&before.words[0].baseline==initialRoll.words[0].baseline);
-  assert(during.words.size()>=2);bool translucent=false;for(const auto& run:during.words){assert(run.style.opacity>=0&&run.style.opacity<=1);if(run.style.opacity<.999)translucent=true;assert(run.wordIndex<=1);}
-  assert(translucent&&after.words.size()==finishedRoll.words.size());
+  assert(during.words.size()==2);bool currentVisible=false;std::vector<std::size_t> retained;
+  for(const auto& run:during.words){assert(run.style.opacity>=0&&run.style.opacity<=1);assert(std::find(retained.begin(),retained.end(),run.wordIndex)==retained.end());retained.push_back(run.wordIndex);assert(run.wordIndex<=1);if(run.state==WordState::Current){assert(run.style.opacity==rolling.style.current.opacity);currentVisible=true;}else assert(run.style.opacity==rolling.style.spoken.opacity);}
+  assert(currentVisible&&after.words.size()==finishedRoll.words.size());
+  const auto later=rollFrame(2.09,creative);bool outgoingFades=false;retained.clear();
+  for(const auto& run:later.words){assert(std::find(retained.begin(),retained.end(),run.wordIndex)==retained.end());retained.push_back(run.wordIndex);if(run.wordIndex==0&&run.style.opacity<rolling.style.spoken.opacity)outgoingFades=true;if(run.state==WordState::Current)assert(run.style.opacity==rolling.style.current.opacity);}
+  assert(outgoingFades);
   for(std::size_t index=0;index<after.words.size();++index)assert(after.words[index].x==finishedRoll.words[index].x&&after.words[index].baseline==finishedRoll.words[index].baseline&&after.words[index].style.fontSize==finishedRoll.words[index].style.fontSize&&after.words[index].style.opacity==finishedRoll.words[index].style.opacity);
   const auto again=rollFrame(1.09,creative);for(std::size_t index=0;index<during.words.size();++index)assert(again.words[index].x==during.words[index].x&&again.words[index].baseline==during.words[index].baseline&&again.words[index].style.opacity==during.words[index].style.opacity);
-  if(transition==4)for(const auto& run:during.words)assert(run.style.fontSize<10&&run.style.fontSize>=8);
+  if(transition==4)for(const auto& run:during.words){if(run.wordIndex==1)assert(run.style.fontSize<10&&run.style.fontSize>=8);else assert(run.style.fontSize==10);}
   for(int direction:{1,2,3,4}){creative.direction=direction;const auto frame=rollFrame(direction>=3?2.09:1.09,creative);assert(!frame.words.empty());for(const auto& run:frame.words)assert(std::isfinite(run.x)&&std::isfinite(run.baseline)&&run.width>0);}
  }
  assert(sampledRollUpSettings(1,2,.18,1,0,.35,1,2,1,1,1,3.5).transition==4);

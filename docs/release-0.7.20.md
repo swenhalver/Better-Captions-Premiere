@@ -22,7 +22,8 @@ Vertical scrolling moves line by line. Horizontal scrolling moves blocks contain
 up to the selected visible-line count. Scroll mode preserves character/Smart group
 breaks and replaces page switching while enabled; Groups per page is retained for
 returning to ordinary captions. Words reveal at their source timestamps; rendering
-at a scrub position is deterministic. The soft exit changes pixel alpha without
+at a scrub position is deterministic. Creative transitions draw shared history once
+and keep the currently spoken word at its configured opacity for legibility. The soft exit changes pixel alpha without
 blurring text.
 
 All new native controls append after existing parameter IDs. Transcript carrier

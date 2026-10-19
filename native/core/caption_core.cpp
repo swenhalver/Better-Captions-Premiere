@@ -6,6 +6,7 @@
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace better_captions {
 static_assert(sizeof(double)==8&&std::numeric_limits<double>::is_iec559,"BCAP requires IEEE-754 binary64");
@@ -203,7 +204,7 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
   // Crossfade neighbouring settled windows for creative transitions. Reusing
   // the cumulative smooth progress also handles overlapping short-line events
   // deterministically, without animation state or an unbounded layer stack.
-  auto paint=[&](double offset,double alpha,double scale,double shiftX,double shiftY){
+  auto paint=[&](double offset,double alpha,double scale,double shiftX,double shiftY,std::unordered_map<std::size_t,DrawWord>* settled=nullptr){
    if(alpha<=0)return;
    const double centerX=box.x+box.width/2,centerY=viewportTop+viewportHeight/2;
    for(std::size_t index=0;index<rows.size();++index){
@@ -218,9 +219,12 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
      auto style=state==WordState::Current?d.style.current:d.style.spoken;const auto metrics=measure(slot.text,style);
      const double pad=style.bubble?style.padding:0,width=metrics.width+2*pad;
      const double x=left+(box.width-line.width)/2+slot.left+(slot.reserved.width-width)/2;
-     style.opacity*=alpha;
-     style.fontSize*=scale;style.padding*=scale;style.radius*=scale;style.outlineWidth*=scale;style.shadowBlur*=scale;style.shadowX*=scale;style.shadowY*=scale;
-     result.words.push_back({slot.text,container.id,slot.index,state,style,centerX+(x-centerX)*scale+shiftX,centerY+(top+maxAscent-centerY)*scale+shiftY,width*scale,(metrics.ascent+metrics.descent+2*pad)*scale});
+     DrawWord run{slot.text,container.id,slot.index,state,style,x,top+maxAscent,width,metrics.ascent+metrics.descent+2*pad};
+     if(settled)settled->emplace(slot.index,run);
+     run.style.opacity*=alpha;
+     run.style.fontSize*=scale;run.style.padding*=scale;run.style.radius*=scale;run.style.outlineWidth*=scale;run.style.shadowBlur*=scale;run.style.shadowX*=scale;run.style.shadowY*=scale;
+     run.x=centerX+(x-centerX)*scale+shiftX;run.baseline=centerY+(top+maxAscent-centerY)*scale+shiftY;run.width*=scale;run.height*=scale;
+     result.words.push_back(std::move(run));
     }
    }
   };
@@ -229,13 +233,25 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    if(std::abs(steps-std::round(steps))<1e-9)steps=std::round(steps);
    const double previous=std::floor(steps),progress=steps-previous;
    const double beforeOffset=initialOffset+distance*previous,afterOffset=beforeOffset+distance;
-   if(settings.transition==2){paint(beforeOffset,1-progress,1,0,0);paint(afterOffset,progress,1,0,0);}
+   const auto firstLayer=result.words.size();std::unordered_map<std::size_t,DrawWord> settledIncoming;
+   std::size_t secondLayer=firstLayer;
+   if(settings.transition==2){paint(beforeOffset,1-progress,1,0,0);secondLayer=result.words.size();paint(afterOffset,progress,1,0,0,&settledIncoming);}
    else if(settings.transition==3){
     const double extent=horizontal?box.width:viewportHeight;
     const double sign=settings.direction==1||settings.direction==3?-1:1;
     paint(beforeOffset,1-progress,1,horizontal?sign*progress*extent:0,horizontal?0:sign*progress*extent);
-    paint(afterOffset,progress,1,horizontal?-sign*(1-progress)*extent:0,horizontal?0:-sign*(1-progress)*extent);
-   }else{paint(beforeOffset,1-progress,1-.15*progress,0,0);paint(afterOffset,progress,.8+.2*progress,0,0);}
+    secondLayer=result.words.size();paint(afterOffset,progress,1,horizontal?-sign*(1-progress)*extent:0,horizontal?0:-sign*(1-progress)*extent,&settledIncoming);
+   }else{paint(beforeOffset,1-progress,1-.15*progress,0,0);secondLayer=result.words.size();paint(afterOffset,progress,.8+.2*progress,0,0,&settledIncoming);}
+   // History shared by both settled windows is one unchanged word, not two
+   // crossfading copies. Keep it once at the incoming settled position. The
+   // currently spoken word retains its authored opacity even while entering;
+   // creative motion/scale is retained for genuinely incoming-only words.
+   std::unordered_set<std::size_t> outgoingIds;
+   for(auto index=firstLayer;index<secondLayer;++index)outgoingIds.insert(result.words[index].wordIndex);
+   std::vector<DrawWord> merged;merged.reserve(result.words.size()-firstLayer);
+   for(auto index=firstLayer;index<secondLayer;++index){auto& run=result.words[index];if(settledIncoming.find(run.wordIndex)!=settledIncoming.end())continue;if(run.state==WordState::Current)run.style.opacity=d.style.current.opacity;merged.push_back(std::move(run));}
+   for(auto index=secondLayer;index<result.words.size();++index){auto& run=result.words[index];if(outgoingIds.find(run.wordIndex)!=outgoingIds.end())run=settledIncoming.at(run.wordIndex);else if(run.state==WordState::Current)run.style.opacity=d.style.current.opacity;merged.push_back(std::move(run));}
+   result.words.resize(firstLayer);for(auto& run:merged)result.words.push_back(std::move(run));
   }
  }return result;
 }

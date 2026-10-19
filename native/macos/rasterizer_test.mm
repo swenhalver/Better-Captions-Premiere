@@ -52,6 +52,10 @@ int main(){
   check(count(creative)>0&&creative.pixels!=scrollPixels.pixels,"A creative line transition did not change rendered caption pixels");
   check(creative.pixels==macos::rasterize(pages,1.09,{20,10,500,200},640,240,56,.6,1,false,roll).pixels,"Creative transition depended on previous frame state");
  }
+ auto readablePages=pages;readablePages.style.current.color={0,1,0,1};roll.transition=2;
+ const auto readableFade=macos::rasterize(readablePages,1.09,{20,10,500,200},640,240,56,.6,1,false,roll);std::size_t opaqueCurrentPixels=0;
+ for(std::size_t index=0;index<readableFade.pixels.size();index+=4)if(readableFade.pixels[index+1]>200&&readableFade.pixels[index]<30&&readableFade.pixels[index+3]>200)++opaqueCurrentPixels;
+ check(opaqueCurrentPixels>20,"Fade hid the currently spoken word behind translucent duplicated history");
  auto m=macos::measureText("Caption",d.style.current);check(m.width>0&&m.ascent>0,"Missing actual font metrics");
  bool failed=false;try{macos::rasterize(d,.5,box,100000,1);}catch(const std::invalid_argument&){failed=true;}check(failed,"Unbounded bitmap accepted");
  failed=false;try{macos::measureText(std::string("\xff"),d.style.current);}catch(const std::invalid_argument&){failed=true;}check(failed,"Malformed UTF-8 accepted");

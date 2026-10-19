@@ -126,5 +126,8 @@ int main(int argc,char** argv){try{
  check(differs(fadingRollPixels,typographyFrame()),"Compiled roll-up fade did not change sharp text pixels");
  in.current_time=109;values[LineTransition].u.fs_d.value=1;const auto scrollingPixels=typographyFrame();
  for(int transition:{2,3,4}){values[LineTransition].u.fs_d.value=transition;check(differs(scrollingPixels,typographyFrame()),"Compiled creative line transition did not change caption pixels");}
+ fixture.style.current.color={0,1,0,1};values[LineTransition].u.fs_d.value=2;const auto readableFade=typographyFrame();
+ std::size_t greenCurrent=0;for(const auto& pixel:readableFade)if(pixel.green>200&&pixel.red<30)++greenCurrent;
+ check(greenCurrent>20,"Compiled Fade did not keep the currently spoken word legible");
  dlclose(binary);std::cout<<"Compiled adapter smoke passed: ARGB/determinism/reflow/half-resolution and pixel-equal persisted adjustment-origin Razor frames; not host acceptance.\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
