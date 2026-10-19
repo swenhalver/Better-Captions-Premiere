@@ -1823,9 +1823,17 @@ var BetterCaptionsHost = (function () {
                 var timeline = nativeTickMath(nativeTickMath(source, before.inTicks, true), before.startTicks, false);
                 if (nativeTickCompare(timeline, before.startTicks) < 0 || nativeTickCompare(timeline, before.endTicks) >= 0) continue;
                 var side = nativeTickCompare(timeline, before.timelineTicks);
-                if (request.direction === 'previous' && side < 0 && (destination === null || nativeTickCompare(timeline, destination) > 0) || request.direction === 'next' && side > 0 && (destination === null || nativeTickCompare(timeline, destination) < 0)) {
-                    destination = timeline; destinationSource = source;
+                var nearer = false;
+                if (request.direction === 'previous') {
+                    if (side < 0) {
+                        if (destination === null) nearer = true;
+                        else if (nativeTickCompare(timeline, destination) > 0) nearer = true;
+                    }
+                } else if (side > 0) {
+                    if (destination === null) nearer = true;
+                    else if (nativeTickCompare(timeline, destination) < 0) nearer = true;
                 }
+                if (nearer) { destination = timeline; destinationSource = source; }
             }
             if (destination === null) throw new Error('There is no ' + request.direction + ' keyframe inside this caption clip.');
             var sequenceBefore = sequence(p.sequenceId, p.projectPath);

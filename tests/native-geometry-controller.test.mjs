@@ -26,3 +26,41 @@ test('previous/next availability uses exact timeline ticks and ignores trimmed-a
  r.width.keys.push({ticks:'90071992547410140',value:4},{ticks:'90071992547410220',value:5});assert.equal(canSeekGeometryKeyframe(r,'width','previous'),true);assert.equal(canSeekGeometryKeyframe(r,'width','next'),true);
  assert.equal(canSeekGeometryKeyframe(r,'position','next'),false);
 });
+
+test('keyframe click during an active polling read waits once and executes the latest navigation',async()=>{
+ const wait=deferred(),calls=[],states=[],errors=[];let reads=0;
+ const context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+ const c=createNativeGeometryController({current:()=>context,read:async()=>++reads===1?receipt():wait.promise,edit:async()=>{throw new Error('unexpected edit');},seek:async(s,r)=>{calls.push(r);return{...receipt('after'),timelineTicks:'508032000000',readbackVerified:true};},state:r=>states.push(r),error:e=>errors.push(e)});
+ await c.read();const polling=c.read();const superseded=c.seek('width','previous'),latest=c.seek('width','next');
+ assert.equal(await superseded,null);assert.deepEqual(calls,[]);wait.resolve(receipt());await polling;
+ const result=await latest;assert.equal(result.timelineTicks,'508032000000');assert.equal(calls.length,1);assert.equal(calls[0].direction,'next');assert.equal(calls[0].revision,'r0');assert.equal(calls[0].atTicks,'254016000000');assert.equal(reads,2);assert.equal(states.at(-1),result);c.dispose();
+});
+
+test('queued navigation cancels when polling discovers another playhead or controls revision',async()=>{
+ for(const replacement of [{...receipt(),timelineTicks:'508032000000'},receipt('new-controls')]){
+  const wait=deferred(),calls=[],errors=[];let reads=0;const context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+  const c=createNativeGeometryController({current:()=>context,read:async()=>++reads===1?receipt():wait.promise,edit:async()=>{},seek:async(s,r)=>{calls.push(r);return{...receipt(),readbackVerified:true};},state:()=>{},error:e=>errors.push(e)});
+  await c.read();const polling=c.read(),navigation=c.seek('width','previous');wait.resolve(replacement);await polling;
+  assert.equal(await navigation,null);assert.deepEqual(calls,[]);assert.match(errors.at(-1),/playhead or caption controls changed/);c.dispose();
+ }
+});
+
+test('a new clip/document or a manual mutation cancels queued navigation behind a read',async()=>{
+ for(const action of ['switch','document','edit','dispose']){
+  const wait=deferred(),seeks=[],edits=[];let reads=0,context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+  const c=createNativeGeometryController({current:()=>context,read:async()=>++reads===1?receipt():wait.promise,edit:async(s,r)=>{edits.push(r);return{...receipt('edited',r.value),readbackVerified:true};},seek:async(s,r)=>{seeks.push(r);return{...receipt(),readbackVerified:true};},state:()=>{},error:()=>{}});
+  await c.read();const polling=c.read(),navigation=c.seek('width','next');
+  if(action==='switch')context={...context,key:'other'};
+  if(action==='document')context={...context,snapshot:{...context.snapshot,revision:'other-document'}};
+  if(action==='edit')c.queue('width',700);
+  if(action==='dispose')c.dispose();
+  wait.resolve(receipt());await polling;assert.equal(await navigation,null);await tick();assert.deepEqual(seeks,[]);assert.equal(edits.length,action==='edit'?1:0);c.dispose();
+ }
+});
+
+test('failed polling read cancels queued navigation without seek retries',async()=>{
+ const wait=deferred(),calls=[];let reads=0;const context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+ const c=createNativeGeometryController({current:()=>context,read:async()=>++reads===1?receipt():wait.promise,edit:async()=>{},seek:async(s,r)=>{calls.push(r);throw new Error('seek failed');},state:()=>{},error:()=>{}});
+ await c.read();const polling=c.read(),navigation=c.seek('width','previous');wait.reject(new Error('read failed'));await polling;assert.equal(await navigation,null);assert.deepEqual(calls,[]);
+ assert.equal(await c.seek('width','next'),null);assert.equal(calls.length,1);await tick();assert.equal(calls.length,1);c.dispose();
+});

@@ -141,3 +141,11 @@ test('selection cannot bypass stale playhead or document guards and failed selec
  }
  const f=fixture();let selected=false;f.clip.isSelected=()=>selected;f.clip.setSelected=()=>{selected=true;f.at=ticks(13);};assert.match(f.edit(f.read()).error,/changed/);assert.deepEqual(f.writes,[]);
 });
+
+test('previous-key navigation includes the clip/source zero key with explicit host branches',()=>{
+ const f=fixture();f.clip.start.ticks='0';f.clip.end.ticks=ticks(5);f.clip.inPoint.ticks='0';f.clip.outPoint.ticks=ticks(5);f.at=ticks(1);
+ const revision=JSON.parse(f.snapshot.revision);revision.start='0';revision.end=ticks(5);revision.inPoint='0';revision.outPoint=ticks(5);f.snapshot.revision=JSON.stringify(revision);
+ f.width.animated=true;f.width.keys=[{ticks:'0',value:674},{ticks:ticks(2),value:774}];
+ const result=f.seek(f.read(),{parameter:'width',direction:'previous'});assert.equal(result.ok,true,result.error);assert.equal(result.timelineTicks,'0');assert.equal(result.width.value,674);assert.deepEqual(f.seeks,['0']);
+ assert.doesNotMatch(source,/if \(request\.direction === 'previous' && side < 0/,'Premiere mis-evaluated the former combined directional OR condition at source zero; keep direction branches explicit');
+});

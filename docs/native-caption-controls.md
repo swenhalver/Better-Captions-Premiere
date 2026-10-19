@@ -25,3 +25,13 @@ Reads are expiring read operations throughout webview, UXP, service, and CEP. Ed
 `seekNativeCaptionKeyframe(snapshot, {parameter, direction, revision, atTicks}, sequenceId)` navigates strictly to the previous/next key on the chosen animated parameter. Only keys inside the current clip's source `[in, out)` and timeline `[start, end)` ranges qualify. It maps source ticks back to timeline ticks with exact decimal arithmetic and calls `setPlayerPosition` once with that string. The returned fresh controls receipt samples the values at the destination and confirms unchanged static values, animation state, keys and embedded document. It does not call any parameter setters. No eligible key, a stale playhead/control revision, or unsupported retiming stops before seeking; an uncertain attempted seek is never automatically repeated.
 
 Every geometry read verifies that the active sequence/project and playhead still match after all parameter sampling, so a scrub during the read cannot produce a receipt whose numbers came from a different position.
+
+`groups` refers to the appended **Groups per page** native scalar, integer1–100
+(default1). It is optional on reads for compatibility with older compiled effects.
+Explicit group edits/reset follow the same clock/revision/keyframe rules; older
+binaries reject group writes before a setter. Fractional render samples between
+native group-count keyframes are rounded/clamped by the CPU/GPU renderer.
+
+Explicit edits select the owned caption clip if needed so Premiere can show its
+non-rendered on-screen area controls. Background reads and polling never select
+clips or alter the workspace/panel widths.
