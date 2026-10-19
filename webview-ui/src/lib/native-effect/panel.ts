@@ -1,4 +1,6 @@
 import { nativeCaptionPhrases } from './phrases.ts';
+import { createCanvasWordMeasure, smartFitCaptionPhrases, applyNativeFitState, type SmartFitMeasure } from './smart-fit.ts';
+import type { NativeLineFitStates } from '../../cep-api.ts';
 import { validateCharacterLimit } from '../transcript/parser.ts';
 import { validTransparentCarrier } from './carrier.ts';
 import { DEFAULT_ANIMATION, DEFAULT_STYLE, type CaptionItem, type SequenceInfo, type SessionState, type StyleConfig, type WordAppearance } from '../types.ts';
@@ -8,7 +10,7 @@ import { buildCepNativeReadScript, type CepNativeLocator, type CepNativeSnapshot
 import { encodeNativeTransportText, MAX_NATIVE_CARRIER_BYTES, NATIVE_TRANSPORT_PREFIX } from './encode.ts';
 
 export interface NativePanelEntry {
-  kind: 'native-effect'; maxChars?: number; clipNodeId: string; projectItemId: string; trackIndex: number; clipIndex: number;
+  kind: 'native-effect'; maxChars?: number; smartLineFit?: boolean; lineFitWidth?: number; lineFitFontScale?: number; lineFitStates?: NativeLineFitStates; clipNodeId: string; projectItemId: string; trackIndex: number; clipIndex: number;
   startTicks: string; endTicks: string; inTicks: string; outTicks: string; selected: boolean;
   locator: CepNativeLocator; matchName: string; documentText: string; revision: string;
 }
@@ -103,7 +105,23 @@ function bindingSnapshot(entry: NativePanelEntry): CepNativeSnapshot {
   return { locator: clone(entry.locator), revision: entry.revision };
 }
 
-export function rehydrateNativePanel(entry: NativePanelEntry, sequence: SequenceInfo) {
+/** Derive editor-only phrase rows from current styles and native fit controls.
+ * Inject a metric callback for deterministic tests. null explicitly requests the
+ * safe character-count fallback; undefined selects an in-memory canvas if any. */
+export function deriveNativePanelPhrases(binding: NativePanelBinding, session: SessionState, measure: SmartFitMeasure | null = createCanvasWordMeasure()): CaptionItem[] {
+  const clip = binding.clip;
+  if (clip.smartLineFit !== undefined && typeof clip.smartLineFit !== 'boolean') throw new Error('Invalid native smart line fit mode.');
+  if (!clip.smartLineFit) return nativeCaptionPhrases(session.captions, session.style.maxChars);
+  const width = clip.lineFitWidth, scale = clip.lineFitFontScale;
+  if (typeof width !== 'number' || !Number.isFinite(width) || width < 1 || width > 8192 || typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0 || scale > 16) throw new Error('Native smart line fit geometry is unavailable. Refresh Better Captions.');
+  const overrides = clip.lineFitStates;
+  if (overrides !== undefined && (typeof overrides !== 'object' || overrides === null || Array.isArray(overrides) || Object.keys(overrides).length !== 3 || !['upcoming','current','spoken'].every(key => Object.hasOwn(overrides,key) && overrides[key as keyof NativeLineFitStates] !== undefined))) throw new Error('Invalid native smart line fit state overrides.');
+  const appearances = pairs.map(([key,nativeKey]) => applyNativeFitState(resolveAppearance(session.style,key),scale,overrides?.[nativeKey]));
+  if (!measure) return nativeCaptionPhrases(session.captions, session.style.maxChars);
+  return smartFitCaptionPhrases(session.captions, { width, wordSpacing: binding.document.style.wordSpacing, appearances }, measure);
+}
+
+export function rehydrateNativePanel(entry: NativePanelEntry, sequence: SequenceInfo, measure?: SmartFitMeasure | null) {
   const snapshot = bindingSnapshot(entry);
   if (nativePanelSequenceId(snapshot.locator.sequenceId) !== nativePanelSequenceId(sequence.id)) throw new Error('The native caption belongs to another sequence.');
   if (![sequence.frameWidth, sequence.frameHeight, sequence.frameRate, sequence.duration].every(Number.isFinite) || sequence.frameWidth < 1 || sequence.frameHeight < 1 || sequence.frameRate <= 0 || sequence.duration < 0) throw new Error('Invalid active sequence metadata.');
@@ -123,11 +141,15 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
   const session: SessionState = { sequenceId: sequence.id, sequenceName: sequence.name, transcriptJson: null, captions, style, animation: { ...clone(DEFAULT_ANIMATION), preset: 'karaoke' },
     hasTranscript: captions.length > 0, isLoading: false, currentTime: sequence.playhead ?? 0, duration: sequence.duration, frameRate: sequence.frameRate, frameWidth: sequence.frameWidth, frameHeight: sequence.frameHeight };
   const binding: NativePanelBinding = { snapshot, document: clone(document), baseline: clone(session), timelineOffsetSeconds, clip: clone(entry) };
+  const measurement = measure === undefined ? createCanvasWordMeasure() : measure;
+  session.captions = deriveNativePanelPhrases(binding, session, measurement);
+  binding.baseline = clone(session);
   const warnings = [
     'Native Position, Width, Height and animated overrides remain in Premiere Effect Controls. Panel edits do not rewrite their keyframes.',
     'Native typography supports available font weights, relative B and real or synthetic italic. Letter spacing, alignment and whole-caption backgrounds remain unsupported.',
     `Native word spacing is ${document.style.wordSpacing} px; the panel percentage control is unavailable. Outline/shadow enable switches have no separate persisted native flag.`,
   ];
+  if (entry.smartLineFit) warnings.push(measurement ? 'Smart line fit phrase rows use browser font measurement; the native renderer remains authoritative.' : 'Smart line fit measurement is unavailable in this editor; phrase rows use the saved character limit while native rendering retains Smart line fit.');
   warnings.push('Native text case supports shared As typed, Uppercase, Lowercase or ASCII Title Case; the source transcript is preserved.');
   if (captions.some(caption => caption.startTime < 0)) warnings.push('Some preserved source caption times precede sequence zero after this layer move; no source words were clipped or removed.');
   return { session, binding, warnings, capabilities: NATIVE_PANEL_CAPABILITIES };

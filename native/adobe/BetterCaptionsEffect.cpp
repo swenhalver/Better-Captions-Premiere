@@ -53,6 +53,19 @@ PF_Err parameters(PF_InData* in_data, PF_OutData* out_data) {
  err=wordParameters(in_data,"Previously spoken words",SpokenSizeId,SpokenGroupId,SpokenEndId);if(err)return err;
  err=wordParameters(in_data,"Upcoming words",UpcomingSizeId,UpcomingGroupId,UpcomingEndId);if(err)return err;
  PF_ADD_FLOAT_SLIDERX("Groups per page",1,100,1,10,1,PF_Precision_INTEGER,0,0,GroupsPerPageId);
+ PF_ADD_FLOAT_SLIDERX("Smart line fit",0,1,0,1,0,PF_Precision_INTEGER,0,0,SmartLineFitId);
+ PF_ADD_FLOAT_SLIDERX("Roll-up enabled",0,1,0,1,0,PF_Precision_INTEGER,0,0,RollUpEnabledId);
+ PF_ADD_FLOAT_SLIDERX("Visible lines",1,8,1,8,2,PF_Precision_INTEGER,0,0,RollUpLinesId);
+ PF_ADD_FLOAT_SLIDERX("Scroll duration",0,2,0,1,.18,PF_Precision_HUNDREDTHS,0,0,RollUpDurationId);
+ PF_ADD_FLOAT_SLIDERX("Soft fade boundary",0,1,0,1,1,PF_Precision_INTEGER,0,0,RollUpBoundaryId);
+ PF_ADD_FLOAT_SLIDERX("Boundary position",0,1,0,1,0,PF_Precision_HUNDREDTHS,0,0,RollUpPositionId);
+ PF_ADD_FLOAT_SLIDERX("Transition thickness",0,1,0,1,.35,PF_Precision_HUNDREDTHS,0,0,RollUpThicknessId);
+ PF_ADD_FLOAT_SLIDERX("Fade amount",0,1,0,1,1,PF_Precision_HUNDREDTHS,0,0,RollUpFadeId);
+ PF_ADD_FLOAT_SLIDERX("Transition curve",1,4,1,4,2,PF_Precision_INTEGER,0,0,RollUpCurveId);
+ PF_ADD_FLOAT_SLIDERX("Scroll direction",1,4,1,4,1,PF_Precision_INTEGER,0,0,RollUpDirectionId);
+ PF_ADD_FLOAT_SLIDERX("Scroll speed",.1,10,.1,3,1,PF_Precision_HUNDREDTHS,0,0,RollUpSpeedId);
+ PF_ADD_FLOAT_SLIDERX("Wait for line to finish",0,1,0,1,1,PF_Precision_INTEGER,0,0,RollUpWaitId);
+ PF_ADD_FLOAT_SLIDERX("Line transition",1,4,1,4,1,PF_Precision_INTEGER,0,0,LineTransitionId);
  out_data->num_params=Count;
 #if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
  return better_captions::adobe::ui_probe::registerUI(in_data);
@@ -128,9 +141,13 @@ PF_Err render(PF_InData* in_data, PF_ParamDef* params[], PF_LayerDef* output) {
 #endif
  // Short fixture repeats so every point on a long scratch clip remains testable.
  if(demoMode)time=std::fmod(std::max(0.0,time),8.0);
+ const auto sample=[&](int index,double fallback){return params[index]?params[index]->u.fs_d.value:fallback;};
+ const auto rollUp=sampledRollUpSettings(sample(RollUpEnabled,0),sample(RollUpLines,2),sample(RollUpDuration,.18),sample(RollUpBoundary,1),
+   sample(RollUpPosition,0),sample(RollUpThickness,.35),sample(RollUpFade,1),sample(RollUpCurve,2),sample(RollUpDirection,1),sample(RollUpSpeed,1),sample(RollUpWait,1),sample(LineTransition,1));
  auto bitmap=macos::rasterize(document,time,box,output->width,output->height,
                             static_cast<std::size_t>(std::max(1.0,params[MaxChars]->u.fs_d.value)),0.6,
-                            sampledGroupsPerPage(params[GroupsPerPage]?params[GroupsPerPage]->u.fs_d.value:1.0));
+                            sampledGroupsPerPage(params[GroupsPerPage]?params[GroupsPerPage]->u.fs_d.value:1.0),
+                            sampledSmartLineFit(params[SmartLineFit]?params[SmartLineFit]->u.fs_d.value:0.0),rollUp);
 #if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
  long long alphaCount=0;for(std::size_t i=3;i<bitmap.pixels.size();i+=4)if(bitmap.pixels[i])++alphaCount;
  adobe::logRenderTime(in_data,timeTrace,document,time,box,demoMode,PF_Err_NONE,alphaCount);

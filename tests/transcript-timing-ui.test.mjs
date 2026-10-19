@@ -100,7 +100,7 @@ function controller(name, props, extension) {
     },
   }, { filename: `${name}.svelte` });
   for (const effect of effects) effect();
-  return { ...output, destroyComponent: () => { for (const destructor of destructors) destructor(); } };
+  return { ...output, runEffect: index => effects[index](), destroyComponent: () => { for (const destructor of destructors) destructor(); } };
 }
 function wordController(caption = cue(), fps = 24, selectedWord = 1, options = {}) {
   let h;
@@ -546,4 +546,38 @@ test('a completed timing drag preserves concurrent placement and word-style meta
   pointer.listeners.get('pointerup')(pointer.event({ type: 'pointerup', clientX: 320 }));
   assert.equal(h.changes.length, 1); assert.deepEqual(h.changes[0].position, newer.position); assert.equal(h.changes[0].words[1].fontFamily, 'Georgia');
   assert.equal(h.changes[0].words[1].startTime, 31 / 24);
+});
+
+test('native smart line fit remains an accessible option and retains the fixed limit while enabled',()=>{
+ const props={...transcriptProps(),smartLineFit:true,onSmartLineFitChange(){}};
+ const html=render(TranscriptPreview,{props}).body;
+ assert.match(html,/Smart line fit/);assert.match(html,/<input[^>]*type="checkbox"[^>]*checked/);
+ assert.match(html,/<input[^>]*type="number"[^>]*value="50"[^>]*disabled/);
+ assert.match(html,/5% safety margin/);
+ const fixed=render(TranscriptPreview,{props:{...props,smartLineFit:false}}).body;
+ assert.match(fixed,/50 characters/);assert.doesNotMatch(fixed,/<input[^>]*type="number"[^>]*value="50"[^>]*disabled/);
+});
+
+
+test('pending inline drafts keep native reconnect paused until saved or cancelled, even after invalid blur', () => {
+  const states = [], h = transcriptController(undefined,24,{onEditingChange:value=>states.push(value)});
+  const row = h.inspect().rows[0];
+  h.beginTextEdit(row);
+  h.runEffect(0);
+  assert.equal(states.at(-1),true);
+  h.setDraft('');
+  assert.equal(h.saveInlineText(row),false);
+  h.runEffect(0);
+  assert.equal(states.at(-1),true,'invalid blur keeps reconnect paused');
+  h.cancelTextEdit();
+  h.runEffect(0);
+  assert.equal(states.at(-1),false);
+  assert.equal(h.inspect().editingRowKey,null);
+  h.beginTimingEdit(row,'endTime');
+  h.inputCaptionTime('endTime',numericEvent(NaN));
+  assert.equal(h.saveInlineTiming(row),false);
+  h.runEffect(0);
+  assert.equal(states.at(-1),true,'invalid timing keeps reconnect paused');
+  h.destroyComponent();
+  assert.equal(states.at(-1),false,'unmount clears the parent guard');
 });

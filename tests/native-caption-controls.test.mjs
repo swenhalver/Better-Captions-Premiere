@@ -7,6 +7,8 @@ const require=createRequire(import.meta.url),acorn=require('../webview-ui/node_m
 const source=fs.readFileSync(new URL('../cep/host/bridge.jsx',import.meta.url),'utf8');
 const T=254016000000n, ticks=s=>String(BigInt(s)*T);
 const collection=(a,key='numItems')=>Object.defineProperty(a,key,{get:()=>a.length});
+const rollControls=[['rollUp','Roll-up enabled',0],['rollUpLines','Visible lines',2],['rollUpDuration','Scroll duration',.18],['rollUpFade','Soft fade boundary',1],['rollUpFadePosition','Boundary position',0],['rollUpFadeThickness','Transition thickness',.35],['rollUpFadeAmount','Fade amount',1],['rollUpFadeCurve','Transition curve',2],['rollUpDirection','Scroll direction',1],['rollUpSpeed','Scroll speed',1],['rollUpWait','Wait for line to finish',1],['rollUpTransition','Line transition',1]];
+
 function fixture(){
  const files=new Map(),writes=[],seeks=[];let at=ticks(12),locked=false;
  function parameter(name,value){
@@ -15,9 +17,10 @@ function fixture(){
    setValue(v){writes.push([name,'set',v]);if(!this.ignore)this.value=v;},addKey(t){writes.push([name,'add',t.ticks]);this.keys.push({ticks:t.ticks,value:this.getValueAtTime(t),interpolation:'default'});},
    setValueAtKey(t,v){writes.push([name,'key',t.ticks,v]);if(!this.ignore)this.keys.find(k=>k.ticks===t.ticks).value=v;},};
  }
- const position=parameter('Position',[.5,.9]),width=parameter('Width',1536),height=parameter('Height',150),groups=parameter('Groups per page',1),doc=parameter('Caption document (experimental)','BCDOC1:424341500200000000000000');
+ const position=parameter('Position',[.5,.9]),width=parameter('Width',1536),height=parameter('Height',150),groups=parameter('Groups per page',1),smartFit=parameter('Smart line fit',0),fontSize=parameter('Global font size (64 = 1x)',64),doc=parameter('Caption document (experimental)','BCDOC1:424341500200000000000000');
+ const rollParams=Object.fromEntries(rollControls.map(([key,label,value])=>[key,parameter(label,value)]));
  const clip={nodeId:'clip',projectItem:{nodeId:'item',getMediaPath:()=>''},start:{ticks:ticks(10)},end:{ticks:ticks(15)},inPoint:{ticks:ticks(30)},outPoint:{ticks:ticks(35)},isAdjustmentLayer:()=>true,isSelected:()=>true,getSpeed:()=>1,isSpeedReversed:()=>false,
-  components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([position,width,height,doc,groups])}])};
+  components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([position,width,height,doc,groups,fontSize,smartFit,...Object.values(rollParams)])}])};
  const track={clips:collection([clip]),isLocked:()=>locked};
  const seq={sequenceID:'seq-a',videoTracks:collection([track],'numTracks'),audioTracks:collection([],'numTracks'),getPlayerPosition:()=>({ticks:at}),setPlayerPosition(t){seeks.push(t);if(!this.ignoreSeek)at=t;this.onSeek?.();}};
  const project={path:'/project/edit.prproj',activeSequence:seq};
@@ -29,7 +32,7 @@ function fixture(){
  const read=(data={})=>call('readNativeCaptionControls',{snapshot,...data});
  const edit=(receipt,patch={})=>call('editNativeCaptionControl',{snapshot,request:{revision:receipt.revision,parameter:'width',operation:'set',value:600,atTicks:receipt.timelineTicks,...patch}});
  const seek=(receipt,patch={})=>call('seekNativeCaptionKeyframe',{snapshot,request:{revision:receipt.revision,parameter:'width',direction:'next',atTicks:receipt.timelineTicks,...patch}});
- return {read,edit,seek,seeks,snapshot,position,width,height,groups,doc,clip,seq,project,writes,set at(v){at=v;},set locked(v){locked=v;}};
+ return {parameter,read,edit,seek,seeks,snapshot,position,width,height,groups,smartFit,fontSize,rollParams,connections:()=>call('readCaptionConnections',{includeDocuments:true,knownLinks:[],generatedRoot:'/project/Better Captions/seq-a'}),doc,clip,seq,project,writes,set at(v){at=v;},set locked(v){locked=v;}};
 }
 
 test('native control bridge remains ExtendScript ES3 compatible',()=>{acorn.parse(source,{ecmaVersion:3});});
@@ -148,4 +151,132 @@ test('previous-key navigation includes the clip/source zero key with explicit ho
  f.width.animated=true;f.width.keys=[{ticks:'0',value:674},{ticks:ticks(2),value:774}];
  const result=f.seek(f.read(),{parameter:'width',direction:'previous'});assert.equal(result.ok,true,result.error);assert.equal(result.timelineTicks,'0');assert.equal(result.width.value,674);assert.deepEqual(f.seeks,['0']);
  assert.doesNotMatch(source,/if \(request\.direction === 'previous' && side < 0/,'Premiere mis-evaluated the former combined directional OR condition at source zero; keep direction branches explicit');
+});
+
+
+test('Smart line fit edits only its scalar and exposes geometry metadata without rewriting document or character count',()=>{
+ const f=fixture(),r=f.read(),doc=f.doc.value,initial=f.connections().native[0];
+ assert.equal(r.smartFit.value,0);assert.equal(r.smartFit.defaultValue,0);assert.equal(initial.smartLineFit,false);assert.equal(initial.lineFitWidth,undefined);assert.equal(initial.lineFitFontScale,undefined);
+ const changed=f.edit(r,{parameter:'smartFit',value:1});assert.equal(changed.readbackVerified,true);assert.equal(changed.smartFit.value,1);assert.equal(f.doc.value,doc);
+ assert.deepEqual(changed.position,r.position);assert.deepEqual(changed.width,r.width);assert.deepEqual(changed.height,r.height);assert.deepEqual(changed.groups,r.groups);
+ const enabled=f.connections().native[0];assert.equal(enabled.smartLineFit,true);assert.equal(enabled.lineFitWidth,1536);assert.equal(enabled.lineFitFontScale,1);assert.notEqual(enabled.connectionRevision,initial.connectionRevision);assert.equal(enabled.revision,initial.revision);
+ const reset=f.edit(changed,{parameter:'smartFit',operation:'reset',value:undefined});assert.equal(reset.smartFit.value,0);assert.deepEqual(f.writes,[['Smart line fit','set',1],['Smart line fit','set',0]]);assert.equal(f.fontSize.value,64);assert.equal(f.doc.value,doc);
+});
+
+test('Smart line fit accepts native boolean or interpolated reads but exact numeric zero/one setters only',()=>{
+ for(const [value,expected] of [[false,0],[true,1],[.49,0],[.5,1],[1,1]]){const f=fixture();f.smartFit.value=value;const r=f.read();assert.equal(r.smartFit.value,expected);assert.equal(f.connections().native[0].smartLineFit,!!expected);}
+ for(const value of [false,true,.5,-1,2,NaN,'1']){const f=fixture(),r=f.read();assert.ok(f.edit(r,{parameter:'smartFit',value}).error);assert.deepEqual(f.writes,[]);}
+ for(const value of [-1,2,'1']){const f=fixture();f.smartFit.value=value;assert.ok(f.read().error);assert.deepEqual(f.writes,[]);}
+});
+
+test('smart grouping metadata samples animated fit, width and font size in the exact clip-source clock',()=>{
+ const f=fixture();f.smartFit.animated=true;f.smartFit.keys=[{ticks:ticks(30),value:0},{ticks:ticks(32),value:.75}];
+ f.width.animated=true;f.width.keys=[{ticks:ticks(30),value:800},{ticks:ticks(32),value:640}];
+ f.fontSize.animated=true;f.fontSize.keys=[{ticks:ticks(30),value:64},{ticks:ticks(32),value:96}];
+ const before=structuredClone({fit:f.smartFit.keys,width:f.width.keys,font:f.fontSize.keys}),record=f.connections().native[0];
+ assert.equal(record.smartLineFit,true);assert.equal(record.lineFitWidth,640);assert.equal(record.lineFitFontScale,1.5);assert.equal(f.smartFit.lastSample,ticks(32));assert.equal(f.width.lastSample,ticks(32));assert.equal(f.fontSize.lastSample,ticks(32));
+ const revision=JSON.parse(record.connectionRevision);assert.equal(revision.smartLineFit,true);assert.equal(revision.lineFitWidth,640);assert.equal(revision.lineFitFontScale,1.5);
+ f.width.keys[1].value=600;const narrower=f.connections().native[0];assert.notEqual(narrower.connectionRevision,record.connectionRevision);assert.equal(narrower.revision,record.revision);f.width.keys[1].value=640;
+ assert.deepEqual({fit:f.smartFit.keys,width:f.width.keys,font:f.fontSize.keys},before);assert.deepEqual(f.writes,[]);
+});
+
+test('old native binaries expose Smart line fit off without making its missing control writable',()=>{
+ const f=fixture(),properties=f.clip.components[0].properties;properties.splice(properties.indexOf(f.smartFit),1);
+ const r=f.read();assert.equal(r.ok,true);assert.equal(r.smartFit,undefined);const record=f.connections().native[0];assert.equal(record.smartLineFit,false);assert.equal(record.lineFitWidth,undefined);
+ assert.match(f.edit(r,{parameter:'smartFit',value:1}).error,/Update the native caption effect/);assert.deepEqual(f.writes,[]);
+});
+
+test('smart grouping discovery rejects ambiguous controls or a playhead change while sampling',()=>{
+ const f=fixture();f.clip.components[0].properties.push(f.smartFit);assert.ok(f.connections().warnings.length);assert.equal(f.connections().native.length,0);
+ const h=fixture();h.smartFit.value=1;h.width.onRead=()=>{h.at=ticks(13);};assert.match(h.read().error,/playhead moved/);assert.deepEqual(h.writes,[]);
+});
+
+
+test('native scrolling controls expose exact defaults and isolated set/reset preserves document, geometry and other settings',()=>{
+ const f=fixture(),document=f.doc.value,originalTiming=structuredClone([f.clip.start,f.clip.end,f.clip.inPoint,f.clip.outPoint]);let r=f.read();
+ for(const [key,,value] of rollControls){assert.equal(r[key].value,value,key);assert.equal(r[key].defaultValue,value,key);}
+ const values=[1,3,.3,0,.2,.5,.7,4,3,2,0,4];
+ for(let index=0;index<rollControls.length;index++){
+  const [key,label,defaultValue]=rollControls[index],before=structuredClone(r),after=f.edit(r,{parameter:key,value:values[index]});
+  assert.equal(after.readbackVerified,true,key);assert.equal(after[key].value,values[index],key);
+  for(const other of ['position','width','height','groups','smartFit',...rollControls.map(row=>row[0])])if(other!==key)assert.deepEqual(after[other],before[other],other);
+  r=f.edit(after,{parameter:key,operation:'reset',value:undefined});assert.equal(r[key].value,defaultValue,key);assert.equal(f.doc.value,document);
+  assert.deepEqual(f.writes.slice(-2),[[label,'set',values[index]],[label,'set',defaultValue]]);
+ }
+ assert.deepEqual([f.clip.start,f.clip.end,f.clip.inPoint,f.clip.outPoint],originalTiming);
+});
+
+test('native scrolling reads interpolate on the clip-source clock while line and curve values quantize',()=>{
+ const f=fixture(),values=[.75,2.7,.24,false,.2,.4,.6,2.7,3.6,1.2,.2,3.6];
+ for(let index=0;index<rollControls.length;index++){
+  const [key,,value]=rollControls[index],p=f.rollParams[key];p.animated=true;p.keys=[{ticks:ticks(30),value,interpolation:'hold'},{ticks:ticks(32),value:values[index],interpolation:'bezier'}];
+ }
+ const before=structuredClone(Object.fromEntries(Object.entries(f.rollParams).map(([key,p])=>[key,p.keys]))),r=f.read();
+ const expected=[1,3,.24,0,.2,.4,.6,3,4,1.2,0,4];
+ for(let index=0;index<rollControls.length;index++){const [key]=rollControls[index];assert.equal(r[key].value,expected[index],key);assert.equal(r[key].animated,true);assert.equal(r[key].hasKey,true);assert.equal(f.rollParams[key].lastSample,ticks(32));}
+ assert.deepEqual(Object.fromEntries(Object.entries(f.rollParams).map(([key,p])=>[key,p.keys])),before);assert.deepEqual(f.writes,[]);
+ const after=f.edit(r,{parameter:'rollUpFadeThickness',value:.55});assert.equal(after.readbackVerified,true);before.rollUpFadeThickness[1].value=.55;assert.deepEqual(Object.fromEntries(Object.entries(f.rollParams).map(([key,p])=>[key,p.keys])),before);assert.deepEqual(f.writes,[['Transition thickness','key',ticks(32),.55]]);
+});
+
+test('scroll settings enforce boolean, integer, fraction, seconds and speed limits before writes',()=>{
+ const invalid={rollUp:[true,.5,2],rollUpLines:[0,9,1.5],rollUpDuration:[-.01,2.1],rollUpFade:[false,.5,2],rollUpFadePosition:[-.1,1.1],rollUpFadeThickness:[-.1,1.1],rollUpFadeAmount:[-.1,1.1],rollUpFadeCurve:[0,5,2.5],rollUpDirection:[0,5,2.5],rollUpSpeed:[0,.09,10.1],rollUpWait:[true,.5,2],rollUpTransition:[0,5,2.5]};
+ for(const [parameter,values] of Object.entries(invalid))for(const value of [...values,Infinity,'1']){const f=fixture(),r=f.read();assert.ok(f.edit(r,{parameter,value}).error,`${parameter}:${value}`);assert.deepEqual(f.writes,[]);}
+});
+
+test('older native binaries keep existing controls usable and refuse missing scrolling setters',()=>{
+ const f=fixture(),properties=f.clip.components[0].properties;for(const p of Object.values(f.rollParams))properties.splice(properties.indexOf(p),1);
+ const r=f.read();assert.equal(r.ok,true);for(const [key] of rollControls)assert.equal(r[key],undefined);assert.equal(f.edit(r).width.value,600);
+ assert.match(f.edit(f.read(),{parameter:'rollUp',value:1}).error,/Update the native caption effect/);assert.deepEqual(f.writes,[['Width','set',600]]);
+});
+
+test('scroll parameter key navigation follows the source clock without changing mode or stored keys',()=>{
+ const f=fixture(),p=f.rollParams.rollUpSpeed;p.animated=true;p.keys=[{ticks:ticks(31),value:.5,interpolation:'hold'},{ticks:ticks(34),value:2,interpolation:'bezier'}];
+ const before=structuredClone(p.keys),document=f.doc.value,r=f.read();const next=f.seek(r,{parameter:'rollUpSpeed'});
+ assert.equal(next.readbackVerified,true);assert.equal(next.timelineTicks,ticks(14));assert.equal(next.sourceTicks,ticks(34));assert.equal(next.rollUpSpeed.value,2);assert.equal(next.rollUp.value,0);assert.deepEqual(p.keys,before);assert.equal(f.doc.value,document);assert.deepEqual(f.writes,[]);
+});
+
+
+function smartWordStates(f,topics=true,order=['current','spoken','upcoming']){
+ const names={current:'Current word',spoken:'Previously spoken words',upcoming:'Upcoming words'},settings={current:[150,1,200],spoken:[80,2,50],upcoming:[110,0,125]},states={};
+ for(const name of order){
+  const [size,bubble,padding]=settings[name];states[name]={size:f.parameter('Size, %',size),bubble:f.parameter('Word bubble',bubble),padding:f.parameter('Bubble padding, %',padding)};
+  if(topics)f.clip.components[0].properties.push(f.parameter(names[name],0));
+  f.clip.components[0].properties.push(...Object.values(states[name]));
+ }
+ return states;
+}
+
+test('smart grouping mirrors per-state size, popup modes and padding with topic labels or legacy flat control order',()=>{
+ const expected={upcoming:{sizeScale:1.1,bubbleMode:1,paddingScale:1.25},current:{sizeScale:1.5,bubbleMode:2,paddingScale:2},spoken:{sizeScale:.8,bubbleMode:3,paddingScale:.5}};
+ for(const topics of [true,false]){
+  const f=fixture();f.smartFit.value=1;smartWordStates(f,topics);const oldDoc=f.doc.value,record=f.connections().native[0];
+  assert.deepEqual(record.lineFitStates,expected);assert.deepEqual(JSON.parse(record.connectionRevision).lineFitStates,expected);assert.equal(f.doc.value,oldDoc);assert.deepEqual(f.writes,[]);
+ }
+ const f=fixture();f.smartFit.value=1;smartWordStates(f,true,['upcoming','current','spoken']);assert.deepEqual(f.connections().native[0].lineFitStates,expected,'topic names determine identity when headers exist');
+});
+
+test('per-state line-fit metadata uses the same exact animated source clock and changes only connection revision',()=>{
+ const f=fixture();f.smartFit.value=1;const states=smartWordStates(f),document=f.doc.value;
+ for(const s of Object.values(states))for(const [key,p] of Object.entries(s)){p.animated=true;let value=120;if(key==='bubble')value=1;if(key==='padding')value=60;p.keys=[{ticks:ticks(30),value:p.value},{ticks:ticks(32),value,interpolation:'bezier'}];}
+ const keys=structuredClone(Object.fromEntries(Object.entries(states).map(([name,s])=>[name,Object.fromEntries(Object.entries(s).map(([key,p])=>[key,p.keys]))]))),before=f.connections().native[0];
+ for(const state of Object.values(before.lineFitStates))assert.deepEqual(state,{sizeScale:1.2,bubbleMode:2,paddingScale:.6});
+ for(const s of Object.values(states))for(const p of Object.values(s))assert.equal(p.lastSample,ticks(32));
+ states.current.size.keys[1].value=180;const changed=f.connections().native[0];assert.equal(changed.lineFitStates.current.sizeScale,1.8);assert.notEqual(changed.connectionRevision,before.connectionRevision);assert.equal(changed.revision,before.revision);states.current.size.keys[1].value=120;
+ assert.deepEqual(Object.fromEntries(Object.entries(states).map(([name,s])=>[name,Object.fromEntries(Object.entries(s).map(([key,p])=>[key,p.keys]))])),keys);assert.equal(f.doc.value,document);assert.deepEqual(f.writes,[]);
+});
+
+test('missing old state controls project document defaults while partial, ambiguous or invalid state controls are rejected',()=>{
+ const f=fixture();f.smartFit.value=1;const defaults={sizeScale:1,bubbleMode:1,paddingScale:1};assert.deepEqual(f.connections().native[0].lineFitStates,{upcoming:defaults,current:defaults,spoken:defaults});
+ const partial=fixture();partial.smartFit.value=1;partial.clip.components[0].properties.push(partial.parameter('Size, %',100));assert.match(partial.read().error,/complete native smart word-state/);assert.deepEqual(partial.writes,[]);
+ for(const corrupt of [states=>{states.current.size.value=0;},states=>{states.spoken.padding.value=401;},states=>{states.upcoming.bubble.value=3;},states=>{states.upcoming.bubble.value=.5;}]){
+  const h=fixture();h.smartFit.value=1;const states=smartWordStates(h);corrupt(states);assert.ok(h.read().error);assert.deepEqual(h.writes,[]);
+ }
+ const duplicate=fixture();duplicate.smartFit.value=1;const states=smartWordStates(duplicate);duplicate.clip.components[0].properties.push(states.upcoming.padding);assert.match(duplicate.read().error,/Ambiguous|complete/);assert.deepEqual(duplicate.writes,[]);
+});
+
+
+test('creative line transition modes reset to Scroll and retain the default wait-until-finished setting',()=>{
+ const f=fixture(),document=f.doc.value;let r=f.read();assert.equal(r.rollUpTransition.value,1);assert.equal(r.rollUpWait.value,1);
+ for(const value of [2,3,4]){r=f.edit(r,{parameter:'rollUpTransition',value});assert.equal(r.readbackVerified,true);assert.equal(r.rollUpTransition.value,value);assert.equal(r.rollUpWait.value,1);assert.equal(f.doc.value,document);}
+ const after=f.edit(r,{parameter:'rollUpTransition',operation:'reset',value:undefined});assert.equal(after.rollUpTransition.value,1);assert.equal(after.rollUpWait.value,1);assert.deepEqual(f.writes,[['Line transition','set',2],['Line transition','set',3],['Line transition','set',4],['Line transition','set',1]]);
 });

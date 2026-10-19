@@ -1382,6 +1382,48 @@ var BetterCaptionsHost = (function () {
         nativeMarker(marker, item);
         return { carrierKind: 'transparent-video', carrierItemId: connectionId(item.nodeId), carrierRevision: marker };
     }
+    function nativeSmartFitValue(value, label) {
+        if (typeof value === 'boolean') return value ? 1 : 0;
+        if (typeof value !== 'number' || !isFinite(value) || value < 0 || value > 1) throw new Error((label || 'Smart line fit') + ' must be between zero and one.');
+        return value >= 0.5 ? 1 : 0;
+    }
+    function nativeSmartLineFitStates(properties, propertyCount, sample) {
+        var stateNames = ['current', 'spoken', 'upcoming'], topics = ['Current word', 'Previously spoken words', 'Upcoming words'];
+        var labels = ['Size, %', 'Word bubble', 'Bubble padding, %'], values = [[], [], []], grouped = {}, topicSeen = {}, topicCount = 0, active = null, total = 0;
+        for (var p = 0; p < propertyCount; p++) {
+            var label = String(properties[p].displayName);
+            for (var t = 0; t < topics.length; t++) if (label === topics[t]) {
+                active = stateNames[t];
+                if (topicSeen[active]) throw new Error('Ambiguous native smart word-state topics.');
+                topicSeen[active] = true; topicCount++;
+                grouped[active] = [null, null, null];
+            }
+            for (var f = 0; f < labels.length; f++) if (label === labels[f]) {
+                total++; values[f].push(properties[p]);
+                if (active !== null) {
+                    if (grouped[active][f]) throw new Error('Ambiguous native smart word-state controls.');
+                    grouped[active][f] = properties[p];
+                }
+            }
+        }
+        var result = { upcoming: { sizeScale: 1, bubbleMode: 1, paddingScale: 1 }, current: { sizeScale: 1, bubbleMode: 1, paddingScale: 1 }, spoken: { sizeScale: 1, bubbleMode: 1, paddingScale: 1 } };
+        // Old bounded carriers and test fixtures may have no word overrides.
+        // Partial or duplicate state controls are unsafe to project as defaults.
+        if (!total) return result;
+        if (total !== 9 || values[0].length !== 3 || values[1].length !== 3 || values[2].length !== 3 || topicCount !== 0 && topicCount !== 3) throw new Error('Premiere did not expose complete native smart word-state controls.');
+        for (var s = 0; s < stateNames.length; s++) {
+            var name = stateNames[s], params = [values[0][s], values[1][s], values[2][s]];
+            if (topicCount) params = grouped[name];
+            if (!params || !params[0] || !params[1] || !params[2]) throw new Error('Premiere did not expose each native smart word-state control.');
+            var size = sample(params[0]), bubble = sample(params[1]), padding = sample(params[2]);
+            if (typeof size !== 'number' || !isFinite(size) || size < 1 || size > 400 || typeof padding !== 'number' || !isFinite(padding) || padding < 0 || padding > 400) throw new Error('Invalid native smart word-state size or padding.');
+            // Premiere ComponentParam exposes native popup entries zero-based;
+            // the native renderer uses Document=1, On=2, Off=3.
+            nativeInteger(bubble, 0, 2, 'word bubble mode');
+            result[name] = { sizeScale: size / 100, bubbleMode: bubble + 1, paddingScale: padding / 100 };
+        }
+        return result;
+    }
     function nativeCaptionRecord(s, clip, trackIndex, clipIndex, componentIndex, includeDocument) {
         var carrier = nativeCaptionCarrier(clip);
         var components = clip.components, count = connectionCount(components && components.numItems, 128), names = [], nativeCount = 0;
@@ -1413,7 +1455,47 @@ var BetterCaptionsHost = (function () {
             if (typeof limit !== 'number' || !isFinite(limit) || limit !== Math.floor(limit) || limit < 1 || limit > 500) throw new Error('Invalid native caption character limit.');
             result.maxChars = limit;
         }
-        var connectionRevision = { locator: locator, timing: timing, components: names, documentIndex: documentIndex, selected: selected };
+        // Smart grouping is a sampled effect setting, never a document rewrite.
+        // These source-clock samples let the editor mirror width-dependent rows.
+        var smartParam = null;
+        for (var sp = 0; sp < propertyCount; sp++) if (String(properties[sp].displayName) === 'Smart line fit') {
+            if (smartParam) throw new Error('Ambiguous native Smart line fit controls.');
+            smartParam = properties[sp];
+        }
+        result.smartLineFit = false;
+        if (smartParam) {
+            var sampleTimeline = nativeControlTicks(String(s.getPlayerPosition().ticks));
+            function sampleGrouping(param) {
+                if (typeof param.isTimeVarying !== 'function') throw new Error('Premiere did not expose a smart grouping control clock.');
+                if (!param.isTimeVarying()) return param.getValue();
+                assertNormalSpeed(clip);
+                var sampleSource = timing.inTicks;
+                if (nativeTickCompare(sampleTimeline, timing.startTicks) >= 0 && nativeTickCompare(sampleTimeline, timing.endTicks) < 0) sampleSource = nativeTickMath(nativeTickMath(sampleTimeline, timing.startTicks, true), timing.inTicks, false);
+                if (typeof param.getValueAtTime !== 'function') throw new Error('Premiere did not expose animated smart grouping samples.');
+                return param.getValueAtTime(ticksTime(sampleSource));
+            }
+            result.smartLineFit = nativeSmartFitValue(sampleGrouping(smartParam)) === 1;
+            if (result.smartLineFit) {
+                var fitLabels = ['Width', 'Global font size (64 = 1x)'], fitValues = [];
+                for (var fl = 0; fl < fitLabels.length; fl++) {
+                    var fitParam = null;
+                    for (var fp = 0; fp < propertyCount; fp++) if (String(properties[fp].displayName) === fitLabels[fl]) {
+                        if (fitParam) throw new Error('Ambiguous native smart grouping controls.');
+                        fitParam = properties[fp];
+                    }
+                    if (!fitParam) throw new Error('Premiere did not expose the smart grouping width or font size.');
+                    fitValues.push(sampleGrouping(fitParam));
+                }
+                result.lineFitWidth = nativeControlValue(fitValues[0], 'width');
+                var fontSize = fitValues[1];
+                if (typeof fontSize !== 'number' || !isFinite(fontSize) || fontSize < 1 || fontSize > 512) throw new Error('Invalid native smart grouping font size.');
+                result.lineFitFontScale = fontSize / 64;
+                result.lineFitStates = nativeSmartLineFitStates(properties, propertyCount, sampleGrouping);
+            }
+            if (nativeControlTicks(String(sequence(sequenceId, projectPath).getPlayerPosition().ticks)) !== sampleTimeline) throw new Error('The playhead moved while reading smart caption grouping. Read it again.');
+        }
+        var connectionRevision = { locator: locator, timing: timing, components: names, documentIndex: documentIndex, selected: selected, smartLineFit: result.smartLineFit };
+        if (result.smartLineFit) { connectionRevision.lineFitWidth = result.lineFitWidth; connectionRevision.lineFitFontScale = result.lineFitFontScale; connectionRevision.lineFitStates = result.lineFitStates; }
         if (carrier) {
             result.carrierKind = carrier.carrierKind; result.carrierItemId = carrier.carrierItemId; result.carrierRevision = carrier.carrierRevision;
             connectionRevision.carrierKind = carrier.carrierKind; connectionRevision.carrierItemId = carrier.carrierItemId; connectionRevision.carrierRevision = carrier.carrierRevision;
@@ -1729,12 +1811,29 @@ var BetterCaptionsHost = (function () {
         if (!subtract && carry) out = String(carry) + out;
         return nativeControlTicks(out.replace(/^0+(?=\d)/, ''));
     }
+    var nativeRollUpNames = ['rollUp', 'rollUpLines', 'rollUpDuration', 'rollUpFade', 'rollUpFadePosition', 'rollUpFadeThickness', 'rollUpFadeAmount', 'rollUpFadeCurve', 'rollUpDirection', 'rollUpSpeed', 'rollUpWait', 'rollUpTransition'];
+    var nativeRollUpLabels = ['Roll-up enabled', 'Visible lines', 'Scroll duration', 'Soft fade boundary', 'Boundary position', 'Transition thickness', 'Fade amount', 'Transition curve', 'Scroll direction', 'Scroll speed', 'Wait for line to finish', 'Line transition'];
+    var nativeRollUpDefaults = [0, 2, 0.18, 1, 0, 0.35, 1, 2, 1, 1, 1, 1];
+    function nativeRollUpIndex(name) { for (var i = 0; i < nativeRollUpNames.length; i++) if (nativeRollUpNames[i] === name) return i; return -1; }
+    function nativeKnownControl(name) { return name === 'position' || name === 'width' || name === 'height' || name === 'groups' || name === 'smartFit' || nativeRollUpIndex(name) >= 0; }
     function nativeControlValue(value, name) {
         if (name === 'position') {
             var point = motionVector(value, 'native Position');
             if (Math.abs(point[0]) > 100 || Math.abs(point[1]) > 100) throw new Error('Native Position is outside supported bounds.');
             return point;
         }
+        var rollIndex = nativeRollUpIndex(name);
+        if (rollIndex >= 0) {
+            if (rollIndex === 0 || rollIndex === 3 || rollIndex === 10) return nativeSmartFitValue(value, nativeRollUpLabels[rollIndex]);
+            var minimum = 0, maximum = 1;
+            if (rollIndex === 1) { minimum = 1; maximum = 8; }
+            else if (rollIndex === 2) maximum = 2;
+            else if (rollIndex === 7 || rollIndex === 8 || rollIndex === 11) { minimum = 1; maximum = 4; }
+            else if (rollIndex === 9) { minimum = 0.1; maximum = 10; }
+            if (typeof value !== 'number' || !isFinite(value) || value < minimum || value > maximum) throw new Error('Invalid native ' + nativeRollUpLabels[rollIndex] + ' value.');
+            return rollIndex === 1 || rollIndex === 7 || rollIndex === 8 || rollIndex === 11 ? Math.round(value) : value;
+        }
+        if (name === 'smartFit') return nativeSmartFitValue(value);
         if (name === 'groups') {
             nativeInteger(value, 1, 100, 'Groups per page'); return value;
         }
@@ -1761,7 +1860,7 @@ var BetterCaptionsHost = (function () {
         var inside = nativeTickCompare(at, timing.startTicks) >= 0 && nativeTickCompare(at, timing.endTicks) < 0;
         var sourceTicks = inside ? nativeTickMath(nativeTickMath(at, timing.startTicks, true), timing.inTicks, false) : null;
         if (sourceTicks !== null && nativeTickCompare(sourceTicks, timing.outTicks) >= 0) throw new Error('The native caption source timing changed.');
-        var names = ['position', 'width', 'height', 'groups'], labels = ['Position', 'Width', 'Height', 'Groups per page'], params = {}, descriptors = {}, properties = clip.components[target.componentIndex].properties;
+        var names = ['position', 'width', 'height', 'groups', 'smartFit'].concat(nativeRollUpNames), labels = ['Position', 'Width', 'Height', 'Groups per page', 'Smart line fit'].concat(nativeRollUpLabels), params = {}, descriptors = {}, properties = clip.components[target.componentIndex].properties;
         for (var n = 0; n < names.length; n++) {
             var name = names[n], param = null;
             for (var index = 0; index < properties.numItems; index++) if (String(properties[index].displayName) === labels[n]) {
@@ -1770,7 +1869,7 @@ var BetterCaptionsHost = (function () {
             }
             // Old native builds have no page-size parameter. Keep their geometry
             // usable, but never invent a writable group count.
-            if (!param && name === 'groups') continue;
+            if (!param && (name === 'groups' || name === 'smartFit' || nativeRollUpIndex(name) >= 0)) continue;
             if (!param || typeof param.isTimeVarying !== 'function' || typeof param.areKeyframesSupported !== 'function') throw new Error('Premiere did not expose the native caption ' + labels[n] + ' control.');
             params[name] = param;
             var animated = param.isTimeVarying() === true, keys = [], nativeKeys = animated ? param.getKeys() : null;
@@ -1781,11 +1880,14 @@ var BetterCaptionsHost = (function () {
             var sampleAt = sourceTicks === null ? timing.inTicks : sourceTicks;
             var value = nativeControlValue(animated ? param.getValueAtTime(ticksTime(sampleAt)) : param.getValue(), name), hasKey = false;
             for (var h = 0; h < keys.length; h++) if (keys[h].ticks === sourceTicks) hasKey = true;
-            var defaultValue = 150; if (name === 'position') defaultValue = [0.5, 0.9]; if (name === 'width') defaultValue = 1536; if (name === 'groups') defaultValue = 1;
+            var defaultValue = 150; if (name === 'position') defaultValue = [0.5, 0.9]; if (name === 'width') defaultValue = 1536; if (name === 'groups') defaultValue = 1; if (name === 'smartFit') defaultValue = 0;
+            var rollIndex = nativeRollUpIndex(name); if (rollIndex >= 0) defaultValue = nativeRollUpDefaults[rollIndex];
             descriptors[name] = { value: value, defaultValue: defaultValue, animated: animated, keyframesSupported: param.areKeyframesSupported() === true, hasKey: hasKey, keys: keys };
         }
         var receipt = { ok: true, clipNodeId: target.clipNodeId, timelineTicks: at, sourceTicks: sourceTicks, startTicks: timing.startTicks, endTicks: timing.endTicks, inTicks: timing.inTicks, outTicks: timing.outTicks, clock: 'clip-source', insideClip: inside, position: descriptors.position, width: descriptors.width, height: descriptors.height };
         if (descriptors.groups) receipt.groups = descriptors.groups;
+        if (descriptors.smartFit) receipt.smartFit = descriptors.smartFit;
+        for (var rp = 0; rp < nativeRollUpNames.length; rp++) if (descriptors[nativeRollUpNames[rp]]) receipt[nativeRollUpNames[rp]] = descriptors[nativeRollUpNames[rp]];
         receipt.revision = stringify({ documentRevision: snapshot.revision, timelineTicks: at, controls: descriptors });
         var sampledSequence = sequence(p.sequenceId, p.projectPath);
         if (nativeControlTicks(String(sampledSequence.getPlayerPosition().ticks)) !== at) throw new Error('The playhead moved while reading native caption controls. Read them again.');
@@ -1796,7 +1898,7 @@ var BetterCaptionsHost = (function () {
         catch (e) { return reply({ error: e.toString() }); }
     }
     function nativeControlCurves(receipt) {
-        var result = {}, names = ['position', 'width', 'height', 'groups'];
+        var result = {}, names = ['position', 'width', 'height', 'groups', 'smartFit'].concat(nativeRollUpNames);
         for (var i = 0; i < names.length; i++) {
             var descriptor = receipt[names[i]];
             if (!descriptor) continue;
@@ -1810,11 +1912,11 @@ var BetterCaptionsHost = (function () {
             var p = readPayload(file), request = p.request;
             if (!request || typeof request !== 'object' || request instanceof Array) throw new Error('Invalid native caption keyframe navigation.');
             for (var field in request) if (field !== 'revision' && field !== 'parameter' && field !== 'direction' && field !== 'atTicks') throw new Error('Unknown native caption keyframe navigation field.');
-            if (request.parameter !== 'position' && request.parameter !== 'width' && request.parameter !== 'height' && request.parameter !== 'groups' || request.direction !== 'previous' && request.direction !== 'next' || typeof request.revision !== 'string' || request.revision.length > nativeCarrierBytes) throw new Error('Invalid native caption keyframe navigation.');
+            if (!nativeKnownControl(request.parameter) || request.direction !== 'previous' && request.direction !== 'next' || typeof request.revision !== 'string' || request.revision.length > nativeCarrierBytes) throw new Error('Invalid native caption keyframe navigation.');
             nativeControlTicks(request.atTicks);
             var before = nativeControlContext(p).receipt, descriptor = before[request.parameter];
             if (request.revision !== before.revision || request.atTicks !== before.timelineTicks) throw new Error('The playhead or native controls changed. Read them again before navigating.');
-            if (!descriptor) throw new Error('Update the native caption effect to use Groups per page.');
+            if (!descriptor) throw new Error('Update the native caption effect to use this control.');
             if (!descriptor.animated || !descriptor.keyframesSupported) throw new Error('Enable animation in Effect Controls before navigating native caption keyframes.');
             var destination = null, destinationSource = null;
             for (var k = 0; k < descriptor.keys.length; k++) {
@@ -1855,13 +1957,16 @@ var BetterCaptionsHost = (function () {
             var p = readPayload(file), request = p.request;
             if (!request || typeof request !== 'object' || request instanceof Array) throw new Error('Invalid native caption control edit.');
             for (var field in request) if (field !== 'revision' && field !== 'parameter' && field !== 'operation' && field !== 'value' && field !== 'atTicks') throw new Error('Unknown native caption control edit field.');
-            if (request.parameter !== 'position' && request.parameter !== 'width' && request.parameter !== 'height' && request.parameter !== 'groups' || request.operation !== 'set' && request.operation !== 'reset' || typeof request.revision !== 'string' || request.revision.length > nativeCarrierBytes) throw new Error('Invalid native caption control operation.');
+            if (!nativeKnownControl(request.parameter) || request.operation !== 'set' && request.operation !== 'reset' || typeof request.revision !== 'string' || request.revision.length > nativeCarrierBytes) throw new Error('Invalid native caption control operation.');
             nativeControlTicks(request.atTicks);
             var before = nativeControlContext(p), receipt = before.receipt, name = request.parameter, descriptor = receipt[name], param = before.params[name];
             if (request.revision !== receipt.revision || request.atTicks !== receipt.timelineTicks) throw new Error('The playhead or native controls changed. Read them again before editing.');
             if (!receipt.insideClip) throw new Error('Move the playhead inside the native caption clip before editing.');
             if (typeof before.track.isLocked !== 'function' || before.track.isLocked()) throw new Error('Unlock the native caption track before editing.');
-            if (!descriptor || !param) throw new Error('Update the native caption effect to use Groups per page.');
+            if (!descriptor || !param) throw new Error('Update the native caption effect to use this control.');
+            var rollIndex = nativeRollUpIndex(name);
+            if ((name === 'smartFit' || rollIndex === 0 || rollIndex === 3 || rollIndex === 10) && request.operation === 'set' && request.value !== 0 && request.value !== 1) throw new Error('Native caption toggles must use numeric zero or one.');
+            if ((rollIndex === 1 || rollIndex === 7 || rollIndex === 8 || rollIndex === 11) && request.operation === 'set' && (typeof request.value !== 'number' || request.value !== Math.floor(request.value))) throw new Error('Native line counts and transition curves must use whole numbers.');
             var value = nativeControlValue(request.operation === 'reset' ? descriptor.defaultValue : request.value, name);
             if (request.operation === 'reset' && request.value !== undefined) throw new Error('A reset must use the native default.');
             if (descriptor.animated && (!descriptor.keyframesSupported || typeof param.setValueAtKey !== 'function' || !descriptor.hasKey && typeof param.addKey !== 'function') || !descriptor.animated && typeof param.setValue !== 'function') throw new Error('Premiere cannot edit this native caption control.');

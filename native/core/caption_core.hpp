@@ -12,6 +12,7 @@ constexpr std::size_t kMaxGroupsPerPage = 100;
 // Native integer sliders may interpolate fractional samples between keyframes.
 // Round finite host samples consistently; source/editor integer validation stays strict.
 std::size_t sampledGroupsPerPage(double);
+bool sampledSmartLineFit(double);
 struct Color { double r=1,g=1,b=1,a=1; };
 struct Word { std::string text; double start=0,end=0; bool endOfSentence=false; };
 struct WordStyle {
@@ -44,6 +45,10 @@ struct LayoutBox { double x=0,y=0,width=1536,height=300; };
 struct Metrics { double width=0,ascent=0,descent=0; };
 using TransformText=std::function<std::string(const std::string&,const Style&)>;
 using MeasureText=std::function<Metrics(const std::string&,const WordStyle&)>;
+// Actual shaped advance, maximum across all word states plus bubble padding,
+// greedily fills 95% of the box. Character-limit setting stays independent.
+std::vector<Phrase> regroupToWidth(const Document&,double width,const MeasureText&,
+                                 double pauseSeconds=0.6,const TransformText& transform={});
 struct DrawWord {
     std::string text;
     std::string containerId;
@@ -52,12 +57,33 @@ struct DrawWord {
     WordStyle style;
     double x=0,baseline=0,width=0,height=0;
 };
-struct Frame { std::vector<DrawWord> words; bool overflow=false; };
+struct RollUpSettings {
+    bool enabled=false;
+    std::size_t visibleLines=2;
+    double scrollDuration=.18;
+    bool boundaryEnabled=true;
+    double boundaryPosition=0,transitionThickness=.35,fadeAmount=1;
+    int transitionCurve=2; // 1 linear, 2 smooth, 3 ease-in, 4 ease-out
+    int direction=1; // 1 up, 2 down, 3 left, 4 right
+    double speed=1;
+    bool waitForLine=true;
+    int transition=1; // 1 scroll, 2 fade, 3 slide, 4 pop
+};
+RollUpSettings sampledRollUpSettings(double enabled,double lines,double duration,double boundary,
+    double position,double thickness,double fade,double curve,double direction=1,double speed=1,double wait=1,double transition=1);
+struct Frame {
+    std::vector<DrawWord> words;
+    bool overflow=false,rolling=false;
+    LayoutBox viewport;
+    RollUpSettings rollUp;
+};
+// Multiplies existing sharp pixels; never blurs or reconstructs the glyph image.
+double rollUpAlpha(double x,double y,const Frame&);
 // Host supplies real shaped font metrics. Commands retain independent styles and font sizes.
 // Box coordinates are top-left pixels; lines are centered within box, clipped by host.
 // Consecutive phrase groups share one page; every group starts a new line.
 // Pages do not cross manual containers. Source documents/word times stay unchanged.
 Frame layoutFrame(const Document&, double time, const LayoutBox&, const MeasureText&,
                   std::size_t maxChars=56,double pauseSeconds=0.6,const TransformText& transform={},
-                  std::size_t groupsPerPage=1);
+                  std::size_t groupsPerPage=1,bool smartLineFit=false,const RollUpSettings& rollUp={});
 } // namespace better_captions

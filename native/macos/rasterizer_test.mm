@@ -29,6 +29,29 @@ int main(){
  check(macos::rasterize(pages,1.5,{20,10,500,33},640,240,56,.6,3).overflow,"Multiple caption groups did not report independent height overflow");
  check(macos::rasterize(pages,3.5,{20,10,500,200},640,240,56,.6,3).pixels==macos::rasterize(pages,3.5,{20,10,500,200},640,240,56,.6,1).pixels,"Last partial page did not reset to the top of the caption box");
  check(encode(pages)==unchangedPages,"Page grouping changed persisted transcript or styles");
+ Document smart;smart.style.wordSpacing=4;smart.containers.push_back({"smart-fit",false,{{"iii",0,.3,false},{"iii",.4,.7,false},{"iii",.8,1.1,false},{"iii",1.2,1.5,false}}});
+ for(auto* s:{&smart.style.current,&smart.style.upcoming,&smart.style.spoken})s->fontSize=32;
+ const auto realMetrics=[](const std::string& text,const WordStyle& style){return macos::measureText(text,style);};
+ const auto skinnyGroups=regroupToWidth(smart,150,realMetrics);auto wide=smart;for(auto& word:wide.containers[0].words)word.text="WWW";
+ check(regroupToWidth(wide,150,realMetrics).size()>skinnyGroups.size(),"Real CoreText smart fitting did not distinguish narrow and wide letters");
+ const auto smartPixels=macos::rasterize(smart,.5,{20,10,150,200},640,240,1,.6,1,true);
+ check(count(smartPixels)>count(macos::rasterize(smart,.5,{20,10,150,200},640,240,1,.6,1,false)),"Rasterizer smart-fit switch did not override fixed character grouping");
+ RollUpSettings roll;roll.enabled=true;roll.boundaryEnabled=false;
+ const auto rollingPixels=macos::rasterize(pages,1.5,{20,10,500,200},640,240,56,.6,1,false,roll);
+ check(count(rollingPixels)>0,"Native roll-up produced no pixels");
+ roll.boundaryEnabled=true;const auto maskedPixels=macos::rasterize(pages,1.5,{20,10,500,200},640,240,56,.6,1,false,roll);
+ bool faded=false;for(std::size_t index=0;index<rollingPixels.pixels.size();++index){check(maskedPixels.pixels[index]<=rollingPixels.pixels[index],"Roll-up fade blurred or added pixels instead of masking existing sharp pixels");if(maskedPixels.pixels[index]<rollingPixels.pixels[index])faded=true;}
+ check(faded,"Soft roll-up boundary did not attenuate pixels");
+ for(std::size_t index=0;index<maskedPixels.pixels.size();index+=4)for(std::size_t channel=0;channel<3;++channel)check(maskedPixels.pixels[index+channel]<=maskedPixels.pixels[index+3],"Roll-up fade lost premultiplied alpha");
+ roll.boundaryEnabled=false;const auto atHalf=macos::rasterize(pages,1.5,{20,10,500,200},640,240,56,.6,1,false,roll);
+ check(atHalf.pixels==rollingPixels.pixels,"Backward scrubbing changed native rolling pixels");
+ for(int direction:{1,2,3,4}){roll.direction=direction;const auto moved=macos::rasterize(pages,2.09,{20,10,500,200},640,240,56,.6,1,false,roll);check(count(moved)>0,"A roll-up direction produced an empty transition");}
+ roll.direction=1;const auto scrollPixels=macos::rasterize(pages,1.09,{20,10,500,200},640,240,56,.6,1,false,roll);
+ for(int transition:{2,3,4}){
+  roll.transition=transition;const auto creative=macos::rasterize(pages,1.09,{20,10,500,200},640,240,56,.6,1,false,roll);
+  check(count(creative)>0&&creative.pixels!=scrollPixels.pixels,"A creative line transition did not change rendered caption pixels");
+  check(creative.pixels==macos::rasterize(pages,1.09,{20,10,500,200},640,240,56,.6,1,false,roll).pixels,"Creative transition depended on previous frame state");
+ }
  auto m=macos::measureText("Caption",d.style.current);check(m.width>0&&m.ascent>0,"Missing actual font metrics");
  bool failed=false;try{macos::rasterize(d,.5,box,100000,1);}catch(const std::invalid_argument&){failed=true;}check(failed,"Unbounded bitmap accepted");
  failed=false;try{macos::measureText(std::string("\xff"),d.style.current);}catch(const std::invalid_argument&){failed=true;}check(failed,"Malformed UTF-8 accepted");

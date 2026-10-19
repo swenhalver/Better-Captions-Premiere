@@ -81,16 +81,17 @@ Metrics measureText(const std::string& text,const WordStyle& style,double baseWe
  Document check;check.style.current=style;check.style.baseFontWeight=baseWeight;check.containers.push_back({"measure",false,{{text,0,1,false}}});validate(check);
  return Shaped(text,style,baseWeight).metrics();
 }
-Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::size_t width,std::size_t height,std::size_t maxChars,double pause,std::size_t groupsPerPage){
+Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::size_t width,std::size_t height,std::size_t maxChars,double pause,std::size_t groupsPerPage,bool smartLineFit,const RollUpSettings& rollUp){
  validate(document);
  if(!width||!height||width>8192||height>8192||width*height>33554432)throw std::invalid_argument("Native frame exceeds bitmap bounds");
  FrameFonts fonts;
- auto frame=layoutFrame(document,time,box,[&](const std::string& text,const WordStyle& style){return Shaped(text,style,document.style.baseFontWeight,&fonts).metrics();},maxChars,pause,transformText,groupsPerPage);
+ auto frame=layoutFrame(document,time,box,[&](const std::string& text,const WordStyle& style){return Shaped(text,style,document.style.baseFontWeight,&fonts).metrics();},maxChars,pause,transformText,groupsPerPage,smartLineFit,rollUp);
  Bitmap bitmap{width,height,width*4,std::vector<std::uint8_t>(width*height*4,0),frame.overflow};
  Ref<CGColorSpaceRef> space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
  Ref<CGContextRef> context(CGBitmapContextCreate(bitmap.pixels.data(),width,height,8,bitmap.stride,space,kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big));
  // Core Graphics coordinates are bottom-left; layout geometry is top-left.
  CGContextClipToRect(context,CGRectMake(box.x,height-box.y-box.height,box.width,box.height));
+ if(frame.rolling)CGContextClipToRect(context,CGRectMake(frame.viewport.x,height-frame.viewport.y-frame.viewport.height,frame.viewport.width,frame.viewport.height));
  for(const auto& run:frame.words){
   const auto& s=run.style;Shaped shaped(run.text,s,document.style.baseFontWeight,&fonts);auto m=shaped.metrics();double pad=s.bubble?s.padding:0;
   CGContextSaveGState(context);
@@ -119,6 +120,14 @@ Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::
   CTLineDraw(shaped.line,context);
   if(outlined&&shadow)CGContextEndTransparencyLayer(context);
   CGContextRestoreGState(context);
+ }
+ if(frame.rolling){
+  CGContextFlush(context);
+  for(std::size_t row=0;row<height;++row)for(std::size_t col=0;col<width;++col){
+   auto* pixel=&bitmap.pixels[row*bitmap.stride+col*4];if(!pixel[3])continue;
+   const auto alpha=rollUpAlpha(col+.5,row+.5,frame);
+   for(int channel=0;channel<4;++channel)pixel[channel]=static_cast<std::uint8_t>(std::lround(pixel[channel]*alpha));
+  }
  }
  return bitmap;
 }

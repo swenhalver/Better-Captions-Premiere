@@ -1,4 +1,5 @@
 import type { CaptionItem } from './types';
+import type { NativeLineFitStates } from '../cep-api';
 import { MAX_NATIVE_CARRIER_BYTES } from './native-effect/encode.ts';
 
 export interface LegacyCaptionConnection {
@@ -21,6 +22,10 @@ export interface LegacyCaptionConnection {
 export interface NativeCaptionConnection {
   kind: 'native-effect';
   maxChars?: number;
+  smartLineFit?: boolean;
+  lineFitWidth?: number;
+  lineFitFontScale?: number;
+  lineFitStates?: NativeLineFitStates;
   clipNodeId: string;
   projectItemId: string;
   trackIndex: number;
@@ -124,6 +129,16 @@ function validateSnapshot(value: CaptionConnections, expected: SequenceIdentity)
     localPath(entry.path); legacyNodes.add(entry.clipNodeId);
   }
   for (const entry of value.native) {
+    if(entry.smartLineFit!==undefined&&typeof entry.smartLineFit!=='boolean')fail();
+    if(entry.lineFitWidth!==undefined&&(!Number.isFinite(entry.lineFitWidth)||entry.lineFitWidth<1||entry.lineFitWidth>8192))fail();
+    if(entry.lineFitFontScale!==undefined&&(!Number.isFinite(entry.lineFitFontScale)||entry.lineFitFontScale<=0||entry.lineFitFontScale>100))fail();
+    if(entry.lineFitStates!==undefined){
+      if(!record(entry.lineFitStates))fail();
+      for(const key of ['upcoming','current','spoken'] as const){
+        const state=entry.lineFitStates[key];
+        if(!record(state)||!Number.isFinite(state.sizeScale)||state.sizeScale<0.01||state.sizeScale>4||![1,2,3].includes(state.bubbleMode)||!Number.isFinite(state.paddingScale)||state.paddingScale<0||state.paddingScale>4)fail();
+      }
+    }
     if (entry.maxChars !== undefined && (!Number.isInteger(entry.maxChars) || entry.maxChars < 1 || entry.maxChars > 500)) fail();
     const locator = entry.locator;
     if (entry.kind !== 'native-effect' || !validText(entry.matchName, 512) || !record(locator) || locator.clipNodeId !== entry.clipNodeId || locator.trackIndex !== entry.trackIndex || locator.clipIndex !== entry.clipIndex || !index(locator.componentIndex) || !index(locator.documentParamIndex) || typeof locator.projectPath !== 'string' || !validText(locator.sequenceId)) fail();

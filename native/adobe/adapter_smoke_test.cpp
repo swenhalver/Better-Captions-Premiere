@@ -111,5 +111,20 @@ int main(int argc,char** argv){try{
  values[GroupsPerPage].u.fs_d.value=3;check(differs(singleGroupPixels,typographyFrame()),"Compiled groups-per-page scalar did not change native caption rendering");
  const auto threeGroupPixels=typographyFrame();values[GroupsPerPage].u.fs_d.value=2.7;
  check(!differs(threeGroupPixels,typographyFrame()),"Compiled fractional group sample did not round consistently");
+ fixture=better_captions::Document{};fixture.containers.push_back({"smart-fit",false,{{"iii",0,.5,false},{"iii",.5,1,false},{"iii",1,1.5,false},{"iii",1.5,2,false}}});
+ values[GroupsPerPage].u.fs_d.value=1;values[MaxChars].u.fs_d.value=1;values[Width].u.fs_d.value=200;in.current_time=20;
+ values[SmartLineFit].u.fs_d.value=0;const auto fixedCharacterPixels=typographyFrame();
+ values[SmartLineFit].u.fs_d.value=1;check(differs(fixedCharacterPixels,typographyFrame()),"Compiled smart-line-fit scalar did not change native phrase rendering");
+ fixture=better_captions::Document{};fixture.containers.push_back({"native-roll",false,{{"First.",0,1,true},{"Second.",1,2,true},{"Third.",2,3,true},{"Fourth.",3,4,true}}});
+ values[MaxChars].u.fs_d.value=56;values[Width].u.fs_d.value=500;values[Height].u.fs_d.value=240;values[SmartLineFit].u.fs_d.value=0;
+ values[RollUpEnabled].u.fs_d.value=1;values[RollUpLines].u.fs_d.value=2;values[RollUpDuration].u.fs_d.value=.18;values[RollUpBoundary].u.fs_d.value=0;
+ values[RollUpPosition].u.fs_d.value=0;values[RollUpThickness].u.fs_d.value=.35;values[RollUpFade].u.fs_d.value=1;values[RollUpCurve].u.fs_d.value=2;
+ values[RollUpDirection].u.fs_d.value=1;values[RollUpSpeed].u.fs_d.value=1;values[RollUpWait].u.fs_d.value=1;
+ in.time_scale=100;in.current_time=109;const auto rollTransitionPixels=typographyFrame();in.current_time=119;
+ check(differs(rollTransitionPixels,typographyFrame()),"Compiled roll-up source clock did not animate the lines");
+ values[RollUpBoundary].u.fs_d.value=1;const auto fadingRollPixels=typographyFrame();values[RollUpBoundary].u.fs_d.value=0;
+ check(differs(fadingRollPixels,typographyFrame()),"Compiled roll-up fade did not change sharp text pixels");
+ in.current_time=109;values[LineTransition].u.fs_d.value=1;const auto scrollingPixels=typographyFrame();
+ for(int transition:{2,3,4}){values[LineTransition].u.fs_d.value=transition;check(differs(scrollingPixels,typographyFrame()),"Compiled creative line transition did not change caption pixels");}
  dlclose(binary);std::cout<<"Compiled adapter smoke passed: ARGB/determinism/reflow/half-resolution and pixel-equal persisted adjustment-origin Razor frames; not host acceptance.\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

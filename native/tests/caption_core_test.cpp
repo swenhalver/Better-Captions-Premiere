@@ -132,6 +132,105 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  assert(sampledGroupsPerPage(-1e308)==1&&sampledGroupsPerPage(0)==1&&sampledGroupsPerPage(100.4)==100&&sampledGroupsPerPage(1e308)==100);
  for(double badGroups:{std::numeric_limits<double>::infinity(),-std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()})rejects([&]{sampledGroupsPerPage(badGroups);});
  assert(layoutFrame(pages,1.2,{0,0,1200,1000},measure,11,.6,{},sampledGroupsPerPage(2.7)).words.size()==6);
+ // Smart fitting uses shaped pixel advances, independent of a source character
+ // limit. Narrow and wide letters therefore produce different phrase sizes.
+ Document smart;smart.style.wordSpacing=2;smart.containers.push_back({"smart",false,{{"iii",0,.2,false},{"iii",.3,.5,false},{"WWW",.6,.8,false},{"WWW",.9,1.1,false}}});
+ for(auto* style:{&smart.style.current,&smart.style.upcoming,&smart.style.spoken})style->fontSize=10;
+ auto variableMeasure=[](const std::string& text,const WordStyle& style){double width=0;for(char c:text)width+=c=='W'?8:1;const auto scale=style.fontSize*style.sizeScale/10;return Metrics{width*scale,8*scale,2*scale};};
+ const auto smartBytes=encode(smart);const auto smartGroups=regroupToWidth(smart,40,variableMeasure);
+ assert(smartGroups.size()==2&&smartGroups[0].wordCount==3&&smartGroups[1].wordCount==1);
+ const auto smartFrame=layoutFrame(smart,.1,{0,0,40,500},variableMeasure,1,.6,{},1,true);
+ assert(smartFrame.words.size()==3&&!smartFrame.overflow); // maxChars=1 is preserved, not applied in smart mode.
+ assert(layoutFrame(smart,.1,{0,0,40,500},variableMeasure,1).words.size()==1);
+ auto skinny=smart;for(auto& word:skinny.containers[0].words)word.text="iii";
+ auto wide=smart;for(auto& word:wide.containers[0].words)word.text="WWW";
+ assert(regroupToWidth(skinny,40,variableMeasure).size()==1&&regroupToWidth(wide,40,variableMeasure).size()==4);
+ // Reserve exactly 5% even when the raw measured text would fit in the box.
+ auto margin=skinny;margin.containers[0].words.resize(2);
+ auto eighteen=[](const std::string&,const WordStyle&){return Metrics{18,8,2};};
+ auto overEighteen=[](const std::string&,const WordStyle&){return Metrics{18.1,8,2};};
+ assert(regroupToWidth(margin,40,eighteen).size()==1&&regroupToWidth(margin,40,overEighteen).size()==2);
+ // Every word reserves its largest upcoming/current/spoken appearance. The
+ // grouping does not jump when a large highlighted/bubbled word becomes active.
+ auto reserved=skinny;reserved.style.current.sizeScale=3;reserved.style.current.bubble=true;reserved.style.current.padding=5;
+ assert(regroupToWidth(reserved,40,variableMeasure).size()==4);
+ const auto reservedEarly=layoutFrame(reserved,.1,{0,0,40,500},variableMeasure,56,.6,{},4,true);
+ const auto reservedLater=layoutFrame(reserved,.4,{0,0,40,500},variableMeasure,56,.6,{},4,true);
+ assert(reservedEarly.words.size()==4&&reservedLater.words.size()==4);
+ for(std::size_t i=0;i<4;++i)assert(reservedEarly.words[i].wordIndex==reservedLater.words[i].wordIndex&&reservedEarly.words[i].containerId==reservedLater.words[i].containerId);
+ assert(reservedEarly.words[1].baseline>reservedEarly.words[0].baseline);
+ auto spokenReserved=skinny;spokenReserved.style.spoken.fontSize=100;assert(regroupToWidth(spokenReserved,40,variableMeasure).size()==4);
+ auto breaks=skinny;breaks.containers[0].words[0].endOfSentence=true;breaks.containers[0].words[2].start=2;breaks.containers[0].words[2].end=2.2;breaks.containers[0].words[3].start=2.3;breaks.containers[0].words[3].end=2.5;
+ breaks.containers.push_back({"manual-smart",true,{{"iii",3,4,false}}});
+ const auto smartBreaks=regroupToWidth(breaks,1000,variableMeasure);assert(smartBreaks.size()==4&&smartBreaks[0].wordCount==1&&smartBreaks[1].wordCount==1&&smartBreaks[2].wordCount==2&&smartBreaks[3].containerId=="manual-smart");
+ const auto overlong=layoutFrame(wide,.1,{0,0,5,500},variableMeasure,56,.6,{},1,true);assert(overlong.words.size()==1&&overlong.words[0].text=="WWW"&&overlong.overflow);
+ assert(encode(smart)==smartBytes);
+ assert(!sampledSmartLineFit(-100)&&!sampledSmartLineFit(.49)&&sampledSmartLineFit(.5)&&sampledSmartLineFit(100));
+ rejects([&]{sampledSmartLineFit(std::numeric_limits<double>::quiet_NaN());});
+ rejects([&]{regroupToWidth(smart,0,variableMeasure);});rejects([&]{regroupToWidth(smart,40,[](const std::string&,const WordStyle&){return Metrics{-1,0,0};});});
+ // Native roll-up retains stable row packing while revealing only started words.
+ // Scrolling is a pure source-time function, so scrubbing backward never depends
+ // on previous rendered frames or an external animation clock.
+ Document rolling;rolling.containers.push_back({"rolling",false,{{"First.",0,1,true},{"Second.",1,2,true},{"Third.",2,3,true},{"Fourth.",3,4,true}}});
+ for(auto* style:{&rolling.style.current,&rolling.style.upcoming,&rolling.style.spoken})style->fontSize=10;
+ RollUpSettings roll;roll.enabled=true;roll.boundaryEnabled=false;
+ const auto rollingBytes=encode(rolling);
+ auto rollFrame=[&](double time,const RollUpSettings& settings,std::size_t groups=1){return layoutFrame(rolling,time,{0,0,200,100},measure,56,.6,{},groups,false,settings);};
+ const auto initialRoll=rollFrame(.5,roll),middleRoll=rollFrame(1.09,roll),finishedRoll=rollFrame(1.18,roll);
+ assert(initialRoll.rolling&&initialRoll.words.size()==1&&initialRoll.words[0].wordIndex==0&&initialRoll.words[0].state==WordState::Current);
+ assert(initialRoll.viewport.height==26&&initialRoll.viewport.y==37&&initialRoll.words[0].baseline==58);
+ assert(middleRoll.words.size()==2&&middleRoll.words[0].baseline<initialRoll.words[0].baseline&&middleRoll.words[0].baseline>finishedRoll.words[0].baseline);
+ assert(finishedRoll.words.size()==2&&finishedRoll.words[0].state==WordState::Spoken&&finishedRoll.words[1].state==WordState::Current);
+ const auto backwards=rollFrame(.5,roll);assert(backwards.words[0].baseline==initialRoll.words[0].baseline&&backwards.words[0].x==initialRoll.words[0].x);
+ const auto ignoredPages=rollFrame(1.18,roll,100);assert(ignoredPages.words.size()==finishedRoll.words.size());
+ for(std::size_t index=0;index<finishedRoll.words.size();++index)assert(ignoredPages.words[index].x==finishedRoll.words[index].x&&ignoredPages.words[index].baseline==finishedRoll.words[index].baseline);
+ auto continuousRoll=roll;continuousRoll.waitForLine=false;assert(rollFrame(.5,continuousRoll).words[0].baseline<initialRoll.words[0].baseline);
+ auto fasterRoll=roll;fasterRoll.speed=2;assert(std::abs(rollFrame(1.045,fasterRoll).words[0].baseline-middleRoll.words[0].baseline)<1e-10);
+ auto instantRoll=roll;instantRoll.scrollDuration=0;assert(rollFrame(1,instantRoll).words.size()==2);
+ auto downRoll=roll;downRoll.direction=2;assert(rollFrame(.5,downRoll).words[0].baseline==45);assert(rollFrame(1.18,downRoll).words[0].baseline==58);
+ auto leftRoll=roll;leftRoll.direction=3;const auto leftBefore=rollFrame(1.5,leftRoll),leftDuring=rollFrame(2.09,leftRoll);
+ assert(leftBefore.words.size()==2&&leftDuring.words.size()==3&&leftDuring.words[0].x<leftBefore.words[0].x);
+ auto rightRoll=leftRoll;rightRoll.direction=4;assert(rollFrame(2.09,rightRoll).words[0].x>leftBefore.words[0].x);
+ const auto clippedRoll=layoutFrame(rolling,.5,{0,0,200,5},measure,56,.6,{},1,false,roll);assert(clippedRoll.overflow&&clippedRoll.viewport.height==5);
+ assert(rollFrame(4,roll).words.empty());
+ auto manualRoll=rolling;manualRoll.containers.push_back({"manual-roll",true,{{"New.",5,6,true}}});
+ const auto manualFrame=layoutFrame(manualRoll,5.2,{0,0,200,100},measure,56,.6,{},1,false,roll);
+ assert(manualFrame.words.size()==1&&manualFrame.words[0].containerId=="manual-roll");
+ // Fade is an alpha mask over sharp text. Its exit edge follows direction and
+ // curves, including the original hard-zero region above a moved boundary.
+ auto mask=initialRoll;mask.rollUp.boundaryEnabled=true;mask.rollUp.transitionCurve=1;mask.rollUp.transitionThickness=.5;mask.rollUp.fadeAmount=1;
+ assert(rollUpAlpha(100,37,mask)==0&&rollUpAlpha(100,43.5,mask)==.5&&rollUpAlpha(100,50,mask)==1&&rollUpAlpha(100,36,mask)==0);
+ mask.rollUp.direction=2;assert(rollUpAlpha(100,62.9,mask)<.01&&rollUpAlpha(100,56.5,mask)==.5);
+ mask.rollUp.direction=3;assert(rollUpAlpha(0,50,mask)==0&&rollUpAlpha(50,50,mask)==.5&&rollUpAlpha(100,50,mask)==1);
+ mask.rollUp.direction=4;assert(rollUpAlpha(199.9,50,mask)<.01&&rollUpAlpha(150,50,mask)==.5);
+ mask.rollUp.direction=1;mask.rollUp.transitionCurve=3;assert(rollUpAlpha(100,43.5,mask)==.75);mask.rollUp.transitionCurve=4;assert(rollUpAlpha(100,43.5,mask)==.25);
+ mask.rollUp.boundaryPosition=.5;mask.rollUp.fadeAmount=0;assert(rollUpAlpha(100,43,mask)==0&&rollUpAlpha(100,51,mask)==1);
+ mask.rollUp.boundaryEnabled=false;assert(rollUpAlpha(100,43,mask)==1);
+ assert(encode(rolling)==rollingBytes);
+ const auto sampledRoll=sampledRollUpSettings(.5,2.7,.18,.5,0,.35,1,1.5,2.7,2,.5);
+ assert(sampledRoll.enabled&&sampledRoll.visibleLines==3&&sampledRoll.transitionCurve==2&&sampledRoll.direction==3&&sampledRoll.speed==2&&sampledRoll.waitForLine);
+ rejects([&]{sampledRollUpSettings(1,2,std::numeric_limits<double>::infinity(),1,0,.35,1,2);});
+ auto invalidRoll=roll;invalidRoll.visibleLines=9;rejects([&]{rollFrame(.5,invalidRoll);});invalidRoll=roll;invalidRoll.speed=0;rejects([&]{rollFrame(.5,invalidRoll);});
+ // Creative transitions crossfade the neighbouring settled windows. They keep
+ // the default wait policy, source-time determinism and settled row geometry.
+ for(int transition:{2,3,4}){
+  auto creative=roll;creative.transition=transition;
+  const auto before=rollFrame(.5,creative),during=rollFrame(1.09,creative),after=rollFrame(1.18,creative);
+  assert(before.words.size()==initialRoll.words.size()&&before.words[0].x==initialRoll.words[0].x&&before.words[0].baseline==initialRoll.words[0].baseline);
+  assert(during.words.size()>=2);bool translucent=false;for(const auto& run:during.words){assert(run.style.opacity>=0&&run.style.opacity<=1);if(run.style.opacity<.999)translucent=true;assert(run.wordIndex<=1);}
+  assert(translucent&&after.words.size()==finishedRoll.words.size());
+  for(std::size_t index=0;index<after.words.size();++index)assert(after.words[index].x==finishedRoll.words[index].x&&after.words[index].baseline==finishedRoll.words[index].baseline&&after.words[index].style.fontSize==finishedRoll.words[index].style.fontSize&&after.words[index].style.opacity==finishedRoll.words[index].style.opacity);
+  const auto again=rollFrame(1.09,creative);for(std::size_t index=0;index<during.words.size();++index)assert(again.words[index].x==during.words[index].x&&again.words[index].baseline==during.words[index].baseline&&again.words[index].style.opacity==during.words[index].style.opacity);
+  if(transition==4)for(const auto& run:during.words)assert(run.style.fontSize<10&&run.style.fontSize>=8);
+  for(int direction:{1,2,3,4}){creative.direction=direction;const auto frame=rollFrame(direction>=3?2.09:1.09,creative);assert(!frame.words.empty());for(const auto& run:frame.words)assert(std::isfinite(run.x)&&std::isfinite(run.baseline)&&run.width>0);}
+ }
+ assert(sampledRollUpSettings(1,2,.18,1,0,.35,1,2,1,1,1,3.5).transition==4);
+ invalidRoll=roll;invalidRoll.transition=5;rejects([&]{rollFrame(.5,invalidRoll);});
+ // Repeated words need at most one shaped metric read for each distinct font
+ // state per render, even when smart fitting and rolling layout both use them.
+ Document repeated;repeated.containers.push_back({"many",false,{}});for(std::size_t index=0;index<1000;++index)repeated.containers[0].words.push_back({"same",index*.1,index*.1+.1,false});
+ int metricReads=0;const auto repeatedFrame=layoutFrame(repeated,50,{0,0,300,200},[&](const std::string& text,const WordStyle& style){++metricReads;return measure(text,style);},56,.6,{},1,true,roll);
+ assert(metricReads<=3&&repeatedFrame.words.size()<30);
  // Deterministic malformed-buffer stress: decode can reject or return a valid bounded document.
  std::uint32_t seed=17;for(unsigned trial=0;trial<1000;++trial){auto mutated=encoded;seed=1664525*seed+1013904223;auto index=seed%mutated.size();seed=1664525*seed+1013904223;mutated[index]^=static_cast<std::uint8_t>(seed>>24);try{validate(decode(mutated));}catch(const std::invalid_argument&){} }
  std::cout<<"caption_core: grouping, layout, styling, timing, codec and malformed-data checks passed\n";

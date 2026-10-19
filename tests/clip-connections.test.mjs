@@ -210,3 +210,13 @@ test('a sole enabled native clip reconnects above disabled movie backups without
 test('connection visibility must be an actual boolean when supplied',()=>{
  for(const disabled of ['true',0,null])assert.throws(()=>reconnect([caption()],snapshot([legacy({disabled})])),/malformed/);
 });
+
+test('native Smart fit state samples are complete bounded metadata and do not mutate saved edits', () => {
+  const defaults={sizeScale:1,bubbleMode:1,paddingScale:1};
+  const states={upcoming:{...defaults,sizeScale:.01},current:{...defaults,bubbleMode:2},spoken:{...defaults,paddingScale:4}};
+  const input=freeze([caption()]);
+  assert.doesNotThrow(()=>reconnect(input,snapshot([],[native({lineFitStates:states})])));
+  for(const lineFitStates of [null,{}, {...states,current:undefined},{...states,current:{...defaults,sizeScale:0}},{...states,current:{...defaults,bubbleMode:0}},{...states,current:{...defaults,paddingScale:Infinity}}])
+    assert.throws(()=>reconnect(input,snapshot([],[native({lineFitStates})])),/malformed/);
+  assert.equal(input[0].text,'Keep these words');
+});
