@@ -20,6 +20,8 @@ function system(t,options={}){
  const nativeClip={nodeId:'native-node',projectItem:{nodeId:'native-item',getMediaPath:()=>''},start:time(0),end:time(2),inPoint:time(0),outPoint:time(2),isAdjustmentLayer:()=>true,isSelected:()=>true,
   components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([documentParam])}])};
  const nativeTrack={clips:collection([nativeClip]),isLocked:()=>false};
+ if(options.itemlessGraphic)nativeTrack.clips.unshift({nodeId:'000f4244',projectItem:null,isSelected:()=>true,
+  components:collection(['AE.ADBE Opacity','AE.ADBE Motion','AE.ADBE Graphic Group','AE.ADBE Text'].map(matchName=>({matchName})))});
  const nativeSequence={sequenceID:'seq-a',name:'Captions',timebase:'10584000000',frameSizeHorizontal:720,frameSizeVertical:1280,end:String(2*254016000000),getPlayerPosition:()=>time(.5),videoTracks:collection([nativeTrack],'numTracks'),audioTracks:collection([],'numTracks')};
  const nativeProject={get path(){return options.cepPath?options.cepPath(projectPath):projectPath;},activeSequence:nativeSequence};
  const nativeContext=vm.createContext({app:{project:nativeProject},File:function(file){this.length=(payloads.get(file)??'').length;this.open=()=>payloads.has(file);this.read=()=>payloads.get(file);this.close=()=>{};}});
@@ -89,6 +91,15 @@ for(const cepExtended of [false,true])test('extended UXP drive paths share exact
  await h.nativeApi.getActiveSequenceInfo();await h.cep.getActiveSequenceInfo();
  await assert.rejects(h.nativeApi.saveSession(saved),/another project path/);await assert.rejects(h.cep.saveSession(saved),/another project path/);
  assert.equal(h.nativeWrites.length,1);assert.equal(h.requests.length,2);assert.equal(h.sidecars.length,1);assert.equal(h.cepSaves.length,1);
+});
+
+test('an itemless Graphic no longer blocks connection initialization across the actual adapters',async t=>{
+ const h=system(t,{itemlessGraphic:true});await tick();await h.api.getActiveSequenceInfo();
+ const result=await h.api.readCaptionConnections();
+ assert.equal(result.ok,true);assert.deepEqual(Array.from(result.selectedClipNodeIds),['000f4244','native-node']);
+ assert.equal(result.native.length,1);assert.equal(result.native[0].clipNodeId,'native-node');assert.equal(result.native[0].locator.clipIndex,1);assert.equal(result.legacy.length,0);assert.equal(result.warnings.length,0);
+ await assert.rejects(h.api.readCaptionConnections(undefined,[{id:'saved',clipNodeId:'000f4244',projectItemId:'old-item',mediaPath:'/first/caption.mov'}]),/saved caption media item.*no longer available/);
+ assert.equal(h.nativeWrites.length,0);assert.equal(h.sidecars.length,0);assert.equal(h.cepSaves.length,0);assert.equal(h.payloads.size,0);
 });
 
 test('a native setter readback failure stays typed and nonrecoverable across all actual transport adapters',async t=>{

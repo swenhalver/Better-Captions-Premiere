@@ -42,6 +42,48 @@ test('native discovery has exact identities and byte-identical existing adapter 
  assert.equal(existing.ok,true);assert.equal(entry.documentText,existing.documentText);assert.equal(entry.revision,existing.revision);
  assert.deepEqual(f.sideEffects,[]);assert.deepEqual(f.writes,[]);
 });
+test('itemless native Graphics retain selection and component scanning without hiding valid caption connections',()=>{
+ for(const absent of [null,undefined]){
+  const f=fixture();f.native();const graphic=f.clip('000f4244',''),movie=f.clip('movie','/project/Better Captions/seq-a/caption-owned/caption.mov');
+  graphic.projectItem=absent;graphic.selected=true;let scanned=0;
+  graphic.components=collection(['AE.ADBE Opacity','AE.ADBE Motion','AE.ADBE Graphic Group','AE.ADBE Text'].map(name=>({get matchName(){scanned++;return name;}})));
+  f.clips.unshift(graphic);f.clips.push(movie);
+  const result=f.read();assert.equal(result.ok,true);assert.deepEqual(result.selectedClipNodeIds,['000f4244']);assert.equal(scanned,4);
+  assert.deepEqual(result.native.map(entry=>entry.clipNodeId),['native']);assert.deepEqual(result.legacy.map(entry=>entry.clipNodeId),['movie']);assert.deepEqual(result.warnings,[]);
+  assert.equal(graphic.projectItem,absent);assert.equal(graphic.selected,true);assert.deepEqual(f.writes,[]);assert.deepEqual(f.sideEffects,[]);
+ }
+});
+
+test('itemless Graphics still require valid unique clip identities and bounded component collections',()=>{
+ for(const kind of ['missing-node','duplicate-node','components']){
+  const f=fixture(),graphic=f.clip('graphic','');graphic.projectItem=null;f.clips.push(graphic);
+  if(kind==='missing-node')delete graphic.nodeId;
+  if(kind==='duplicate-node'){const other=f.clip('graphic','');other.projectItem=null;f.clips.push(other);}
+  if(kind==='components')graphic.components={numItems:129};
+  assert.ok(f.read().error,kind);assert.deepEqual(f.writes,[]);assert.deepEqual(f.sideEffects,[]);
+ }
+});
+
+test('an exact saved caption node with a vanished ProjectItem cannot be silently ignored',()=>{
+ for(const absent of [null,undefined]){
+  const f=fixture(),clip=f.clip('saved-node','/old/caption.mov');f.clips.push(clip);
+  const link={id:'saved',clipNodeId:clip.nodeId,projectItemId:clip.projectItem.nodeId,mediaPath:clip.projectItem.getMediaPath()};clip.projectItem=absent;
+  assert.match(f.read({knownLinks:[link]}).error,/saved caption media item.*no longer available/);
+  assert.equal(f.read({knownLinks:[{...link,clipNodeId:'different-node'}]}).ok,true,'unrelated Graphics do not adopt a stale saved link');
+  assert.deepEqual(f.writes,[]);assert.deepEqual(f.sideEffects,[]);
+ }
+});
+
+test('native caption effects with missing ProjectItems remain unverified and cannot reach the document setter',()=>{
+ for(const absent of [null,undefined]){
+  const f=fixture(),n=f.native(),saved=snapshot(f.read().native[0]);n.clip.projectItem=absent;
+  const result=f.read();assert.equal(result.ok,true);assert.deepEqual(result.native,[]);assert.equal(result.warnings.length,1,'native components must still be inspected');
+  assert.ok(f.write(saved).error);assert.equal(f.counts.documents,1,'invalid native ownership is rejected before document reads or writes');assert.deepEqual(f.writes,[]);assert.deepEqual(f.sideEffects,[]);
+ }
+ const malformed=fixture(),clip=malformed.clip('broken','');clip.projectItem={};malformed.clips.push(clip);
+ assert.ok(malformed.read().error,'a present but invalid ProjectItem keeps its strict identity requirement');assert.deepEqual(malformed.writes,[]);assert.deepEqual(malformed.sideEffects,[]);
+});
+
 test('summary discovery never fetches document data and its revision changes for timing and selection',()=>{
  const f=fixture(),n=f.native();n.param.readFailure=true;
  const first=f.read({includeDocuments:false});assert.equal(first.native.length,1);assert.equal(first.native[0].documentText,undefined);assert.equal(first.native[0].revision,undefined);assert.equal(f.counts.documents,0);

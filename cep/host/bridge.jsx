@@ -1347,7 +1347,7 @@ var BetterCaptionsHost = (function () {
     }
     function knownConnectionLinks(value) {
         if (!(value instanceof Array) || value.length > 10000) throw new Error('Invalid saved caption connection links.');
-        var items = {}, paths = {}, ids = {};
+        var items = {}, paths = {}, ids = {}, nodes = {};
         for (var i = 0; i < value.length; i++) {
             var link = value[i];
             if (!link || typeof link.id !== 'string' || !link.id || link.id.length > 256 || ids['$' + link.id] || !localMediaPath(link.mediaPath)) throw new Error('Invalid saved caption connection identity.');
@@ -1355,8 +1355,9 @@ var BetterCaptionsHost = (function () {
             var itemId = connectionId(link.projectItemId), path = comparableMediaPath(link.mediaPath);
             if (items['$' + itemId] !== undefined && items['$' + itemId] !== path || paths['$' + path] !== undefined && paths['$' + path] !== itemId) throw new Error('Saved caption media identities are ambiguous.');
             items['$' + itemId] = path; paths['$' + path] = itemId;
+            if (typeof link.clipNodeId === 'string' && link.clipNodeId) nodes['$' + connectionId(link.clipNodeId)] = true;
         }
-        return { items: items, paths: paths };
+        return { items: items, paths: paths, nodes: nodes };
     }
     function generatedConnectionPath(path, root) {
         if (!localMediaPath(path)) return false;
@@ -1383,14 +1384,21 @@ var BetterCaptionsHost = (function () {
                     seenNodes['$' + node] = true;
                     var isSelected = typeof clip.isSelected === 'function' && clip.isSelected() === true;
                     if (isSelected) selected.push(node);
-                    var item = clip.projectItem, itemId = connectionId(item && item.nodeId), path = typeof item.getMediaPath === 'function' ? item.getMediaPath() : '', normalized = localMediaPath(path) ? comparableMediaPath(path) : null, matched = false;
-                    var expectedPath = known.items['$' + itemId], expectedItem = normalized === null ? undefined : known.paths['$' + normalized];
-                    if (expectedPath !== undefined && expectedPath !== normalized || expectedItem !== undefined && expectedItem !== itemId) throw new Error('A saved caption media identity changed. Automatic reconnection was refused.');
-                    matched = expectedPath !== undefined && expectedPath === normalized;
-                    if (matched || generatedConnectionPath(path, p.generatedRoot)) {
-                        var timing = connectionTiming(clip);
-                        legacy.push({ kind: 'generated-movie', clipNodeId: node, projectItemId: itemId, path: path, trackIndex: t, clipIndex: c,
-                            startTime: Number(timing.startTicks) / TICKS, endTime: Number(timing.endTicks) / TICKS, startTicks: timing.startTicks, endTicks: timing.endTicks, inTicks: timing.inTicks, outTicks: timing.outTicks, selected: isSelected });
+                    var item = clip.projectItem;
+                    if (item === undefined || item === null) {
+                        // Premiere-native Graphics can have a TrackItem ID without a ProjectItem.
+                        // They cannot match legacy media; a saved exact node must still fail closed.
+                        if (known.nodes['$' + node]) throw new Error('A saved caption media item is no longer available. Automatic reconnection was refused.');
+                    } else {
+                        var itemId = connectionId(item && item.nodeId), path = typeof item.getMediaPath === 'function' ? item.getMediaPath() : '', normalized = localMediaPath(path) ? comparableMediaPath(path) : null, matched = false;
+                        var expectedPath = known.items['$' + itemId], expectedItem = normalized === null ? undefined : known.paths['$' + normalized];
+                        if (expectedPath !== undefined && expectedPath !== normalized || expectedItem !== undefined && expectedItem !== itemId) throw new Error('A saved caption media identity changed. Automatic reconnection was refused.');
+                        matched = expectedPath !== undefined && expectedPath === normalized;
+                        if (matched || generatedConnectionPath(path, p.generatedRoot)) {
+                            var timing = connectionTiming(clip);
+                            legacy.push({ kind: 'generated-movie', clipNodeId: node, projectItemId: itemId, path: path, trackIndex: t, clipIndex: c,
+                                startTime: Number(timing.startTicks) / TICKS, endTime: Number(timing.endTicks) / TICKS, startTicks: timing.startTicks, endTicks: timing.endTicks, inTicks: timing.inTicks, outTicks: timing.outTicks, selected: isSelected });
+                        }
                     }
                     var components = clip.components;
                     if (!components) continue;
