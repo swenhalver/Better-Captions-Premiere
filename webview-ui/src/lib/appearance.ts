@@ -1,14 +1,15 @@
 import type { StyleConfig, WordAppearance } from './types';
+import { resolveFontWeight, nextFontWeight } from './font-catalog.ts';
 
 export type WordStateKey = 'upcomingWord' | 'activeWord' | 'spokenWord';
 export type ResolvedAppearance = Required<WordAppearance>;
 /** Missing per-state effects inherit the old global values when loading earlier sessions. */
 export function resolveAppearance(style: StyleConfig, key: WordStateKey): ResolvedAppearance {
   const base: ResolvedAppearance = {
-    fontFamily: style.fontFamily, fontWeight: style.fontWeight, fontSize: style.fontSize,
-    sizeScale: 1, color: style.textColor, opacity: 1, italic: false, letterSpacing: 0,
+    fontFamily: style.fontFamily, fontWeight: style.fontWeight, fontWeightOffset: null, fontSize: style.fontSize,
+    sizeScale: 1, color: style.textColor, opacity: 1, italic: false, underline: false, letterSpacing: 0,
     textTransform: style.textTransform, bubble: false, bubbleColor: '#000000',
-    bubbleOpacity: 1, padding: 8, radius: 10,
+    bubbleOpacity: 1, bubbleFillSpaces: false, padding: 8, bubblePaddingInline: 8, bubblePaddingBlock: 8, radius: 10,
     strokeEnabled: style.strokeEnabled, strokeColor: style.strokeColor,
     strokeOpacity: style.strokeOpacity, strokeWidth: style.strokeWidth,
     shadowEnabled: style.shadowEnabled, shadowColor: style.shadowColor,
@@ -16,7 +17,12 @@ export function resolveAppearance(style: StyleConfig, key: WordStateKey): Resolv
     shadowOffsetX: style.shadowOffsetX, shadowOffsetY: style.shadowOffsetY,
   };
   const saved = style[key];
-  return { ...base, ...saved, fontFamily: saved?.fontFamily || style.fontFamily,
+  const family = saved?.fontFamily || style.fontFamily;
+  return { ...base, ...saved, fontFamily: family,
+    bubblePaddingInline: saved?.bubblePaddingInline ?? saved?.padding ?? base.padding,
+    bubblePaddingBlock: saved?.bubblePaddingBlock ?? saved?.padding ?? base.padding,
+    fontWeight: saved?.fontWeightOffset === 100 ? nextFontWeight(family, style.fontWeight)
+      : resolveFontWeight(family, saved?.fontWeightOffset === 0 ? style.fontWeight : saved?.fontWeight ?? style.fontWeight),
     fontSize: saved?.fontSize ?? style.fontSize * (saved?.sizeScale ?? 1) };
 }
 

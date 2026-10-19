@@ -11,7 +11,7 @@
   ];
   function number(event: Event) { return Number((event.target as HTMLInputElement).value); }
 </script>
-<details class="caption-section animation-panel" open>
+<details class="caption-section animation-panel">
   <summary class="caption-section__heading">Animation & fades</summary>
   <div class="caption-section__body">
     <label class="caption-field"><span>Animation</span><select value={animation.preset} onchange={(event) => onUpdate({ preset: (event.target as HTMLSelectElement).value as AnimationPreset })}>{#each presets as preset}<option value={preset.value}>{preset.label}</option>{/each}</select></label>

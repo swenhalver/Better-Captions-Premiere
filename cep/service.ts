@@ -3,16 +3,18 @@ import { createHostAPI } from '../webview-ui/src/cep-api';
 /** Local-only transport for the single visible UXP Better Captions panel. */
 export const SERVICE_ACTIONS = [
   'readCaptionConsolidation', 'stageCaptionConsolidation', 'verifyCaptionConsolidation', 'rollbackCaptionConsolidation',
-  'getFonts', 'beginCaption', 'saveCaptionFrames', 'finishCaption',
+  'getFonts', 'getFontCatalog', 'beginCaption', 'saveCaptionFrames', 'finishCaption',
   'preflightCaptionClips', 'prepareCaptionTrack', 'applyCaptionClips', 'readTimeline', 'showInPremiere',
   'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'patchCaptionKeyValues',
+  'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'extendNativeCaptionDocument', 'editNativeCaptionControl', 'seekNativeCaptionKeyframe', 'writeNativeCaptionDocument', 'createNativeCaptionDocument',
 ] as const;
-const READ_ACTIONS = new Set(['getFonts', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
+const READ_ACTIONS = new Set(['getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 const ARG_COUNTS: Record<string, number[]> = {
   readCaptionConsolidation:[1], stageCaptionConsolidation:[4], verifyCaptionConsolidation:[3], rollbackCaptionConsolidation:[3],
-  getFonts: [0], beginCaption: [1], saveCaptionFrames: [3], finishCaption: [3, 4],
+  getFonts: [0], getFontCatalog: [0], beginCaption: [1], saveCaptionFrames: [3], finishCaption: [3, 4],
   preflightCaptionClips: [2, 3], prepareCaptionTrack: [2, 3, 4], applyCaptionClips: [2, 3, 4], readTimeline: [1], showInPremiere: [1],
   selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1], readCaptionAreaDescriptor: [1], patchCaptionKeyValues: [2],
+  readNativeCaptionExtension:[1],extendNativeCaptionDocument:[2],readNativeCaptionControls:[1],editNativeCaptionControl:[2],seekNativeCaptionKeyframe:[2],readCaptionConnections:[2],writeNativeCaptionDocument:[2],createNativeCaptionDocument:[1],
 };
 interface Request { version: number; id: string; createdAt: number; expiresAt?: number; sequenceId: string; projectPath: string; action: string; args: any[]; }
 interface ServiceOptions { api?: any; fs?: any; path?: any; os?: any; crypto?: any; process?: any; platform?: any; root?: string; intervalMs?: number; maxRequestsPerPoll?: number; }
@@ -32,6 +34,10 @@ export function validateServiceRequest(value: unknown, filename: string, now = D
     const options=request.args[1];
     if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).length!==1||options.includeDiagnostics!==true)throw new Error('Invalid caption service arguments.');
   }
+  if(request.action==='readCaptionConnections'){
+    const [links,options]=request.args;
+    if(!Array.isArray(links)||links.length>10000||!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).length!==1||typeof options.includeDocuments!=='boolean')throw new Error('Invalid caption discovery arguments.');
+  }
   if (READ_ACTIONS.has(request.action)) {
     const expiresAt = request.expiresAt ?? request.createdAt + 10000;
     if (!Number.isFinite(expiresAt) || expiresAt < request.createdAt || expiresAt > request.createdAt + 10000 || now >= expiresAt) throw new Error('The caption read expired before execution. No native read was started.');
@@ -41,6 +47,12 @@ export function validateServiceRequest(value: unknown, filename: string, now = D
 
 /** The envelope holds sequence identity; args contain only the method's other arguments. */
 export async function dispatchServiceRequest(api: any, request: Request): Promise<unknown> {
+  // These fixed native jobs validate the captured envelope inside the same
+  // host evaluation as their document/clip/clock checks. Avoid two preceding
+  // context evalScript round trips for every interactive numeric movement.
+  if (['readNativeCaptionControls','editNativeCaptionControl','seekNativeCaptionKeyframe'].includes(request.action) && typeof api.dispatchNativeCaptionControlRequest === 'function') {
+    return api.dispatchNativeCaptionControlRequest({action:request.action,sequenceId:request.sequenceId,projectPath:request.projectPath,args:request.args});
+  }
   const info = await api.getActiveSequenceInfo(request.sequenceId);
   if (!info || info.id !== request.sequenceId || info.projectPath !== request.projectPath) throw new Error('The active Premiere sequence or project changed. Refresh Better Captions.');
   const [a, b, c, d] = request.args, id = info.id;
@@ -50,6 +62,7 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
     case 'verifyCaptionConsolidation': return api.verifyCaptionConsolidation(a,b,c,id);
     case 'rollbackCaptionConsolidation': return api.rollbackCaptionConsolidation(a,b,c,id);
     case 'getFonts': return api.getFonts();
+    case 'getFontCatalog': return api.getFontCatalog();
     case 'beginCaption': return api.beginCaption(a, id);
     case 'saveCaptionFrames': return api.saveCaptionFrames(a, b, c, id);
     case 'finishCaption': return api.finishCaption(a, b, c, id, d);
@@ -64,6 +77,14 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
     case 'readCaptionAreaDescriptor': return api.readCaptionAreaDescriptor(a, id);
     case 'patchCaptionKeyValues': return api.patchCaptionKeyValues(a, b, id);
     case 'readCaptionSelection': return api.readCaptionSelection(a, id);
+    case 'readCaptionConnections': return api.readCaptionConnections(id,a,b);
+    case 'createNativeCaptionDocument': return api.createNativeCaptionDocument(a,id);
+    case 'readNativeCaptionExtension': return api.readNativeCaptionExtension(a,id);
+    case 'extendNativeCaptionDocument': return api.extendNativeCaptionDocument(a,b,id);
+    case 'readNativeCaptionControls': return api.readNativeCaptionControls(a,id);
+    case 'seekNativeCaptionKeyframe': return api.seekNativeCaptionKeyframe(a,b,id);
+    case 'editNativeCaptionControl': return api.editNativeCaptionControl(a,b,id);
+    case 'writeNativeCaptionDocument': return api.writeNativeCaptionDocument(a,b,id);
     default: throw new Error('Unsupported caption service action.');
   }
 }
@@ -88,6 +109,12 @@ export function startBackendService(options: ServiceOptions = {}) {
   const lock = path.join(base, 'worker.lock.json'), recoveryLock = path.join(base, 'worker-recovery.lock.json');
   const owner = { version: 1, instanceId, pid: processAPI.pid };
   let busy = false, alive = true, ownsLock = false, currentRequest: string | null = null;
+  let watcher:any=null,wakeTimer:ReturnType<typeof setTimeout>|undefined,wakePending=false;
+  function wake(){
+    if(!alive)return;wakePending=true;if(busy||wakeTimer!==undefined)return;
+    wakeTimer=setTimeout(()=>{wakeTimer=undefined;if(alive)void poll().catch(console.error);},0);
+    (wakeTimer as any)?.unref?.();
+  }
   function lockOwner(file: string) {
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) throw new Error('Invalid caption worker ownership file.');
@@ -140,7 +167,7 @@ export function startBackendService(options: ServiceOptions = {}) {
   }
   async function poll() {
     if (!alive || busy || !acquire()) return;
-    busy = true;
+    busy = true;wakePending=false;
     try {
       const pending = fs.readdirSync(requests).filter((name: string) => /^[a-f0-9]{32}\.json$/.test(name)).sort();
       const started = Date.now(), quota = Math.max(1, Math.min(4, options.maxRequestsPerPoll ?? 4));
@@ -164,17 +191,32 @@ export function startBackendService(options: ServiceOptions = {}) {
           const result = await dispatchServiceRequest(api, request);
           atomic(output, { version: 1, id, sequenceId: request.sequenceId, projectPath: request.projectPath, result: result ?? null });
         } catch (failure) {
-          atomic(output, { version: 1, id, sequenceId: request?.sequenceId ?? null, projectPath: request?.projectPath ?? null, error: failure instanceof Error ? failure.message : String(failure) });
+          const nativeFailure=failure as {code?:string;recoverable?:boolean;outputApplied?:boolean};
+          const metadata=nativeFailure?.code==='BC_OUTPUT_UNCONFIRMED'&&nativeFailure.recoverable===false&&typeof nativeFailure.outputApplied==='boolean'
+            ? {code:'BC_OUTPUT_UNCONFIRMED',recoverable:false,outputApplied:nativeFailure.outputApplied}:{};
+          atomic(output, { version: 1, id, sequenceId: request?.sequenceId ?? null, projectPath: request?.projectPath ?? null, error: failure instanceof Error ? failure.message : String(failure),...metadata });
         } finally { currentRequest = null; try { fs.unlinkSync(claimed); } catch {} }
       }
-    } finally { busy = false; if (alive) announce(); else release(); }
+    } finally { busy = false; if (alive) { announce(); if(wakePending)wake(); } else release(); }
   }
   acquire();
   announce();
   const timer = setInterval(() => { void poll().catch(console.error); }, options.intervalMs ?? 250);
+  // Wake for completed atomic request-file renames instead of making native
+  // drags wait up to the 250ms fallback tick. No fast idle polling is added.
+  // The unchanged claim/validation path still serializes and bounds every job.
+  try { if(typeof fs.watch==='function'){
+    watcher=fs.watch(requests,{persistent:false},(_event:unknown,filename:unknown)=>{
+      if(!alive||typeof filename!=='string'||!/^[a-f0-9]{32}\.json$/.test(filename))return;
+      if(fs.existsSync(path.join(requests,filename)))wake();
+    });
+    watcher.on?.('error',()=>{try{watcher?.close();}catch{}watcher=null;});
+  }}catch{watcher=null;}
   const heartbeatTimer = setInterval(() => { if (alive) announce(); }, 3000);
   const stop = () => {
     alive = false; clearInterval(timer); clearInterval(heartbeatTimer);
+    if(wakeTimer!==undefined){clearTimeout(wakeTimer);wakeTimer=undefined;}
+    try{watcher?.close();}catch{}watcher=null;
     if (!busy) release();
   };
   win?.addEventListener('unload', stop, { once: true });

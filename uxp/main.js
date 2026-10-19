@@ -7,9 +7,9 @@ const CHANNEL = 'better-captions';
 const PANEL_ID = 'betterCaptions';
 const HOST_METHODS = new Set([
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession', 'loadStylePresets', 'saveStylePresets',
-  'transcribeSequence', 'getFonts', 'showInPremiere', 'beginCaption',
+  'transcribeSequence', 'transcribeSequenceRange', 'getFonts', 'getFontCatalog', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'extendNativeCaptionDocument', 'editNativeCaptionControl', 'seekNativeCaptionKeyframe', 'writeNativeCaptionDocument', 'createNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
 ]);
 const AGENT_METHODS = new Set(['getState', 'patchStyle', 'patchAnimation', 'setCaptions', 'refresh', 'apply', 'readArea', 'editArea']);
 const ID = /^(?:ui|host)-[a-zA-Z0-9_-]{1,100}$/;
@@ -19,6 +19,7 @@ const completed = new Set();
 const api = createHostAPI();
 let webview = null, uiReady = false, destroyed = false, panelVisible = false, nextId = 0;
 let agentStart = null, agentStop = null, loadFailure = null;
+let playheadTimer = null, playheadReading = false, playheadGeneration = 0, lastPlayhead = '';
 const cleanupListeners = [];
 
 function showStatus(text, isError = false) {
@@ -41,11 +42,47 @@ function send(data) {
   webview.postMessage({ channel: CHANNEL, ...data });
 }
 function safeError(error) {
-  return { message: String(error && error.message || error || 'Premiere caption operation failed.').slice(0, 4000) };
+  const result = { message: String(error && error.message || error || 'Premiere caption operation failed.').slice(0, 4000) };
+  if (error && ['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE', 'BC_NATIVE_CLOSED', 'BC_OUTPUT_UNCONFIRMED'].includes(error.code)) {
+    result.code = error.code;
+    if (typeof error.recoverable === 'boolean') result.recoverable = error.recoverable;
+    if (typeof error.operationPending === 'boolean') result.operationPending = error.operationPending;
+    if (error.code === 'BC_OUTPUT_UNCONFIRMED' && error.recoverable === false && typeof error.outputApplied === 'boolean') result.outputApplied = error.outputApplied;
+    if (HOST_METHODS.has(error.method)) result.method = error.method;
+  }
+  return result;
+}
+function availability(snapshot) {
+  const state = snapshot || (typeof api.getTransportAvailability === 'function' && api.getTransportAvailability());
+  if (state && webview && !destroyed) { try { send({ type: 'better-captions-native-availability', ...state }); } catch {} }
 }
 function visibility(visible = panelVisible) {
   panelVisible = visible;
   if (webview && !destroyed) { try { send({ type: 'better-captions-panel-visibility', visible }); } catch {} }
+  resetPlayhead();
+}
+function canFollowPlayhead() { return !destroyed && !!webview && uiReady && panelVisible && typeof api.readPlayheadIfIdle === 'function'; }
+function schedulePlayhead(delay = 100) {
+  if (!canFollowPlayhead() || playheadTimer !== null || playheadReading) return;
+  playheadTimer = setTimeout(async () => {
+    playheadTimer = null;
+    if (!canFollowPlayhead()) return;
+    const generation = playheadGeneration;
+    playheadReading = true;
+    try {
+      const position = await api.readPlayheadIfIdle();
+      if (generation === playheadGeneration && canFollowPlayhead() && position) {
+        const identity = JSON.stringify([position.sequenceId, position.projectPath, position.time]);
+        if (identity !== lastPlayhead) { lastPlayhead = identity; notify('ui.timelinePlayhead', [position]); }
+      }
+    } catch { /* Availability already reports a genuinely pending native read. Never retry that read here. */ }
+    finally { playheadReading = false; schedulePlayhead(); }
+  }, delay);
+}
+function resetPlayhead() {
+  ++playheadGeneration; lastPlayhead = '';
+  if (playheadTimer !== null) { clearTimeout(playheadTimer); playheadTimer = null; }
+  schedulePlayhead();
 }
 function rejectPending(message) {
   for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error(message)); }
@@ -103,8 +140,8 @@ async function onMessage(event) {
   running.add(data.id);
   try {
     let result;
-    if (data.method === 'agent.ready') { uiReady = true; loadFailure = null; showStatus(''); await startAgent(); visibility(); result = { ready: true }; }
-    else if (data.method === 'agent.stopped') { uiReady = false; result = { ready: false }; }
+    if (data.method === 'agent.ready') { uiReady = true; loadFailure = null; showStatus(''); await startAgent(); visibility(); availability(); result = { ready: true }; }
+    else if (data.method === 'agent.stopped') { uiReady = false; resetPlayhead(); result = { ready: false }; }
     else if (data.method === 'diagnostic') {
       const diagnostic = data.args[0];
       if (!diagnostic || typeof diagnostic !== 'object' || typeof diagnostic.stage !== 'string' || typeof diagnostic.message !== 'string') throw new Error('Invalid caption bootstrap diagnostic.');
@@ -132,7 +169,7 @@ function sequenceEvents() {
     const events = premiere.Constants.SequenceEvent;
     for (const [event, method] of [[events.ACTIVATED, 'ui.sequenceActivated'], [events.CLOSED, 'ui.sequenceClosed']]) {
       if (!event) continue;
-      const listener = () => notify(method);
+      const listener = () => { resetPlayhead(); notify(method); };
       premiere.EventManager.addGlobalEventListener(event, listener);
       cleanupListeners.push(() => premiere.EventManager.removeGlobalEventListener(event, listener));
     }
@@ -148,11 +185,12 @@ function mount() {
     webview.addEventListener('message', onMessage);
     window.addEventListener('message', onMessage);
     cleanupListeners.push(() => window.removeEventListener('message', onMessage));
-    webview.addEventListener('loadstart', () => { uiReady = false; loadFailure = null; showStatus('Loading caption editor…'); rejectPending('The Better Captions editor is reloading. Try the agent action again when it is ready.'); });
+    webview.addEventListener('loadstart', () => { uiReady = false; resetPlayhead(); loadFailure = null; showStatus('Loading caption editor…'); rejectPending('The Better Captions editor is reloading. Try the agent action again when it is ready.'); });
     webview.addEventListener('loadstop', () => {
       if (!uiReady && !loadFailure) showStatus('Caption editor loaded. Waiting for its controls…');
       Promise.resolve(api.getColorScheme()).then(scheme => notify('ui.colorScheme', [scheme])).catch(() => {});
       visibility();
+      availability();
     });
     webview.addEventListener('loaderror', event => {
       loadFailure = String(event.message || 'The local editor page did not load.') + (event.code === undefined ? '' : ' (code ' + event.code + ')');
@@ -161,6 +199,7 @@ function mount() {
     });
     webview.src = 'plugin:/client/index.html';
     document.getElementById('app').appendChild(webview);
+    if (typeof api.onTransportAvailability === 'function') cleanupListeners.push(api.onTransportAvailability(availability));
     sequenceEvents();
   } catch (error) {
     const message = document.createElement('div'); message.className = 'caption-host__error';

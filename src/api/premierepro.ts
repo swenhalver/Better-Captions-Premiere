@@ -28,10 +28,14 @@ export const getActiveSequenceInfo = async () => {
     const frameRect = await settings.getVideoFrameRect();
     const endTime = await sequence.getEndTime();
     const timebase = await sequence.getTimebase();
-    const ticksPerFrame = parseInt(timebase);
-    const frameRate = ticksPerFrame > 0
-      ? PREMIERE_TICKS_PER_SECOND / ticksPerFrame
-      : 24;
+    const ticksPerFrame = Number(timebase);
+    if (!Number.isSafeInteger(ticksPerFrame) || ticksPerFrame <= 0) {
+      throw new Error("The active sequence has an invalid timebase.");
+    }
+    const frameRate = PREMIERE_TICKS_PER_SECOND / ticksPerFrame;
+    if (!Number.isFinite(frameRate) || frameRate < 1 || frameRate > 240) {
+      throw new Error("The active sequence has an unsupported frame rate.");
+    }
 
     console.log("getActiveSequenceInfo", {
       timebase,
@@ -44,7 +48,7 @@ export const getActiveSequenceInfo = async () => {
       id: sequence.guid.toString(),
       name: sequence.name,
       duration: endTime.seconds,
-      frameRate: Math.round(frameRate * 100) / 100,
+      frameRate,
       frameWidth: frameRect.width,
       frameHeight: frameRect.height,
     };

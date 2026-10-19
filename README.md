@@ -6,6 +6,43 @@ This fork adds independent upcoming, currently spoken, and previously spoken wor
 
 **Pre-release status:** [0.7.8](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.8) adds one-clip output, automatic tracks and installed Mac fixes. Native Mac checks confirmed a new track above occupied footage, character regrouping, plugin size-keyframe edits, retiming and preserved Razor cuts. Physical mouse dragging remains unverified by the automated native tests, compatible static legacy conversion still needs native acceptance, and Adobe installation is blocking Windows acceptance. See the [Mac verification record](docs/mac-verification-0.7.8.md) and [Windows verification record](docs/windows-verification-0.7.3.md) for the exact boundaries.
 
+**Development branch:** `swen/native-caption-effect` now defaults new transcripts to a **native caption effect** in **0.7.27**. One Premiere Transparent Video clip holds the transcript and the compiled effect; text, timing and supported three-state styles update live from Better Captions. Phrase rows follow the native character limit or **Smart line fit**, adjustable in Caption grouping. Smart mode updates the estimated character-count number. Styling uses compact responsive tabs with working native word-spacing, outline/shadow toggles and Layout controls; left/center/right alignment icons appear only under All words. Smart fitting uses real font measurements and a 5% safety margin to fit a line to the selected width. **Scrolling text** restores line-by-line roll-up with four directions, speed, wait-for-line timing and a soft fade boundary; all its settings can use native Effect Controls keyframes. Outlines render beneath a clean glyph fill to preserve font weight; the shared case selector supports As typed, Uppercase, Lowercase and Title Case. Position, Width and Height also appear in the plugin as blue drag-adjustable values with reset buttons and Effect Controls keyframing indicators. **Groups per page** shows 1–100 consecutive caption groups together, with each group retaining the character limit. The native Program Monitor outline previews the selected caption area without being exported. Native keyframes remain in Effect Controls, with previous/next navigation in the plugin. **Sequence actions (…) → Extend captions** appends dialogue from newly added footage without replacing existing text edits or timings. Numeric styling values use the same drag/click-to-type behavior. Existing movie captions reconnect unchanged, with an explicit **Create native effect copy** action. Native effects require the separate experimental compiled plugin; the panel never silently falls back to a movie. See [0.7.27 notes](docs/release-0.7.27.md), [Mac verification](docs/mac-verification-0.7.24.md), and [native-effect acceptance](docs/native-effect-acceptance.md). Native Premiere graphics are being developed separately. The published 0.7.8 instructions below retain their rendered-movie workflow.
+
+## Portable captions: the normal output
+
+The normal workflow renders transparent **ProRes 4444 movie clips** into Premiere.
+Use Better Captions to edit the transcript, word timing, layout and appearance;
+the panel regenerates the caption media for Premiere. After rendering finishes,
+Premiere reads those captions as ordinary media without Better Captions installed.
+Premiere can still move, trim, split and scale the movie clips. Their letters and
+internal styles are baked pixels; changing those requires the panel and a render.
+
+Keep the project and its adjacent **Better Captions** folder together. That folder
+contains the linked caption movies and `captions.better-captions.json` editing
+session. A receiver needs the media for playback; retain the session too if later
+panel editing is needed. See [the portable caption workflow](docs/portable-caption-workflow.md)
+for handoff details and verification boundaries.
+
+Installed verification with panel 0.7.11 made all three Better Captions
+components temporarily unavailable across a fresh Premiere restart: the portable
+fixture still played and exported fresh PNG frames, with identical decoded
+2.5-second pixels. All 29 component files were restored with matching hashes.
+The original project then reopened/reconnected; changing the phrase to **These
+captions still work.** automatically regenerated the ProRes 4444 movie while
+preserving its clip and project-item identities. Full video-file export was not
+part of this check. See [verification details](docs/portable-caption-workflow.md#installed-verification-receipt--2026-10-18).
+
+The verified editable handoff is **Portable Captions - Plugin-Free Playback** in
+`artifacts/host-scratch/Native Effect Scratch.prproj`. The exported `Portable
+Captions.prproj` is a playback-only fixture: `exportAsProject` rebased item IDs,
+and panel reconnection correctly refused the mismatch. It is not an editable
+handoff; retain the original project with its media and session.
+
+Existing experimental native-effect adjustment layers are preserved. They are
+**not automatically converted** into movies and still require the compiled effect
+to render. An explicit, separately verified bake would be needed to make those
+particular captions portable; this workflow does not add that conversion feature.
+
 ## What you can edit
 
 - Caption text and individual word start/end times, with overlap validation.
@@ -27,6 +64,10 @@ The installer targets **Windows and macOS (Apple Silicon or Intel), with Premier
 - Local FFmpeg and FFprobe. The plugin finds WinGet's user links on Windows, Apple Silicon/Intel Homebrew locations on macOS, and absolute directories in `PATH`.
 - macOS: Fontconfig (`fc-list`) for the font picker. Windows uses its installed font families through the system Windows PowerShell/.NET APIs, with no Fontconfig dependency.
 - Premiere's Speech to Text language pack and transcription preferences set as desired.
+
+These creation/editing requirements do not apply to ordinary playback of already
+rendered caption movies. The receiver needs Premiere and the linked media, not
+Better Captions, FFmpeg, Fontconfig or the fonts used to create the baked text.
 
 With Homebrew, run `brew install ffmpeg fontconfig`. On Windows, install a local FFmpeg distribution containing both `ffmpeg.exe` and `ffprobe.exe`, for example `winget install --id Gyan.FFmpeg --exact`. Restart Premiere after installing dependencies. Custom locations can be set through `BETTER_CAPTIONS_FFMPEG`, `BETTER_CAPTIONS_FFPROBE` and (macOS) `BETTER_CAPTIONS_FC_LIST`, each containing an absolute executable path. These are local configuration; caption requests cannot choose executables.
 

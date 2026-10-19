@@ -40,8 +40,20 @@ function mapTranscript(json, region) {
   }
   return segments;
 }
+function validateTranscriptRange(beginSeconds, endSeconds) {
+  if (typeof beginSeconds !== 'number' || typeof endSeconds !== 'number' || !Number.isFinite(beginSeconds) || !Number.isFinite(endSeconds) || beginSeconds < 0 || endSeconds <= beginSeconds || endSeconds > 864000) throw new Error('Use a valid transcript extension range within ten days.');
+  return { beginSeconds, endSeconds };
+}
+function intersectTranscriptRegion(region, range) {
+  validateTranscriptRange(range.beginSeconds, range.endSeconds);
+  if (!record(region) || !['start', 'end', 'in', 'out'].every(key => Number.isFinite(region[key]) && region[key] >= 0) || region.end <= region.start || region.out <= region.in) throw new Error('Reversed or invalid audio timing cannot be transcribed automatically.');
+  const start = Math.max(region.start, range.beginSeconds), end = Math.min(region.end, range.endSeconds);
+  if (end <= start) return null;
+  const sourcePerSecond = (region.out - region.in) / (region.end - region.start);
+  return { start, end, in: region.in + (start - region.start) * sourcePerSecond, out: region.in + (end - region.start) * sourcePerSecond };
+}
 function hasWords(json) {
   if (!json) return false;
   try { return parseNativeTranscript(json).segments.some(segment => segment.words.some(timedWord)); } catch { return false; }
 }
-module.exports = { sequenceKey, mapTranscript, hasWords, parseNativeTranscript };
+module.exports = { sequenceKey, mapTranscript, hasWords, parseNativeTranscript, validateTranscriptRange, intersectTranscriptRegion };

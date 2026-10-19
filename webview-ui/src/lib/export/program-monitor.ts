@@ -1,6 +1,6 @@
 import type { CaptionItem } from '../types';
 
-interface MonitorOptions { currentTime?: number; selectedId?: string | null; frameRate: number; duration: number; }
+interface MonitorOptions { currentTime?: number; selectedId?: string | null; frameRate: number; duration: number; preservePlayhead?: boolean; }
 /** Prefer Premiere's current caption frame; otherwise show the editor's selected phrase. */
 export function programMonitorPosition(captions: CaptionItem[], playhead: unknown, options: MonitorOptions) {
   const { frameRate, duration } = options;
@@ -24,7 +24,12 @@ export function programMonitorPosition(captions: CaptionItem[], playhead: unknow
 export async function refreshProgramMonitor(hostApi: any, captions: CaptionItem[], sequenceId: string, options: MonitorOptions) {
   const info = await hostApi.getActiveSequenceInfo();
   if (!info || info.id !== sequenceId) throw new Error('The active sequence changed before the Program Monitor could be refreshed.');
-  const position = programMonitorPosition(captions, info.playhead, options);
+  let position: { time: number; refreshTime: number };
+  if (options.preservePlayhead) {
+    if (!Number.isFinite(options.frameRate) || options.frameRate <= 0 || !Number.isFinite(options.duration) || options.duration <= 0) throw new Error('Premiere did not expose valid sequence frame timing for a Program Monitor refresh.');
+    if (typeof info.playhead !== 'number' || !Number.isFinite(info.playhead) || info.playhead < 0) throw new Error('Premiere did not expose its current playhead. The Program Monitor refresh did not move it.');
+    position = { time: info.playhead, refreshTime: info.playhead + 1 / options.frameRate < options.duration ? info.playhead + 1 / options.frameRate : Math.max(0, info.playhead - 1 / options.frameRate) };
+  } else position = programMonitorPosition(captions, info.playhead, options);
   if (position.refreshTime !== position.time) await hostApi.showInPremiere(position.refreshTime, sequenceId);
   await hostApi.showInPremiere(position.time, sequenceId);
   return position.time;

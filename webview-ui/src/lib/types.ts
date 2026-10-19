@@ -72,12 +72,15 @@ export interface CaptionWord {
 }
 
 export type AnimationPreset = "fade" | "pop" | "typewriter" | "karaoke" | "bounce";
+export type TextTransform = "none" | "uppercase" | "lowercase" | "titlecase";
 
 export interface WordAppearance {
+  /** 0 inherits the shared weight, 100 is one step bolder; null/absent keeps an absolute override. */
+  fontWeightOffset?: 0 | 100 | null; // 100 means the next installed heavier weight above All words.
   fontSize?: number;
   italic?: boolean;
   letterSpacing?: number;
-  textTransform?: "none" | "uppercase" | "lowercase";
+  textTransform?: TextTransform;
   strokeEnabled?: boolean;
   strokeColor?: string;
   strokeOpacity?: number;
@@ -94,9 +97,14 @@ export interface WordAppearance {
   color: string;
   opacity: number;
   bubble: boolean;
+  /** Color the following interword gap, without extending past a line end. */
+  bubbleFillSpaces?: boolean;
+  underline?: boolean;
   bubbleColor: string;
   bubbleOpacity: number;
   padding: number;
+  bubblePaddingInline?: number;
+  bubblePaddingBlock?: number;
   radius: number;
 }
 
@@ -125,7 +133,9 @@ export interface StyleConfig {
   textAlign: CanvasTextAlign;
   maxWidth: number;
   lineHeight: number;
-  textTransform: "none" | "uppercase" | "lowercase";
+  /** Font-space percentage; absent on older looks to preserve their original layout. */
+  wordSpacing?: number;
+  textTransform: TextTransform;
   maxChars: number;
   activeWord: WordAppearance;
   spokenWord: WordAppearance;
@@ -141,6 +151,10 @@ export interface AnimationConfig {
 
 export interface SessionState {
   sequenceId: string;
+  /** Bind sidecar saves to the project that supplied this session. */
+  projectPath?: string;
+  /** Native documents live in this effect instance, never in legacy movie output. */
+  nativeClipId?: string;
   sequenceName: string;
   transcriptJson: TranscriptJSON | null;
   captions: CaptionItem[];
@@ -194,6 +208,7 @@ export const DEFAULT_STYLE: StyleConfig = {
   textAlign: "center",
   maxWidth: 0.8,
   lineHeight: 1.3,
+  wordSpacing: 100,
   textTransform: "none",
   maxChars: DEFAULT_MAX_CHARS,
   activeWord: {fontFamily:"",fontWeight:700,sizeScale:1.15,color:"#171717",opacity:1,bubble:true,bubbleColor:"#FFD84D",bubbleOpacity:1,padding:10,radius:14},
