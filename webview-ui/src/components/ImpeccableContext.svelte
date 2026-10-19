@@ -100,7 +100,7 @@
   {/if}
   <div class="context-inspector__sample" aria-label="Synthetic browser type sample">
     <span class="context-inspector__sample-label">Browser type sample · synthetic</span>
-    <div class="context-inspector__text-area" class:context-inspector__text-area--bounds={shelf === 'layout'} style={`width:${boxWidth}%;height:${boxHeight}%;left:${x}%;top:${y}%;text-align:${align};line-height:${appearances.all.leading};word-spacing:${appearances.all.spacing}px;`}>
+    <div class="context-inspector__text-area" class:context-inspector__text-area--bounds={shelf === 'layout'} style={`width:${boxWidth}%;height:${boxHeight}%;left:${x}%;top:${y}%;text-align:${align};font-size:${appearances.all.size}px;line-height:${appearances.all.leading};`}>
       {#each ['Make', 'every', 'word', 'feel', 'like', 'you.'] as word, index}<span class="context-inspector__word" style={sampleStyle(index)}>{rendered(word, index)}</span>{' '}{/each}
     </div>
   </div>

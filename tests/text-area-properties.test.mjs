@@ -18,10 +18,11 @@ function component(file) {
   const result = compile(readFileSync(file, 'utf8'), { generate: 'server', filename: fileURLToPath(file) });
   assert.deepEqual(result.warnings, [], 'Compile the actual component without accessibility warnings');
   return result.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, (_match, quote, path) => {
-    const url = path.endsWith('.svelte') ? pathToFileURL(join(folder, 'MotionIcon.mjs')) : new URL(`${path}.ts`, file);
+    const url = path.endsWith('.svelte') ? pathToFileURL(join(folder, path.split('/').at(-1).replace('.svelte','.mjs'))) : new URL(`${path}.ts`, file);
     return `from ${quote}${url.href}${quote}`;
   });
 }
+writeFileSync(join(folder, 'LucideIcon.mjs'), component(new URL('../webview-ui/src/components/LucideIcon.svelte', import.meta.url)));
 writeFileSync(join(folder, 'MotionIcon.mjs'), component(new URL('../webview-ui/src/components/MotionIcon.svelte', import.meta.url)));
 writeFileSync(join(folder, 'TextAreaControls.mjs'), component(sourceUrl));
 const { default: TextAreaControls, captionAreaDefaults, areaPropertyReset, createTextAreaController } = await import(pathToFileURL(join(folder, 'TextAreaControls.mjs')));

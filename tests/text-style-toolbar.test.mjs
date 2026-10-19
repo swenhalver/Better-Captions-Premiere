@@ -30,10 +30,19 @@ const numberUrl = new URL('../webview-ui/src/components/ScrubbableNumber.svelte'
 const number = compile(readFileSync(numberUrl, 'utf8'), { generate: 'server', filename: 'ScrubbableNumber.svelte' });
 assert.deepEqual(number.warnings, [], 'Compile the actual numeric control without accessibility warnings');
 writeFileSync(join(folder, 'ScrubbableNumber.mjs'), number.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(numberUrl)));
+const hslaUrl = new URL('../webview-ui/src/components/HslaColorPicker.svelte', import.meta.url);
+const hsla = compile(readFileSync(hslaUrl, 'utf8'), { generate: 'server', filename: 'HslaColorPicker.svelte' });
+assert.deepEqual(hsla.warnings, [], 'Compile the actual HSLA control without accessibility warnings');
+writeFileSync(join(folder, 'HslaColorPicker.mjs'), hsla.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(hslaUrl)));
+const iconUrl = new URL('../webview-ui/src/components/LucideIcon.svelte', import.meta.url);
+const icon = compile(readFileSync(iconUrl, 'utf8'), { generate: 'server', filename: 'LucideIcon.svelte' });
+assert.deepEqual(icon.warnings, []);
+writeFileSync(join(folder, 'LucideIcon.mjs'), icon.js.code);
 const code = compiled.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(sourceUrl));
 writeFileSync(join(folder, 'TextStyleToolbar.mjs'), code);
 const { default: TextStyleToolbar, textStylePatch, textStyleAppearance, textStyleMixed,
-  textStyleBoldState, textStyleBoldDisabled, textStyleBoldPatch } = await import(pathToFileURL(join(folder, 'TextStyleToolbar.mjs')));
+  textStyleBoldState, textStyleBoldDisabled, textStyleBoldPatch, textStyleColorPatch } = await import(pathToFileURL(join(folder, 'TextStyleToolbar.mjs')));
+const { default: awaitPicker } = await import(pathToFileURL(join(folder, 'HslaColorPicker.mjs')));
 const { render } = await import(pathToFileURL(require.resolve('svelte/server')));
 const fresh = () => structuredClone(DEFAULT_STYLE);
 const apply = (style, patch) => {
@@ -251,14 +260,14 @@ test('the installed font control is a searchable combobox and Italic stays enabl
   assert.doesNotMatch(italic, /disabled/); assert.match(italic, /synthetic slant/);
 });
 
-test('advanced styling uses five real tabs with Spacing selected by default', () => {
+test('advanced styling uses four real tabs with Spacing selected and bubble settings in the ribbon', () => {
   const html = view({});
   assert.match(html,/role="tablist"[^>]*aria-label="Text settings"/);
-  assert.equal((html.match(/role="tab"/g)??[]).length,5);
+  assert.equal((html.match(/role="tab"/g)??[]).length,4);
   assert.equal((html.match(/aria-selected="true"/g)??[]).length,1);
   assert.match(html,/role="tabpanel"/);assert.match(html,/Word spacing, %/);
   assert.doesNotMatch(html,/text-style__more-button/);
-  for (const label of ['Font family','Bold','Italic','Font weight','Text case','Text opacity, %'])assert.match(html,new RegExp(`aria-label="${label}"`));
+  for (const label of ['Font family','Bold','Italic','Font weight','Text case','Text color and opacity','Word background and bubble settings','Line height'])assert.match(html,new RegExp(`aria-label="${label}"`));
 });
 test('native Spacing and Layout tabs are enabled and native word spacing is editable in pixels',()=>{
   const html=view({nativeMode:true,style:{...fresh(),wordSpacing:12}});
@@ -277,4 +286,60 @@ test('left center and right alignment icons live in normal All words controls on
  assert.match(html,/<button[^>]*aria-label="Align right"[^>]*aria-pressed="true"/);
  assert.doesNotMatch(html,/<select[^>]*value="right"/);
  for(const scope of ['spoken','current','upcoming'])assert.doesNotMatch(view({scope}),/aria-label="Align (?:left|center|right)"/);
+});
+
+test('ribbon uses complete case option names while its closed trigger stays compact', () => {
+  const html = view({});
+  const select = html.match(/<select[^>]*aria-label="Text case"[\s\S]*?<\/select>/)?.[0];
+  for (const label of ['As typed','UPPERCASE','lowercase','Title Case']) assert.ok(select.includes(label));
+  assert.match(html, /aria-hidden="true">Aa/);
+  assert.doesNotMatch(html, /type="color"/,'Foreground and word-background colors open the inline HSLA picker');
+  assert.match(html, /aria-label="Line height"[^>]*aria-valuenow="1.3"/);
+});
+
+test('the HSLA picker exposes editable hue, saturation, lightness and separate alpha directly', () => {
+  const HslaColorPicker = awaitPicker;
+  const html = render(HslaColorPicker, {props:{value:'#993fa0',opacity:.6,label:'Word background',onChange(){}}}).body;
+  for (const channel of ['hue','saturation','lightness','opacity']) assert.match(html,new RegExp(`aria-label="Word background ${channel}"`));
+  assert.equal((html.match(/type="range"/g)||[]).length,4);
+  assert.doesNotMatch(html,/type="color"/);
+  assert.match(html, /60%/);
+});
+
+
+test('alpha-only All words edits preserve every different word-state color', () => {
+  for (const [kind,colorKey,opacityKey] of [['text','color','opacity'],['bubble','bubbleColor','bubbleOpacity'],['stroke','strokeColor','strokeOpacity'],['shadow','shadowColor','shadowOpacity']]) {
+    const style=fresh();
+    for (const [index,key] of ['spokenWord','activeWord','upcomingWord'].entries()) style[key]={...style[key],[colorKey]:['#ff0000','#00ff00','#0000ff'][index],[opacityKey]:[.2,.5,.8][index]};
+    const shown=textStyleAppearance(style,'all');
+    const patch=textStyleColorPatch(shown,kind,{color:shown[colorKey],opacity:.6});
+    assert.equal(Object.hasOwn(patch,colorKey),false);
+    const next=apply(style,textStylePatch(style,'all',patch));
+    for (const key of ['spokenWord','activeWord','upcomingWord']) {
+      assert.equal(next[key][colorKey],style[key][colorKey]);
+      assert.equal(next[key][opacityKey],.6);
+      if(kind==='bubble') assert.equal(next[key].bubble,style[key].bubble,'Opacity does not enable unrelated word backgrounds');
+    }
+  }
+});
+
+test('color-only All words edits preserve every different word-state opacity', () => {
+  for (const [kind,colorKey,opacityKey] of [['text','color','opacity'],['bubble','bubbleColor','bubbleOpacity'],['stroke','strokeColor','strokeOpacity'],['shadow','shadowColor','shadowOpacity']]) {
+    const style=fresh();
+    for (const [index,key] of ['spokenWord','activeWord','upcomingWord'].entries()) style[key]={...style[key],[opacityKey]:[.2,.5,.8][index]};
+    const shown=textStyleAppearance(style,'all');
+    const patch=textStyleColorPatch(shown,kind,{color:'#983fab',opacity:shown[opacityKey]});
+    assert.equal(Object.hasOwn(patch,opacityKey),false);
+    const next=apply(style,textStylePatch(style,'all',patch));
+    for (const key of ['spokenWord','activeWord','upcomingWord']) {
+      assert.equal(next[key][colorKey],'#983fab');
+      assert.equal(next[key][opacityKey],style[key][opacityKey]);
+    }
+  }
+});
+
+test('the normal ribbon opens outline settings and retains its detailed Outline tab', () => {
+  const html=view({nativeMode:true});
+  assert.match(html,/<button[^>]*aria-label="Outline settings"[^>]*aria-expanded="false"/);
+  assert.match(html,/<button[^>]*role="tab"[^>]*>Outline<\/button>/);
 });

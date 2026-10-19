@@ -194,6 +194,24 @@ Controls, tags and loading placeholders share gently squared corners through `ro
 
 ## Components
 
+### Mac text ribbon
+
+The user-selected styling direction follows a compact native rich-text toolbar.
+Case, segmented Bold/Italic, foreground and word-background swatches, outline,
+font search, supported numeric weight, font size, line height and alignment share
+a wrapping strip. Keep font fields together when docked. Alignment appears only
+for All words. A closed case selector shows Aa; its menu uses complete names.
+
+Color swatches open direct HSLA channel sliders and draggable values. Alpha is
+opacity; do not open another operating-system color dialog. The background
+popover also owns bubble enable, padding, corners and Color spaces between words.
+Preserve independent colors when changing only alpha and independent opacities
+when changing only color. Spacing, Outline, Shadow and Layout remain real tabs.
+
+Use official Lucide icons wherever a matching icon exists, with the packaged ISC
+notice. Bold, Italic, Outline and Line height share the same rendered icon size;
+do not let the line-height glyph inherit the smaller numeric-field text size.
+
 ### Buttons
 
 Neutral buttons use raised charcoal, a divider-colored border and regular label text. Hover changes the ground and border; press uses the field ground. The blue primary variant uses semibold white text and a transparent border. Icon buttons begin transparent. Disabled buttons use opacity (0.5) and a default cursor.
