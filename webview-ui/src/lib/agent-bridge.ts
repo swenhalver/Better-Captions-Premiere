@@ -53,7 +53,7 @@ export function validateStylePatch(value:unknown):Partial<StyleConfig>{
   object(value);
   for(const [key,v] of Object.entries(value)){
     if(key==='activeWord'||key==='spokenWord'||key==='upcomingWord'){
-      object(v);for(const [k,n] of Object.entries(v)){if(k==='fontWeightOffset'){if(n!==null&&n!==0&&n!==100)throw new Error('Word weight offset must be null, 0 or 100.');}else if(k in stateNumbers)number(n,...stateNumbers[k]);else if(k==='fontFamily')font(n);else if(['color','bubbleColor','strokeColor','shadowColor'].includes(k))color(n);else if(['bubble','italic','strokeEnabled','shadowEnabled'].includes(k))bool(n);else if(k==='textTransform'){if(!['none','uppercase','lowercase','titlecase'].includes(String(n)))throw new Error('Invalid word text transform.');}else throw new Error('Unknown word style: '+k);}
+      object(v);for(const [k,n] of Object.entries(v)){if(k==='fontWeightOffset'){if(n!==null&&n!==0&&n!==100)throw new Error('Word weight offset must be null, 0 or 100.');}else if(k in stateNumbers)number(n,...stateNumbers[k]);else if(k==='fontFamily')font(n);else if(['color','bubbleColor','strokeColor','shadowColor'].includes(k))color(n);else if(['bubble','bubbleFillSpaces','italic','strokeEnabled','shadowEnabled'].includes(k))bool(n);else if(k==='textTransform'){if(!['none','uppercase','lowercase','titlecase'].includes(String(n)))throw new Error('Invalid word text transform.');}else throw new Error('Unknown word style: '+k);}
     }else if(key==='maxChars')validateCharacterLimit(v);
     else if(key in styleNumbers)number(v,...styleNumbers[key]);
     else if(key==='fontFamily')font(v);

@@ -444,3 +444,15 @@ test('all-word outline/shadow controls accept remembered disabled sliders and re
  for(const key of ['upcomingWord','activeWord','spokenWord']){restore.style[key].strokeEnabled=true;restore.style[key].shadowEnabled=true;}
  assert.deepEqual(prepareNativePanelUpdate(disabledBinding,restore),enabled);
 });
+
+
+test('native bubble spaces rehydrate and edit per state without changing layout, words, tints or opacity',()=>{
+ const {session,binding:connected}=binding();const untouched=prepareNativePanelUpdate(connected,session);assert.equal(encodeNativeTransportText(untouched),connected.clip.documentText);
+ for(const [panelKey,nativeKey] of [['activeWord','current'],['spokenWord','spoken'],['upcomingWord','upcoming']]){
+  assert.equal(session.style[panelKey].bubbleFillSpaces,false);const edited=clone(session);edited.style[panelKey].bubbleFillSpaces=true;
+  const next=prepareNativePanelUpdate(connected,edited),expected=clone(connected.document);expected.style[nativeKey].bubbleFillSpaces=true;assert.deepEqual(next,expected);
+  const restored=rehydrateNativePanel(entry(next),sequence());assert.equal(restored.session.style[panelKey].bubbleFillSpaces,true);
+  const off=clone(restored.session);off.style[panelKey].bubbleFillSpaces=false;const disabled=prepareNativePanelUpdate(restored.binding,off);assert.equal(disabled.style[nativeKey].bubbleFillSpaces,undefined);assert.deepEqual(disabled.captions,connected.document.captions);
+ }
+ assert.ok(NATIVE_PANEL_CAPABILITIES.supportedWordStyleFields.includes('bubbleFillSpaces'));
+});

@@ -113,3 +113,12 @@ test('browser presets survive reopening independently of sequence sessions and r
   await assert.rejects(reopened.saveStylePresets(library()));
   assert.equal(values.get(PRESET_STORAGE_KEY), '{broken');
 });
+
+
+test('presets save independent bubble space choices while loading older looks with no space flag',()=>{
+ const source=structuredClone(DEFAULT_STYLE);source.activeWord.bubbleFillSpaces=true;source.spokenWord.bubbleFillSpaces=false;
+ const saved=capturePresetLook(source,structuredClone(DEFAULT_ANIMATION));assert.equal(saved.style.activeWord.bubbleFillSpaces,true);assert.equal(saved.style.spokenWord.bubbleFillSpaces,false);
+ const restored=applyPresetLook(structuredClone(DEFAULT_STYLE),saved);assert.equal(restored.style.activeWord.bubbleFillSpaces,true);
+ const legacy=structuredClone(saved);for(const key of ['activeWord','spokenWord','upcomingWord'])delete legacy.style[key].bubbleFillSpaces;
+ assert.equal(resolveAppearance(applyPresetLook(source,legacy).style,'activeWord').bubbleFillSpaces,false);
+});

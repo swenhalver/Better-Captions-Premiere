@@ -97,7 +97,7 @@ Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::
   CGContextSaveGState(context);
   if(s.bubble){
    Ref<CGColorRef> bubble(Shaped::color(space,s.bubbleColor,s.opacity));CGContextSetFillColorWithColor(context,bubble);
-   auto rect=CGRectMake(run.x,height-run.baseline-m.descent-pad,run.width,m.ascent+m.descent+2*pad);
+   auto rect=CGRectMake(run.x,height-run.baseline-m.descent-pad,run.width+run.bubbleExtraWidth,m.ascent+m.descent+2*pad);
    double radius=std::fmin(s.radius,std::fmin(rect.size.width,rect.size.height)/2);
    Ref<CGPathRef> path(CGPathCreateWithRoundedRect(rect,radius,radius,nullptr));CGContextAddPath(context,path);CGContextFillPath(context);
   }

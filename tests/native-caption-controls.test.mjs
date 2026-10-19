@@ -6,7 +6,7 @@ import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url),acorn=require('../webview-ui/node_modules/acorn');
 const source=fs.readFileSync(new URL('../cep/host/bridge.jsx',import.meta.url),'utf8');
 const T=254016000000n, ticks=s=>String(BigInt(s)*T);
-const collection=(a,key='numItems')=>Object.defineProperty(a,key,{get:()=>a.length});
+const collection=(a,key='numItems')=>Object.defineProperty(a,key,{get:()=>a.length,configurable:true});
 const rollControls=[['rollUp','Roll-up enabled',0],['rollUpLines','Visible lines',2],['rollUpDuration','Scroll duration',.18],['rollUpFade','Soft fade boundary',1],['rollUpFadePosition','Boundary position',0],['rollUpFadeThickness','Transition thickness',.35],['rollUpFadeAmount','Fade amount',1],['rollUpFadeCurve','Transition curve',2],['rollUpDirection','Scroll direction',1],['rollUpSpeed','Scroll speed',1],['rollUpWait','Wait for line to finish',1],['rollUpTransition','Line transition',1]];
 
 function fixture(){
@@ -36,6 +36,32 @@ function fixture(){
 }
 
 test('native control bridge remains ExtendScript ES3 compatible',()=>{acorn.parse(source,{ecmaVersion:3});});
+test('production-sized native controls use one property/name bridge pass per independently checked context',()=>{
+ const f=fixture();f.smartFit.value=1;smartWordStates(f);
+ const properties=f.clip.components[0].properties;
+ // Include irrelevant/native topic fields and object-special names. Indexing
+ // these must not invent controls or collapse repeated word-state labels.
+ for(const label of ['__proto__','constructor','toString',...Array.from({length:22},(_,i)=>`Other ${i}`)])properties.push(f.parameter(label,0));
+ let labels=0,indexReads=0,countReads=0;
+ for(let i=0;i<properties.length;i++){
+  const parameter=properties[i],label=parameter.displayName;
+  Object.defineProperty(parameter,'displayName',{get(){labels++;return label;}});
+  Object.defineProperty(properties,i,{get(){indexReads++;return parameter;},configurable:true});
+ }
+ Object.defineProperty(properties,'numItems',{get(){countReads++;return properties.length;},configurable:true});
+ const r=f.read();assert.equal(r.ok,true,r.error);assert.equal(labels,properties.length);assert.equal(indexReads,properties.length);assert.equal(countReads,1);
+ labels=0;indexReads=0;countReads=0;
+ const after=f.edit(r);assert.equal(after.readbackVerified,true,after.error);
+ // Before, immediate preflight, and independent post-setter verification all
+ // rescan. No cross-context metadata cache is allowed to mask outside edits.
+ assert.equal(labels,3*properties.length);assert.equal(indexReads,3*properties.length);assert.equal(countReads,3);
+ assert.deepEqual(f.writes,[['Width','set',600]]);assert.equal(after.smartFit.value,1);
+});
+test('one-pass lookup still detects parameter label replacement between preflight and mutation',()=>{
+ const f=fixture(),r=f.read();let reads=0;
+ f.width.onRead=()=>{if(++reads===1)f.clip.components[0].properties.push(f.width);};
+ const after=f.edit(r);assert.match(after.error,/Ambiguous/);assert.deepEqual(f.writes,[]);
+});
 test('reads geometry from exact owned effect; static scalar and 2D reset preserve document and unrelated properties',()=>{
  const f=fixture(),r=f.read();assert.equal(r.ok,true);assert.equal(r.timelineTicks,ticks(12));assert.equal(r.sourceTicks,ticks(32));assert.equal(r.width.value,1536);assert.equal(r.position.animated,false);
  const doc=f.doc.value,changed=f.edit(r);assert.equal(changed.readbackVerified,true);assert.equal(changed.width.value,600);assert.equal(f.doc.value,doc);assert.deepEqual(f.writes,[['Width','set',600]]);

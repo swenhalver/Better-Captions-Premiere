@@ -28,7 +28,7 @@ export const NATIVE_PANEL_CAPABILITIES = {
   storage: 'embedded-native-document', geometry: 'premiere-effect-controls', animation: 'premiere-effect-controls',
   unsupportedGlobalStyleFields: unsupportedGlobal, unsupportedWordStyleFields: unsupportedWord,
   supportedGlobalStyleFields: ['wordSpacing', 'lineHeight'],
-  supportedWordStyleFields: ['fontFamily', 'fontWeight', 'fontWeightOffset', 'italic', 'fontSize', 'sizeScale', 'color', 'opacity', 'bubble', 'bubbleColor', 'bubbleOpacity', 'padding', 'radius', 'strokeEnabled', 'strokeColor', 'strokeWidth', 'strokeOpacity', 'shadowEnabled', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'],
+  supportedWordStyleFields: ['fontFamily', 'fontWeight', 'fontWeightOffset', 'italic', 'fontSize', 'sizeScale', 'color', 'opacity', 'bubble', 'bubbleFillSpaces', 'bubbleColor', 'bubbleOpacity', 'padding', 'radius', 'strokeEnabled', 'strokeColor', 'strokeWidth', 'strokeOpacity', 'shadowEnabled', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'],
   case: 'shared-as-typed-upper-lower-or-ascii-titlecase', wordSpacing: 'editable-native-pixels', effectToggles: 'outline-width-and-shadow-alpha',
 } as const;
 
@@ -56,7 +56,7 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
   const flag = () => { const value = u(); if (value > 1) throw new Error('Invalid native document flag.'); return value === 1; };
   const string = (limit: number) => { const size = u(); if (!size || size > limit) throw new Error('Invalid native document string.'); need(size); const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(offset, offset + size)); offset += size; return value; };
   if (u() !== 0x50414342) throw new Error('Invalid native document magic.');
-  const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4) throw new Error('Unsupported native binary version.');
+  const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5) throw new Error('Unsupported native binary version.');
   const count = u(); if (count > 10000) throw new Error('Too many native caption containers.');
   const captions: NativeCaption[] = []; let totalWords = 0;
   for (let i = 0; i < count; i++) {
@@ -72,6 +72,7 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
   const timeOriginSeconds = version >= 2 ? d() : 0;
   if(version>=3){const base=d();if(base!==0)style.baseFontWeight=base;for(const word of [style.upcoming,style.current,style.spoken]){const weight=d(),italic=u(),mode=u();if(italic>2||mode>2)throw new Error('Invalid native typography mode.');if(weight!==0)word.fontWeight=weight;if(italic)word.italic=italic===2;if(mode)word.fontWeightOffset=mode===2?100:0;}}
   if(version>=4){const mode=u();if(mode>2)throw new Error('Invalid native display letter case.');if(mode)style.letterCase=mode===1?'uppercase':'lowercase';}
+  if(version>=5){for(const word of [style.upcoming,style.current,style.spoken]){const fill=flag();if(fill)word.bubbleFillSpaces=true;}}
   if (offset !== bytes.length) throw new Error('Trailing native document bytes.');
   return validateNativeDocument({ version: 1, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(sequenceId), captions, style, timeOriginSeconds, ...(version===2?{}:{binaryVersion:version}) });
 }
@@ -86,7 +87,7 @@ function editColor(previous: NativeColor, value: string): NativeColor {
 function panelWord(native: NativeWordStyle, textCase: WordAppearance['textTransform']): WordAppearance {
   return { fontFamily: native.fontFamily, fontWeight: native.fontWeight??400, fontWeightOffset: native.fontWeightOffset??null, fontSize: native.fontSize * native.sizeScale, sizeScale: native.sizeScale,
     italic: native.italic??false, letterSpacing: 0, textTransform: textCase, color: hexColor(native.color), opacity: native.opacity,
-    bubble: native.bubble, bubbleColor: hexColor(native.bubbleColor), bubbleOpacity: native.bubbleColor.a, padding: native.padding, radius: native.radius,
+    bubble: native.bubble, bubbleFillSpaces: native.bubbleFillSpaces ?? false, bubbleColor: hexColor(native.bubbleColor), bubbleOpacity: native.bubbleColor.a, padding: native.padding, radius: native.radius,
     strokeEnabled: native.outlineWidth > 0, strokeWidth: native.outlineWidth, strokeColor: hexColor(native.outlineColor), strokeOpacity: native.outlineColor.a,
     shadowEnabled: native.shadowColor.a > 0 && (native.shadowBlur > 0 || native.shadowX !== 0 || native.shadowY !== 0), shadowColor: hexColor(native.shadowColor), shadowOpacity: native.shadowColor.a,
     shadowBlur: native.shadowBlur, shadowOffsetX: native.shadowX, shadowOffsetY: native.shadowY };
@@ -177,6 +178,7 @@ function updateWord(previous: NativeWordStyle, before: ReturnType<typeof resolve
   if (before.fontSize !== after.fontSize) result.fontSize = after.fontSize / result.sizeScale;
   if (before.color !== after.color) result.color = editColor(result.color, after.color);
   if (before.opacity !== after.opacity) result.opacity = after.opacity;
+  if (before.bubbleFillSpaces !== after.bubbleFillSpaces) { if(after.bubbleFillSpaces) result.bubbleFillSpaces=true; else delete result.bubbleFillSpaces; }
   if (before.bubble !== after.bubble) result.bubble = after.bubble;
   if (before.bubbleColor !== after.bubbleColor) result.bubbleColor = editColor(result.bubbleColor, after.bubbleColor);
   if (before.bubbleOpacity !== after.bubbleOpacity) result.bubbleColor.a = after.bubbleOpacity;

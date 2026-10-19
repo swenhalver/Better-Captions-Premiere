@@ -110,6 +110,10 @@ test('TS encoder bytes roundtrip through actual C++ decoder and encoder', async 
       writeFileSync(input,v4);execFileSync(executable,['--roundtrip',input,output]);
       assert.deepEqual(new Uint8Array(readFileSync(output)),v4,'v4 display case is byte-exact across TS and C++');
     }
+    const spaces=structuredClone(typography);spaces.style.current.bubbleFillSpaces=true;spaces.style.spoken.bubbleFillSpaces=true;
+    const v5=encodeNativeDocument(spaces);assert.equal(new DataView(v5.buffer).getUint32(4,true),5);assert.equal(v5.length,v3.length+16);
+    writeFileSync(input,v5);execFileSync(executable,['--roundtrip',input,output]);
+    assert.deepEqual(new Uint8Array(readFileSync(output)),v5,'v5 bubble space flags are byte-exact across TS and C++');
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -326,4 +330,24 @@ test('persisted-origin reader accepts legacyv1 zero and rejects malformed footer
   const bad=bytes.slice();bad[4]=3;assert.throws(()=>decodeNativeTransportTimeOrigin(text(bad)));
   const nan=bytes.slice();new DataView(nan.buffer).setFloat64(nan.length-8,NaN,true);assert.throws(()=>decodeNativeTransportTimeOrigin(text(nan)));
   const malformed=bytes.slice();new DataView(malformed.buffer).setUint32(8,10001,true);assert.throws(()=>decodeNativeTransportTimeOrigin(text(malformed)));
+});
+
+
+test('bubble space flags retain legacy bytes, roundtrip all three states and reject malformed booleans',async()=>{
+ const {encodeNativeDocument,encodeNativeTransportText,decodeNativeTransportTimeOrigin}=await import('../webview-ui/src/lib/native-effect/encode.ts');
+ const {decodeNativePanelDocument}=await import('../webview-ui/src/lib/native-effect/panel.ts');
+ for(const version of [1,2,3,4]){
+  const data=document();data.binaryVersion=version;const before=encodeNativeDocument(data);
+  for(const key of ['upcoming','current','spoken'])data.style[key].bubbleFillSpaces=false;
+  assert.deepEqual(encodeNativeDocument(data),before,'explicit false must not upgrade a legacy carrier');
+  assert.equal(encodeNativeTransportText(decodeNativePanelDocument(encodeNativeTransportText(data),'seq-1')),encodeNativeTransportText(data));
+ }
+ for(const state of ['upcoming','current','spoken']){
+  const data=document();data.timeOriginSeconds=42.125;data.style[state].bubbleFillSpaces=true;
+  const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');
+  assert.equal(decoded.binaryVersion,5);assert.equal(decoded.style[state].bubbleFillSpaces,true);assert.equal(decodeNativeTransportTimeOrigin(text),42.125);assert.equal(encodeNativeTransportText(decoded),text);
+  const bytes=Buffer.from(text.slice(7),'hex');bytes.writeUInt32LE(2,bytes.length-12);
+  const malformed='BCDOC1:'+bytes.toString('hex');assert.throws(()=>decodeNativePanelDocument(malformed,'seq-1'));assert.throws(()=>decodeNativeTransportTimeOrigin(malformed));
+ }
+ for(const value of [1,0,null,'true',{}]){const data=document();data.style.current.bubbleFillSpaces=value;assert.throws(()=>validateNativeDocument(data),/bubble spaces flag/);}
 });

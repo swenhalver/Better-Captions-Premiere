@@ -5,7 +5,7 @@
 #include <vector>
 
 namespace better_captions {
-constexpr std::uint32_t kSchemaVersion = 4;
+constexpr std::uint32_t kSchemaVersion = 5;
 constexpr std::size_t kMaxWords = 100000;
 constexpr std::size_t kMaxDocumentBytes = 16 * 1024 * 1024;
 constexpr std::size_t kMaxGroupsPerPage = 100;
@@ -23,7 +23,7 @@ struct WordStyle {
     int italic=-1, fontWeightOffset=-1; // offset100 means next available heavier
     double fontSize=64, sizeScale=1, opacity=1;
     Color color;
-    bool bubble=false;
+    bool bubble=false, bubbleFillSpaces=false;
     Color bubbleColor{0,0,0,1};
     double padding=8,radius=10,outlineWidth=0;
     Color outlineColor{0,0,0,1};
@@ -57,6 +57,8 @@ struct DrawWord {
     WordState state=WordState::Upcoming;
     WordStyle style;
     double x=0,baseline=0,width=0,height=0;
+    // Paint-only extension; never participates in glyph origins or wrapping.
+    double bubbleExtraWidth=0;
 };
 struct RollUpSettings {
     bool enabled=false;

@@ -1,4 +1,4 @@
-# Better Captions 0.7.22 — Smart character-count feedback
+# Better Captions 0.7.22 — Responsive geometry and compact styling controls
 
 Smart line fit now updates the character-count field to an estimated capacity for
 the current caption Width and typography. The estimate measures the transcript's

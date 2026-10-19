@@ -28,3 +28,10 @@ test('area hooks choose applied captions and bounded exact-key operations withou
   assert.throws(()=>validateAreaEdit({...payload,edit:JSON.parse('{"__proto__":{},"operation":"undo","frame":0,"signature":"ok"}')},captions));
   assert.throws(()=>validateAreaRead({captionId:'cue-1'},[{id:'cue-1'}]),/applied/);
 });
+
+
+test('agent word background space flags are independent strict booleans',()=>{
+ const patch={activeWord:{bubbleFillSpaces:true},spokenWord:{bubbleFillSpaces:false},upcomingWord:{bubbleFillSpaces:true}};
+ assert.deepEqual(validateStylePatch(patch),patch);
+ for(const bubbleFillSpaces of [null,0,1,'true',{}])assert.throws(()=>validateStylePatch({activeWord:{bubbleFillSpaces}}));
+});

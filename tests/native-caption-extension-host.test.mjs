@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { defaultNativeStyle } from '../webview-ui/src/lib/native-effect/contract.ts';
 import { encodeNativeTransportText } from '../webview-ui/src/lib/native-effect/encode.ts';
+import { decodeNativePanelDocument } from '../webview-ui/src/lib/native-effect/panel.ts';
 
 const source = fs.readFileSync(new URL('../cep/host/bridge.jsx', import.meta.url), 'utf8');
 const MATCH = 'AE.com.swen.bettercaptions.native.experimental', NS = 'http://ns.adobe.com/premierePrivateProjectMetaData/1.0/', FIELD = 'BetterCaptionsNativeCarrier';
@@ -16,6 +17,16 @@ function fixture(options = {}) {
   const files = new Map(), writes = [];
   const document = { version: 1, binaryVersion: 4, animationAuthority: 'premiere-effect', sequenceId: 'seq-a', timeOriginSeconds: 3600, style: { ...defaultNativeStyle(), letterCase: 'uppercase' },
     captions: [{ id: 'manual-first', start: 1, end: 2, manualSplit: true, words: [word('My correction!', 1, 2)] }, { id: 'manual-last', start: 3, end: 4, manualSplit: true, words: [word('Keep edited timings.', 3, 4)] }] };
+  if (options.binaryVersion !== undefined) {
+    document.binaryVersion = options.binaryVersion;
+    if (options.binaryVersion < 4) delete document.style.letterCase;
+    if (options.binaryVersion === 1) document.timeOriginSeconds = 0;
+  }
+  if (options.fillSpaces) {
+    Object.assign(document.style.current, {bubble:true, bubbleFillSpaces:true, opacity:.7, padding:13, radius:17});
+    Object.assign(document.style.spoken, {bubble:true, bubbleFillSpaces:true, opacity:.3});
+    document.style.current.bubbleColor={r:.123,g:.456,b:.789,a:.35};
+  }
   const next = structuredClone(document); next.captions[1].words.push(word('New tail', 6, 7)); next.captions[1].end = 7;
   const originalText = encodeNativeTransportText(document), appendedText = encodeNativeTransportText(next);
   const marker = JSON.stringify({ version: 1, owner: 'com.swen.bettercaptions', kind: 'transparent-video', projectItemId: 'carrier-item', creationId: '12345678-1234-1234-abcd-123456789abc', width: 720, height: 1280 });
@@ -138,4 +149,36 @@ test('duration-only extension can reveal existing hidden words without rewriting
   const h = fixture(), receipt = h.read(), result = h.extend(receipt, { documentText: h.originalText });
   assert.equal(result.ok, true, result.error); assert.equal(result.connection.documentText, h.originalText);
   assert.equal(h.writes.filter(row => row[0] === 'document').length, 0);
+});
+
+
+test('v5 extension preserves background space flags, all styles/manual splits, native keys and old words',()=>{
+ const h=fixture({fillSpaces:true}),curves=JSON.stringify(h.params.slice(0,4)),before=decodeNativePanelDocument(h.originalText,'seq-a');
+ assert.equal(before.binaryVersion,5);assert.equal(before.style.current.bubbleFillSpaces,true);assert.equal(before.style.spoken.bubbleFillSpaces,true);
+ const result=h.extend(h.read());assert.equal(result.ok,true,result.error);assert.equal(result.connection.documentText,h.appendedText);
+ const after=decodeNativePanelDocument(result.connection.documentText,'seq-a');
+ assert.equal(after.binaryVersion,5);assert.deepEqual(after.style,before.style);assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);
+ assert.deepEqual(after.captions[0],before.captions[0]);assert.deepEqual(after.captions[1].words.slice(0,before.captions[1].words.length),before.captions[1].words);
+ assert.equal(after.captions[1].id,before.captions[1].id);assert.equal(after.captions[1].manualSplit,true);assert.equal(JSON.stringify(h.params.slice(0,4)),curves);
+ assert.equal(result.connection.startTicks,tick(10));assert.equal(result.connection.inTicks,tick(3600));
+});
+
+test('v1 through v5 extension retains its original format and exact style footer',()=>{
+ for(const binaryVersion of [1,2,3,4,5]){
+  const h=fixture({binaryVersion}),before=decodeNativePanelDocument(h.originalText,'seq-a'),result=h.extend(h.read());
+  assert.equal(result.ok,true,result.error);assert.equal(result.connection.documentText,h.appendedText);
+  const after=decodeNativePanelDocument(result.connection.documentText,'seq-a');assert.equal(after.binaryVersion,before.binaryVersion);assert.deepEqual(after.style,before.style);
+ }
+});
+
+test('v5 footer flag edits, malformed booleans, trailing bytes and truncation refuse before any setter',()=>{
+ const altered=fixture({fillSpaces:true}),receipt=altered.read(),changed=structuredClone(altered.next);changed.style.current.bubbleFillSpaces=false;
+ assert.match(altered.extend(receipt,{documentText:encodeNativeTransportText(changed)}).error,/preserve/);assert.deepEqual(altered.writes,[]);
+ for(const mutate of [bytes=>{bytes.writeUInt32LE(2,bytes.length-12);return bytes;},bytes=>bytes.subarray(0,bytes.length-4),bytes=>Buffer.concat([bytes,Buffer.from([0,0,0,0])]),bytes=>{bytes.writeUInt32LE(6,4);return bytes;}]){
+  const h=fixture({fillSpaces:true}),bytes=mutate(Buffer.from(h.originalText.slice(7),'hex'));
+  // Even matching malformed old/new footers cannot serve as an append-only
+  // preservation proof. Reject before changing the host clip duration.
+  h.params[4].value='BCDOC1:'+bytes.toString('hex');const fresh=h.connection();h.snapshot.locator=fresh.locator;h.snapshot.revision=fresh.revision;
+  const result=h.extend(h.read(),{documentText:h.params[4].value});assert.ok(result.error);assert.deepEqual(h.writes,[]);
+ }
 });

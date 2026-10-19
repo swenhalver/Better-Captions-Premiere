@@ -1387,11 +1387,31 @@ var BetterCaptionsHost = (function () {
         if (typeof value !== 'number' || !isFinite(value) || value < 0 || value > 1) throw new Error((label || 'Smart line fit') + ' must be between zero and one.');
         return value >= 0.5 ? 1 : 0;
     }
-    function nativeSmartLineFitStates(properties, propertyCount, sample) {
+    // ComponentParam collection/name access crosses Premiere's native bridge.
+    // Read each property/name once per checked context; never retain this table
+    // between requests or across the preflight/mutation/readback checks.
+    function nativePropertyTable(properties) {
+        var count = connectionCount(properties && properties.numItems, 128), entries = [], names = [], byName = {};
+        for (var p = 0; p < count; p++) {
+            var param = properties[p], label = String(param.displayName), key = '$' + label;
+            if (label.length > 1024) throw new Error('Native parameter names exceed the caption discovery bound.');
+            entries.push(param); names.push(label);
+            if (!Object.prototype.hasOwnProperty.call(byName, key)) byName[key] = [];
+            byName[key].push(p);
+        }
+        return { entries: entries, names: names, byName: byName, count: count };
+    }
+    function nativePropertyIndex(table, label, ambiguous) {
+        var key = '$' + label, indices = Object.prototype.hasOwnProperty.call(table.byName, key) ? table.byName[key] : null;
+        if (!indices) return -1;
+        if (indices.length !== 1) throw new Error(ambiguous);
+        return indices[0];
+    }
+    function nativeSmartLineFitStates(table, sample) {
         var stateNames = ['current', 'spoken', 'upcoming'], topics = ['Current word', 'Previously spoken words', 'Upcoming words'];
         var labels = ['Size, %', 'Word bubble', 'Bubble padding, %'], values = [[], [], []], grouped = {}, topicSeen = {}, topicCount = 0, active = null, total = 0;
-        for (var p = 0; p < propertyCount; p++) {
-            var label = String(properties[p].displayName);
+        for (var p = 0; p < table.count; p++) {
+            var label = table.names[p];
             for (var t = 0; t < topics.length; t++) if (label === topics[t]) {
                 active = stateNames[t];
                 if (topicSeen[active]) throw new Error('Ambiguous native smart word-state topics.');
@@ -1399,10 +1419,10 @@ var BetterCaptionsHost = (function () {
                 grouped[active] = [null, null, null];
             }
             for (var f = 0; f < labels.length; f++) if (label === labels[f]) {
-                total++; values[f].push(properties[p]);
+                total++; values[f].push(table.entries[p]);
                 if (active !== null) {
                     if (grouped[active][f]) throw new Error('Ambiguous native smart word-state controls.');
-                    grouped[active][f] = properties[p];
+                    grouped[active][f] = table.entries[p];
                 }
             }
         }
@@ -1433,12 +1453,9 @@ var BetterCaptionsHost = (function () {
             names.push(name); if (nativeCaptionName(name)) nativeCount++;
         }
         if (nativeCount !== 1 || componentIndex >= count || !nativeCaptionName(names[componentIndex])) throw new Error('Ambiguous native caption effect instances.');
-        var properties = components[componentIndex].properties, propertyCount = connectionCount(properties && properties.numItems, 128), documentIndex = -1;
-        for (var p = 0; p < propertyCount; p++) if (String(properties[p].displayName) === 'Caption document (experimental)') {
-            if (documentIndex !== -1) throw new Error('Ambiguous native caption document parameters.');
-            documentIndex = p;
-        }
-        if (documentIndex < 0 || typeof properties[documentIndex].isTimeVarying !== 'function' || properties[documentIndex].isTimeVarying()) throw new Error('The native caption document parameter is missing or animated.');
+        var table = nativePropertyTable(components[componentIndex].properties), documentIndex = nativePropertyIndex(table, 'Caption document (experimental)', 'Ambiguous native caption document parameters.');
+        var documentParam = documentIndex < 0 ? null : table.entries[documentIndex];
+        if (!documentParam || typeof documentParam.isTimeVarying !== 'function' || documentParam.isTimeVarying()) throw new Error('The native caption document parameter is missing or animated.');
         var timing = connectionTiming(clip), projectPath = String(app.project.path), sequenceId = String(s.sequenceID), clipNodeId = connectionId(clip.nodeId);
         var locator = { projectPath: projectPath, sequenceId: sequenceId, clipNodeId: clipNodeId, trackIndex: trackIndex, clipIndex: clipIndex, componentIndex: componentIndex, documentParamIndex: documentIndex };
         var selected = typeof clip.isSelected === 'function' && clip.isSelected() === true;
@@ -1446,22 +1463,15 @@ var BetterCaptionsHost = (function () {
             startTicks: timing.startTicks, endTicks: timing.endTicks, inTicks: timing.inTicks, outTicks: timing.outTicks, selected: selected, disabled: clip.disabled === true, locator: locator, matchName: names[componentIndex] };
         // Read grouping independently of the embedded transcript. Scalar edits
         // in Effect Controls must refresh phrase rows without rewriting keys.
-        var groupingParam = null;
-        for (var g = 0; g < propertyCount; g++) if (String(properties[g].displayName) === 'Characters per caption') {
-            if (groupingParam) throw new Error('Ambiguous native caption character limits.');
-            groupingParam = properties[g];
-            if (typeof groupingParam.isTimeVarying !== 'function' || groupingParam.isTimeVarying()) continue;
-            var limit = properties[g].getValue();
+        var groupingIndex = nativePropertyIndex(table, 'Characters per caption', 'Ambiguous native caption character limits.'), groupingParam = groupingIndex < 0 ? null : table.entries[groupingIndex];
+        if (groupingParam && typeof groupingParam.isTimeVarying === 'function' && !groupingParam.isTimeVarying()) {
+            var limit = groupingParam.getValue();
             if (typeof limit !== 'number' || !isFinite(limit) || limit !== Math.floor(limit) || limit < 1 || limit > 500) throw new Error('Invalid native caption character limit.');
             result.maxChars = limit;
         }
         // Smart grouping is a sampled effect setting, never a document rewrite.
         // These source-clock samples let the editor mirror width-dependent rows.
-        var smartParam = null;
-        for (var sp = 0; sp < propertyCount; sp++) if (String(properties[sp].displayName) === 'Smart line fit') {
-            if (smartParam) throw new Error('Ambiguous native Smart line fit controls.');
-            smartParam = properties[sp];
-        }
+        var smartIndex = nativePropertyIndex(table, 'Smart line fit', 'Ambiguous native Smart line fit controls.'), smartParam = smartIndex < 0 ? null : table.entries[smartIndex];
         result.smartLineFit = false;
         if (smartParam) {
             var sampleTimeline = nativeControlTicks(String(s.getPlayerPosition().ticks));
@@ -1478,11 +1488,7 @@ var BetterCaptionsHost = (function () {
             if (result.smartLineFit) {
                 var fitLabels = ['Width', 'Global font size (64 = 1x)'], fitValues = [];
                 for (var fl = 0; fl < fitLabels.length; fl++) {
-                    var fitParam = null;
-                    for (var fp = 0; fp < propertyCount; fp++) if (String(properties[fp].displayName) === fitLabels[fl]) {
-                        if (fitParam) throw new Error('Ambiguous native smart grouping controls.');
-                        fitParam = properties[fp];
-                    }
+                    var fitIndex = nativePropertyIndex(table, fitLabels[fl], 'Ambiguous native smart grouping controls.'), fitParam = fitIndex < 0 ? null : table.entries[fitIndex];
                     if (!fitParam) throw new Error('Premiere did not expose the smart grouping width or font size.');
                     fitValues.push(sampleGrouping(fitParam));
                 }
@@ -1490,7 +1496,7 @@ var BetterCaptionsHost = (function () {
                 var fontSize = fitValues[1];
                 if (typeof fontSize !== 'number' || !isFinite(fontSize) || fontSize < 1 || fontSize > 512) throw new Error('Invalid native smart grouping font size.');
                 result.lineFitFontScale = fontSize / 64;
-                result.lineFitStates = nativeSmartLineFitStates(properties, propertyCount, sampleGrouping);
+                result.lineFitStates = nativeSmartLineFitStates(table, sampleGrouping);
             }
             if (nativeControlTicks(String(sequence(sequenceId, projectPath).getPlayerPosition().ticks)) !== sampleTimeline) throw new Error('The playhead moved while reading smart caption grouping. Read it again.');
         }
@@ -1502,7 +1508,7 @@ var BetterCaptionsHost = (function () {
         }
         result.connectionRevision = stringify(connectionRevision);
         if (includeDocument) {
-            var text = boundedNativeCarrier(properties[documentIndex].getValue());
+            var text = boundedNativeCarrier(documentParam.getValue());
             result.documentText = text;
             // Keep byte-identical ordering with the existing native CEP adapter.
             var revision = { projectPath: projectPath, sequenceId: sequenceId, clipNodeId: clipNodeId, adjustmentLayer: !carrier,
@@ -1510,7 +1516,7 @@ var BetterCaptionsHost = (function () {
             if (carrier) { revision.carrierKind = carrier.carrierKind; revision.carrierItemId = carrier.carrierItemId; revision.carrierRevision = carrier.carrierRevision; }
             result.revision = stringify(revision);
         }
-        return { record: result, param: properties[documentIndex], groupingParam: groupingParam };
+        return { record: result, param: documentParam, groupingParam: groupingParam, propertyTable: table };
     }
     function nativeProjectItems() {
         var result = [], seen = {};
@@ -1864,13 +1870,9 @@ var BetterCaptionsHost = (function () {
         var inside = nativeTickCompare(at, timing.startTicks) >= 0 && nativeTickCompare(at, timing.endTicks) < 0;
         var sourceTicks = inside ? nativeTickMath(nativeTickMath(at, timing.startTicks, true), timing.inTicks, false) : null;
         if (sourceTicks !== null && nativeTickCompare(sourceTicks, timing.outTicks) >= 0) throw new Error('The native caption source timing changed.');
-        var names = ['position', 'width', 'height', 'groups', 'smartFit', 'alignment'].concat(nativeRollUpNames), labels = ['Position', 'Width', 'Height', 'Groups per page', 'Smart line fit', 'Text alignment'].concat(nativeRollUpLabels), params = {}, descriptors = {}, properties = clip.components[target.componentIndex].properties;
+        var names = ['position', 'width', 'height', 'groups', 'smartFit', 'alignment'].concat(nativeRollUpNames), labels = ['Position', 'Width', 'Height', 'Groups per page', 'Smart line fit', 'Text alignment'].concat(nativeRollUpLabels), params = {}, descriptors = {}, table = before.propertyTable;
         for (var n = 0; n < names.length; n++) {
-            var name = names[n], param = null;
-            for (var index = 0; index < properties.numItems; index++) if (String(properties[index].displayName) === labels[n]) {
-                if (param) throw new Error('Ambiguous native caption geometry parameters.');
-                param = properties[index];
-            }
+            var name = names[n], index = nativePropertyIndex(table, labels[n], 'Ambiguous native caption geometry parameters.'), param = index < 0 ? null : table.entries[index];
             // Old native builds have no page-size parameter. Keep their geometry
             // usable, but never invent a writable group count.
             if (!param && (name === 'groups' || name === 'smartFit' || name === 'alignment' || nativeRollUpIndex(name) >= 0)) continue;
@@ -2139,7 +2141,7 @@ var BetterCaptionsHost = (function () {
         function skip(bytes) { if (offset + bytes * 2 > text.length) throw new Error('Truncated caption extension words.'); offset += bytes * 2; }
         if (u() !== 1346454338) throw new Error('Invalid caption extension document magic.');
         var version = u(), n = u(), captions = [];
-        if (version < 1 || version > 4 || n > 10000) throw new Error('Invalid caption extension document version or size.');
+        if (version < 1 || version > 5 || n > 10000) throw new Error('Invalid caption extension document version or size.');
         for (var c = 0; c < n; c++) {
             var identityStart = offset, length = u();
             if (!length || length > 256) throw new Error('Invalid caption extension identity.');
@@ -2149,7 +2151,29 @@ var BetterCaptionsHost = (function () {
             for (var w = 0; w < words; w++) { var size = u(); if (!size || size > 4096) throw new Error('Invalid caption extension text size.'); skip(size + 16); if (u() > 1) throw new Error('Invalid caption extension sentence flag.'); }
             captions.push({ identity: identity, count: words, words: text.substring(wordStart, offset) });
         }
-        return { version: version, captions: captions, trailer: text.substring(offset) };
+        // Walk the immutable style footer before treating it as an opaque
+        // equality proof. v5 appends three bubble-space booleans; it must not
+        // let malformed flags/truncated data reach a duration setter.
+        var trailerStart = offset;
+        for (var state = 0; state < 3; state++) {
+            var familyLength = u();
+            if (!familyLength || familyLength > 256) throw new Error('Invalid caption extension font size.');
+            skip(familyLength); skip(56);
+            if (u() > 1) throw new Error('Invalid caption extension bubble flag.');
+            skip(144);
+        }
+        skip(16); if (u() > 1) throw new Error('Invalid caption extension title flag.');
+        if (version >= 2) skip(8);
+        if (version >= 3) {
+            skip(8);
+            for (var style = 0; style < 3; style++) {
+                skip(8); if (u() > 2 || u() > 2) throw new Error('Invalid caption extension typography flag.');
+            }
+        }
+        if (version >= 4 && u() > 2) throw new Error('Invalid caption extension case flag.');
+        if (version >= 5) for (var fill = 0; fill < 3; fill++) if (u() > 1) throw new Error('Invalid caption extension bubble spaces flag.');
+        if (offset !== text.length) throw new Error('Trailing caption extension document bytes.');
+        return { version: version, captions: captions, trailer: text.substring(trailerStart) };
     }
     function nativeExtensionAppendOnly(before, after) {
         var old = nativeExtensionBinary(before), next = nativeExtensionBinary(after), changed = 0;

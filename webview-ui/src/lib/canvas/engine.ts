@@ -132,7 +132,8 @@ export class CaptionRenderer {
       let x=style.textAlign==='left'?-alignmentWidth/2:style.textAlign==='right'?alignmentWidth/2-rowWidths[ri]:-rowWidths[ri]/2;
       x+=overhang(r[0]);
       const y=-height/2+(ri+.5)*rowHeight;
-      for(const wm of r){
+      for(let wordIndex=0;wordIndex<r.length;wordIndex++){
+        const wm=r[wordIndex];
         x+=wm.gapBefore;
         const state=wordState(wm.word,time),a=appearance(style,state);c.save();c.font=this.font(style,a);
         const visibleText=transformCaptionText(wm.text,a.textTransform,wm.precedingText),actualWidth=this.measureText(visibleText,a),tx=x+(wm.width-actualWidth)/2;
@@ -148,7 +149,19 @@ export class CaptionRenderer {
           if(animation.preset==='bounce')c.translate(0,-bounceLift*(1-easeOutBounce(p)));
         }
         // Both text and its highlight use the same local animation transform.
-        if(a.bubble){c.fillStyle=rgba(a.bubbleColor,a.bubbleOpacity);this.roundRect(tx-a.padding,y-a.fontSize*.6-a.padding,actualWidth+2*a.padding,a.fontSize*1.2+2*a.padding,a.radius);c.fill();}
+        if(a.bubble){
+          let fillSpace=0;
+          const next=r[wordIndex+1];
+          if(a.bubbleFillSpaces&&next&&next.gapBefore>0){
+            const nextAppearance=appearance(style,wordState(next.word,time));
+            const nextText=transformCaptionText(next.text,nextAppearance.textTransform,next.precedingText);
+            const ownFont=c.font;c.font=this.font(style,nextAppearance);
+            const nextWidth=this.measureText(nextText,nextAppearance);c.font=ownFont;
+            const nextLeft=x+wm.width+next.gapBefore+(next.width-nextWidth)/2-(nextAppearance.bubble?nextAppearance.padding:0);
+            fillSpace=Math.max(0,nextLeft-(tx+actualWidth+a.padding));
+          }
+          c.fillStyle=rgba(a.bubbleColor,a.bubbleOpacity);this.roundRect(tx-a.padding,y-a.fontSize*.6-a.padding,actualWidth+2*a.padding+fillSpace,a.fontSize*1.2+2*a.padding,a.radius);c.fill();
+        }
         if(a.shadowEnabled){c.shadowColor=rgba(a.shadowColor,a.shadowOpacity);c.shadowBlur=a.shadowBlur;c.shadowOffsetX=a.shadowOffsetX;c.shadowOffsetY=a.shadowOffsetY;}
         if(a.strokeEnabled&&a.strokeWidth>0){c.strokeStyle=rgba(a.strokeColor,a.strokeOpacity);c.lineWidth=a.strokeWidth*2;c.lineJoin='round';this.paintText(visibleText,tx,y,a,true);c.shadowBlur=0;}
         c.fillStyle=a.color;this.paintText(visibleText,tx,y,a);c.restore();x+=wm.width;

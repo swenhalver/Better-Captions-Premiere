@@ -27,7 +27,7 @@ export function prepareNativeCreation(session: SessionState, measuredSpace: numb
   const wordStyle = (index: number): NativeWordStyle => {
     const a = appearances[index], raw = style[states[index]];
     return { fontFamily: a.fontFamily, fontSize: a.fontSize, sizeScale: 1, fontWeight: a.fontWeight, ...(raw?.fontWeightOffset === 0 || raw?.fontWeightOffset === 100 ? {fontWeightOffset:raw.fontWeightOffset} : {}), italic: a.italic,
-      opacity: a.opacity, color: color(a.color), bubble: a.bubble, bubbleColor: color(a.bubbleColor, a.bubbleOpacity), padding: a.padding, radius: a.radius,
+      opacity: a.opacity, color: color(a.color), bubble: a.bubble, ...(a.bubbleFillSpaces ? {bubbleFillSpaces:true} : {}), bubbleColor: color(a.bubbleColor, a.bubbleOpacity), padding: a.padding, radius: a.radius,
       outlineWidth: a.strokeEnabled ? a.strokeWidth : 0, outlineColor: color(a.strokeColor, a.strokeOpacity),
       shadowBlur: a.shadowBlur, shadowX: a.shadowOffsetX, shadowY: a.shadowOffsetY, shadowColor: color(a.shadowColor, a.shadowEnabled ? a.shadowOpacity : 0) };
   };

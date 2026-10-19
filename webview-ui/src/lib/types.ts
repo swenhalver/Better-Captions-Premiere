@@ -97,6 +97,8 @@ export interface WordAppearance {
   color: string;
   opacity: number;
   bubble: boolean;
+  /** Color the following interword gap, without extending past a line end. */
+  bubbleFillSpaces?: boolean;
   bubbleColor: string;
   bubbleOpacity: number;
   padding: number;

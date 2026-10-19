@@ -99,6 +99,19 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  auto bubbleFrame=layoutFrame(bubbles,0.1,{0,0,1200,300},measure);
  auto glyph=measure("HELLO",bubbles.style.current);
  assert(bubbleFrame.words[0].width==glyph.width+20&&bubbleFrame.words[0].height==glyph.ascent+glyph.descent+20);
+ // Filling spaces is a paint-only extension: source layout, wrapping and final
+ // trailing bounds stay identical; current/spoken/upcoming flags are independent.
+ for(const auto state:{0,1,2}){
+  auto fill=bubbles;fill.style.wordSpacing=37;auto* selected=state==0?&fill.style.current:state==1?&fill.style.spoken:&fill.style.upcoming;
+  selected->bubble=true;selected->bubbleFillSpaces=true;
+  const double time=state==1?.5:.1;const auto frame=layoutFrame(fill,time,{0,0,1200,300},measure);
+  auto without=fill;selected=state==0?&without.style.current:state==1?&without.style.spoken:&without.style.upcoming;selected->bubbleFillSpaces=false;
+  const auto baseline=layoutFrame(without,time,{0,0,1200,300},measure);assert(frame.words.size()==baseline.words.size());
+  for(std::size_t i=0;i<frame.words.size();++i){const auto& run=frame.words[i];assert(run.x==baseline.words[i].x&&run.width==baseline.words[i].width&&run.baseline==baseline.words[i].baseline);const bool enabled=run.style.bubble&&run.style.bubbleFillSpaces&&i+1<frame.words.size();assert(run.bubbleExtraWidth==(enabled?37:0));}
+  const auto bytes=encode(fill);assert(decode(bytes).schemaVersion==5&&encode(decode(bytes))==bytes);
+  const auto wrapped=layoutFrame(fill,time,{0,0,160,600},measure);for(const auto& run:wrapped.words)assert(run.bubbleExtraWidth==0);
+ }
+ auto v5Bad=encode(bubbles);auto v5Fill=bubbles;v5Fill.style.current.bubbleFillSpaces=true;v5Bad=encode(v5Fill);v5Bad.back()=2;rejects([&]{decode(v5Bad);});
  auto again=layoutFrame(bubbles,0.1,{0,0,1200,300},measure);
  assert(again.words.size()==bubbleFrame.words.size());for(std::size_t i=0;i<again.words.size();++i)assert(again.words[i].x==bubbleFrame.words[i].x&&again.words[i].baseline==bubbleFrame.words[i].baseline&&again.words[i].text==bubbleFrame.words[i].text);
  auto overlap=sample();overlap.containers[0].words={ {"long",0,2,false},{"short",0.5,1,false} };assert(layoutFrame(overlap,1.5,{0,0,1200,300},measure).words.size()==2);
@@ -184,6 +197,18 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  Document rolling;rolling.containers.push_back({"rolling",false,{{"First.",0,1,true},{"Second.",1,2,true},{"Third.",2,3,true},{"Fourth.",3,4,true}}});
  for(auto* style:{&rolling.style.current,&rolling.style.upcoming,&rolling.style.spoken})style->fontSize=10;
  RollUpSettings roll;roll.enabled=true;roll.boundaryEnabled=false;
+ // Rolling geometry uses reserved word slots. Fill ends at the next actual
+ // outer edge, including unequal state scales, then follows creative transforms.
+ auto spaceRoll=bubbles;for(auto* style:{&spaceRoll.style.current,&spaceRoll.style.upcoming,&spaceRoll.style.spoken}){style->bubble=true;style->bubbleFillSpaces=true;style->fontSize=12;}
+ spaceRoll.style.current.sizeScale=1.5;spaceRoll.style.wordSpacing=17;
+ for(int direction:{1,2,3,4})for(int transition:{1,2,3,4}){
+  auto settings=roll;settings.direction=direction;settings.transition=transition;
+  const auto frame=layoutFrame(spaceRoll,.6,{0,0,500,180},measure,56,.6,{},1,false,settings);
+  assert(frame.words.size()==2);assert(frame.words[0].bubbleExtraWidth>0);assert(std::abs(frame.words[0].x+frame.words[0].width+frame.words[0].bubbleExtraWidth-frame.words[1].x)<1e-10);
+  auto unchanged=spaceRoll;for(auto* style:{&unchanged.style.current,&unchanged.style.upcoming,&unchanged.style.spoken})style->bubbleFillSpaces=false;
+  const auto baseline=layoutFrame(unchanged,.6,{0,0,500,180},measure,56,.6,{},1,false,settings);
+  for(std::size_t i=0;i<frame.words.size();++i){assert(frame.words[i].x==baseline.words[i].x&&frame.words[i].width==baseline.words[i].width&&frame.words[i].baseline==baseline.words[i].baseline);}
+ }
  const auto rollingBytes=encode(rolling);
  auto rollFrame=[&](double time,const RollUpSettings& settings,std::size_t groups=1){return layoutFrame(rolling,time,{0,0,200,100},measure,56,.6,{},groups,false,settings);};
  const auto initialRoll=rollFrame(.5,roll),middleRoll=rollFrame(1.09,roll),finishedRoll=rollFrame(1.18,roll);

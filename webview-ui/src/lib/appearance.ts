@@ -9,7 +9,7 @@ export function resolveAppearance(style: StyleConfig, key: WordStateKey): Resolv
     fontFamily: style.fontFamily, fontWeight: style.fontWeight, fontWeightOffset: null, fontSize: style.fontSize,
     sizeScale: 1, color: style.textColor, opacity: 1, italic: false, letterSpacing: 0,
     textTransform: style.textTransform, bubble: false, bubbleColor: '#000000',
-    bubbleOpacity: 1, padding: 8, radius: 10,
+    bubbleOpacity: 1, bubbleFillSpaces: false, padding: 8, radius: 10,
     strokeEnabled: style.strokeEnabled, strokeColor: style.strokeColor,
     strokeOpacity: style.strokeOpacity, strokeWidth: style.strokeWidth,
     shadowEnabled: style.shadowEnabled, shadowColor: style.shadowColor,

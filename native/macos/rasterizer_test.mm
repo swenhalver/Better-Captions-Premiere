@@ -20,6 +20,19 @@ int main(){
  check(count(macos::rasterize(d,3,box,640,240))==0,"Caption leaked past half-open interval");
  auto narrow=macos::rasterize(d,.5,{20,10,150,160},640,240);check(narrow.pixels!=b.pixels,"Width did not reflow glyphs");
  auto shortBox=macos::rasterize(d,.5,{20,10,150,10},640,240);check(shortBox.overflow,"Independent height overflow missing");
+ // A real pixel inside the interword gap changes from transparent to the
+ // requested premultiplied bubble alpha, without changing text positions.
+ Document spaced;spaced.containers.push_back({"space-fill",false,{{"MM",0,1,false},{"NN",1,2,false}}});spaced.style.wordSpacing=32;
+ for(auto* style:{&spaced.style.current,&spaced.style.spoken,&spaced.style.upcoming}){style->fontSize=32;style->bubble=true;style->padding=0;style->radius=0;style->color.a=0;style->bubbleColor={.8,.2,.1,.5};style->opacity=.5;style->shadowColor.a=0;}
+ LayoutBox spacedBox{10,10,500,160,1};const auto nativeMeasure=[](const std::string& text,const WordStyle& style){return macos::measureText(text,style);};
+ const auto spacedFrame=layoutFrame(spaced,.5,spacedBox,nativeMeasure);const auto& first=spacedFrame.words.front();
+ const auto gapX=static_cast<std::size_t>(std::floor(first.x+first.width+16)),gapY=static_cast<std::size_t>(std::floor(first.baseline-8));
+ const auto emptyGap=macos::rasterize(spaced,.5,spacedBox,640,240);check(emptyGap.pixels[gapY*emptyGap.stride+gapX*4+3]==0,"Unfilled space contains pixels");
+ spaced.style.current.bubbleFillSpaces=true;const auto filledGap=macos::rasterize(spaced,.5,spacedBox,640,240);const auto gapAlpha=filledGap.pixels[gapY*filledGap.stride+gapX*4+3];
+ check(gapAlpha>=63&&gapAlpha<=65,"Filled space lost independent bubble/text opacity");
+ const auto finalRun=layoutFrame(spaced,.5,spacedBox,nativeMeasure).words.back();const auto trailing=static_cast<std::size_t>(std::ceil(finalRun.x+finalRun.width+4));
+ check(filledGap.pixels[gapY*filledGap.stride+trailing*4+3]==0,"Space fill extended beyond final line word");
+ spaced.style.current.bubble=false;const auto disabledBubble=macos::rasterize(spaced,.5,spacedBox,640,240);check(disabledBubble.pixels[gapY*disabledBubble.stride+gapX*4+3]==0,"Disabled bubble still colored its spaces");
  Document pages;pages.containers.push_back({"pages",false,{{"First.",0,1,true},{"Second.",1,2,true},{"Third.",2,3,true},{"Last.",3,4,true}}});
  for(auto* s:{&pages.style.current,&pages.style.upcoming,&pages.style.spoken})s->fontSize=32;
  const auto unchangedPages=encode(pages);

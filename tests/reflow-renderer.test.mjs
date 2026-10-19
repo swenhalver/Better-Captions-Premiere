@@ -23,3 +23,16 @@ test('text that exceeds the paragraph height keeps its font and reports its full
  const layout=renderer.renderFrame({...caption,words},1,DEFAULT_STYLE,DEFAULT_ANIMATION,{width:180,height:40});
  assert.ok(layout.height>40);assert.ok(ctx.scales.every(([x,y])=>x===1&&y===1));
 });
+
+
+test('bubble space filling reaches the next visible word without shifting text or filling trailing or wrapped gaps',()=>{
+ const words=[{text:'AA',startTime:0,endTime:1,isActive:false},{text:'BB',startTime:1,endTime:2,isActive:false}];
+ const cue={id:'spaces',text:'AA BB',startTime:0,endTime:2,words};
+ const style=structuredClone(DEFAULT_STYLE);Object.assign(style,{fontSize:20,strokeEnabled:false,shadowEnabled:false,backgroundEnabled:false,wordSpacing:200});
+ for(const key of ['activeWord','spokenWord','upcomingWord'])style[key]={...style[key],fontSize:key==='upcomingWord'?30:20,bubble:true,padding:0,radius:0,bubbleOpacity:.4,opacity:.6,sizeScale:1,strokeEnabled:false,shadowEnabled:false};
+ const paint=(config,width=400)=>{const ctx=context(),renderer=new CaptionRenderer(ctx,720,1280),rects=[];renderer.roundRect=(...rect)=>rects.push(rect);const layout=renderer.renderFrame(cue,.5,config,{...DEFAULT_ANIMATION,preset:'karaoke',fadeInDuration:0,fadeOutDuration:0},{width,height:300});return{ctx,rects,layout};};
+ const baseline=paint(style);style.activeWord.bubbleFillSpaces=true;const filled=paint(style);
+ assert.deepEqual(filled.ctx.texts,baseline.ctx.texts,'glyph positions and state fonts remain unchanged');assert.deepEqual(filled.layout,baseline.layout,'line fitting must not use background fill extensions');
+ assert.equal(filled.rects[0][0]+filled.rects[0][2],filled.rects[1][0],'filled background reaches the next bubble start');assert.ok(filled.rects[0][2]>baseline.rects[0][2]);assert.deepEqual(filled.rects[1],baseline.rects[1],'line trailing background remains unchanged');
+ const wrapped=paint(style,40),without=structuredClone(style);without.activeWord.bubbleFillSpaces=false;assert.deepEqual(wrapped.rects,paint(without,40).rects,'space fill cannot bridge a wrapped line');
+});
