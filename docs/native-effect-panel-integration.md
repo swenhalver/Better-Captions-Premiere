@@ -1,5 +1,12 @@
 # Native effect and caption panel integration
 
+**0.7.13 update:** new transcripts now create an owned Transparent Video carrier
+and native effect automatically. Its project-metadata marker positively binds
+the generated source identity; a non-adjustment footage clip is never adopted
+solely because it has an effect. See [creation notes](release-0.7.13.md) and
+[installed Mac acceptance](mac-verification-0.7.13.md). The details below describe
+the existing-document adapter, which remains separate from creation.
+
 Development build 0.7.9, 2026-10-18. Installed Premiere 26.5.2 testing confirmed
 automatic panel reconnection, a panel color edit reaching the native frame, and
 the new Current/Past/Next Effect Controls groups. A native Current-word Size change
@@ -10,7 +17,8 @@ timing and Program Monitor handle input remain open host acceptance items.
 ## One document, native animation
 
 `webview-ui/src/lib/native-effect/panel.ts` adopts an existing, positively
-identified native adjustment-layer effect. It never creates a layer, inserts an
+identified native effect on an adjustment layer or owned Transparent Video.
+The pure adapter never creates a layer, inserts an
 effect, converts a generated movie, imports media or executes a host command.
 
 - `rehydrateNativePanel(entry, sequenceInfo)` returns `{session, binding,

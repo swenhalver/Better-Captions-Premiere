@@ -8,6 +8,7 @@
   import { startCaptionReconnect } from "./lib/reconnect";
   import { connectionKey, reconnectLegacyCaptions, sameSequenceId, type CaptionConnections } from "./lib/clip-connections";
   import { rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate } from "./lib/native-effect/panel";
+  import { prepareNativeCreation, nativeOutputKind } from "./lib/native-effect/create";
   import { encodeNativeTransportText } from "./lib/native-effect/encode";
   import { sessionManager } from "./lib/session/manager.svelte";
   import { validateStylePatch, validateCaptionPatch, validateAreaRead, validateAreaEdit, type AgentHandler } from "./lib/agent-bridge";
@@ -144,6 +145,44 @@
       if (!submitted || retryableNativeRead(problem)) throw problem;
       throw Object.assign(new Error('The caption change could not be confirmed. Further automatic changes are paused to protect this layer.'), { code: 'BC_OUTPUT_UNCONFIRMED', recoverable: false, outputApplied: true, cause: problem });
     } finally { timelineBusy = exportBusy || areaBusy || agentAreaBusy; }
+  }
+  const unconfirmedCreations = new Set<string>();
+  async function createNativeOutput() {
+    const session = sessionManager.current;
+    if (!session || session.nativeClipId || timelineBusy || api.isDemo) throw new Error('Native caption creation is not available right now.');
+    if (unconfirmedCreations.has(outputKey(session))) throw new Error('Inspect and reconnect the native clip before creating another one.');
+    const edited = plain(session), info = sequenceInfo;
+    if (!info || info.id !== session.sequenceId || info.projectPath !== session.projectPath) throw new Error('Refresh the intended sequence before creating native captions.');
+    const measure = document.createElement('canvas').getContext('2d');
+    if (!measure) throw new Error('The installed font could not be measured.');
+    measure.font = `${edited.style.fontWeight} ${edited.style.fontSize}px "${edited.style.fontFamily.replace(/["\\]/g, '')}"`;
+    const prepared = prepareNativeCreation(edited, measure.measureText(' ').width);
+    const {document: nativeDocument, ...request} = prepared;
+    await flushSave();
+    timelineBusy = true; let submitted = false;
+    try {
+      // Creation is never retried after an ambiguous native response.
+      submitted = true;
+      const result = await api.createNativeCaptionDocument(request, session.sequenceId);
+      if (!result?.ok || !result.readbackVerified || !result.connection) throw new Error('Premiere did not confirm the new native caption clip.');
+      const recovered = rehydrateNativePanel(result.connection, info);
+      if (result.connection.documentText !== request.documentText) throw new Error('The new native caption document differs from the requested transcript.');
+      if (sessionManager.current !== session) throw new Error('The active caption session changed during creation.');
+      legacySessions.set(outputKey(session), edited);
+      const next = {...recovered.session, projectPath:session.projectPath, nativeClipId:result.connection.clipNodeId};
+      nativeBinding = recovered.binding;
+      sessionManager.current = next;
+      appliedSignatures[outputKey(next)] = outputSignature(next);
+      connectionStatus = 'Connected to native effect';
+      selectFirst();
+    } catch (problem) {
+      if (!submitted || retryableNativeRead(problem)) throw problem;
+      unconfirmedCreations.add(outputKey(session));
+      throw Object.assign(new Error('Native caption creation could not be confirmed. Automatic creation is paused; inspect the timeline before creating another clip.'), {code:'BC_OUTPUT_UNCONFIRMED',recoverable:false,outputApplied:true,cause:problem});
+    } finally { timelineBusy = exportBusy || areaBusy || agentAreaBusy; }
+  }
+  async function createNativeFromButton() {
+    try { error = ''; await createNativeOutput(); } catch (problem) { error = message(problem); }
   }
   function watchRevisionChanged() { motionWatcher?.notifyRevision(++watcherRevision); }
   function markOutputEdited(_id: string) {
@@ -718,6 +757,7 @@
       if (timelineBusy || isRefreshing || isSyncing || sessionManager.current?.isLoading) throw new Error("Wait for the current caption operation to finish.");
       if (api.isDemo) throw new Error("Apply captions from the installed Premiere panel.");
       if (nativeBinding) { await applyNativeOutput(); return getState(); }
+      if (sessionManager.current && nativeOutputKind(sessionManager.current) === "new-native") { await createNativeOutput(); return getState(); }
       if (!exportButton) throw new Error("Caption controls are not ready.");
       await flushSave(); await exportButton.apply(); await flushSave(); return getState();
     },
@@ -745,13 +785,14 @@
         const signature = outputSignature(session);
         return { sequenceId: outputKey(session), signature,
           needed: appliedSignatures[outputKey(session)] !== signature,
-          ready: nativeAvailable && hostPanelVisible && documentVisible && !timelineBusy && !isRefreshing && !isSyncing && !session.isLoading && !!(nativeBinding || exportButton) };
+          ready: nativeAvailable && hostPanelVisible && documentVisible && !timelineBusy && !isRefreshing && !isSyncing && !session.isLoading && !!(nativeBinding || nativeOutputKind(session) === "new-native" || exportButton) };
       },
       async apply(context) {
         await flushSave();
         const session = sessionManager.current;
-        if (!session || outputKey(session) !== context.sequenceId || outputSignature(session) !== context.signature || !(nativeBinding || exportButton)) throw Object.assign(new Error('A newer edit replaced this render.'), { code: 'BC_RENDER_SUPERSEDED' });
+        if (!session || outputKey(session) !== context.sequenceId || outputSignature(session) !== context.signature || !(nativeBinding || nativeOutputKind(session) === "new-native" || exportButton)) throw Object.assign(new Error('A newer edit replaced this render.'), { code: 'BC_RENDER_SUPERSEDED' });
         if (nativeBinding) { await applyNativeOutput(); return; }
+        if (nativeOutputKind(session) === 'new-native') { await createNativeOutput(); return; }
         if (!exportButton) throw new Error('Caption controls are not ready.');
         automaticOutput = true;
         try { await exportButton.apply({ automatic: true }); await flushSave(); }
@@ -881,7 +922,12 @@
       {#if selected?.layoutOverflow}<p class="caption-message caption-message--error" role="alert">Text exceeds this box. Enlarge it or split the caption.</p>{/if}
       {#if liveStatus.phase === "error" && liveStatus.message}<p class="caption-message caption-message--error" role="alert">{liveStatus.message}</p>{/if}
       {#if reflowStatus.phase === "error" && reflowStatus.message}<p class="caption-message caption-message--error" role="alert">{reflowStatus.message}</p>{/if}
-      {#if !session.nativeClipId}{#key session.sequenceId}
+      {#if !session.nativeClipId && session.captions.some(caption => caption.clipNodeId)}
+        <div class="caption-app__backup"><button class="caption-button" onclick={createNativeFromButton} disabled={api.isDemo || timelineBusy || isRefreshing || isSyncing || session.isLoading}>Create native effect copy</button></div>
+      {/if}
+      {#if !session.nativeClipId && nativeOutputKind(session) === 'new-native'}
+        <p class="caption-message" role="status">{timelineBusy ? 'Creating native effect…' : 'Native effect · live captions'}</p>
+      {:else if !session.nativeClipId}{#key session.sequenceId}
         <ExportButton bind:this={exportButton} captions={session.captions} style={session.style} animation={session.animation} frameWidth={session.frameWidth} frameHeight={session.frameHeight} frameRate={session.frameRate} duration={session.duration} sequenceName={session.sequenceName} sequenceId={session.sequenceId} currentTime={session.currentTime} {selectedId} tracks={sequenceInfo?.tracks ?? []} hostApi={api} onUpdated={recordApplied} onApplied={recordMonitorApplied} onBusy={setTimelineBusy} onPhase={(phase) => outputPhase = phase} liveStatus={liveStatus} disabled={areaBusy || isRefreshing || isSyncing || session.isLoading} />
       {/key}{/if}
     </footer>

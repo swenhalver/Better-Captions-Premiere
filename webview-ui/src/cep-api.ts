@@ -1,12 +1,13 @@
+import { decodeNativePanelDocument } from './lib/native-effect/panel.ts';
 import type { CaptionItem, SequenceInfo, RenderBounds } from './lib/types';
 import type { DeletedCaptionLink } from './lib/export/deleted-links';
 import { emptyPresetLibrary, validatePresetLibrary, PRESET_STORAGE_KEY, type PresetLibrary } from './lib/style-presets.ts';
 declare const window: Window & { __adobe_cep__?: any; require?: any };
 const demoWords = 'Every word has its own style. Move captions anywhere in the frame.'.split(' ').map((text, i) => ({ text, start: i * .42, duration: .36, confidence: 1, eos: /[.!?]$/.test(text), type: 'word' as const, tags: [] }));
-export interface CapturedContext { id: string; name: string; projectPath: string; width: number; height: number; fps: number; duration: number; dir: string; }
+export interface CapturedContext { id: string; name: string; projectPath: string; width: number; height: number; fps: number; duration: number; dir: string; ticksPerFrame?: string; tracks?: {index:number;locked:boolean}[]; }
 export interface NativeTranscriptProvider { fetch(context: CapturedContext): Promise<string | null>; transcribe(context: CapturedContext): Promise<string | null>; }
 export interface FontCatalogEntry { family:string;weights:number[];italic:boolean;variable?:{min:number;max:number}; }
-const HOST_BRIDGE_METHODS = ['context','seek','selectCaptionClip','readCaptionSelection','readCaptionConnections','writeNativeCaptionDocument','readCaptionGeometry','readCaptionMotion','readCaptionAreaDescriptor','patchCaptionKeyValues','preflight','prepareCaptionTrack','apply','readTimeline','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation'];
+const HOST_BRIDGE_METHODS = ['context','seek','selectCaptionClip','readCaptionSelection','readCaptionConnections','writeNativeCaptionDocument','createNativeCaptionDocument','readCaptionGeometry','readCaptionMotion','readCaptionAreaDescriptor','patchCaptionKeyValues','preflight','prepareCaptionTrack','apply','readTimeline','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation'];
 function sameSavedSequence(a:unknown,b:string) {
   if(typeof a!=='string')return false;
   const canonical=(value:string)=>{
@@ -311,6 +312,16 @@ catch(e){var line=Number(e&&e.line);return '{"version":1,"ok":false,"error":'+qu
       if(!options||typeof options!=='object'||Object.keys(options).some(key=>key!=='includeDocuments')||options.includeDocuments!==undefined&&typeof options.includeDocuments!=='boolean')throw new Error('Invalid caption discovery options.');
       const context=await checkSequence(sequenceId);
       return readJob('readCaptionConnections',{sequenceId:context.id,projectPath:context.projectPath,generatedRoot:context.dir,knownLinks:links,includeDocuments:options.includeDocuments!==false});
+    },
+    async createNativeCaptionDocument(request:any,sequenceId=currentId){
+      if(!request || typeof request!=='object' || Object.keys(request).some(key=>!['documentText','startFrame','endFrame','sourceInTicks','geometry'].includes(key)))throw new Error('Invalid native caption creation request.');
+      const frozen=JSON.parse(JSON.stringify(request)),context=await checkSequence(sequenceId);
+      const document=decodeNativePanelDocument(frozen.documentText,sequenceId);
+      const finalWord=document.captions.flatMap(c=>c.words).reduce((end,w)=>Math.max(end,w.end),0);
+      if(!finalWord || frozen.endFrame!==Math.ceil(finalWord*context.fps-1e-7))throw new Error('Native caption duration differs from the verified transcript and frame rate.');
+      if(document.timeOriginSeconds!==0 || frozen.startFrame!==0 || frozen.sourceInTicks!=='0')throw new Error('New native captions must use the verified zero source clock.');
+      return readJob('createNativeCaptionDocument',{...frozen,version:1,creationId:window.require!('node:crypto').randomUUID(),projectPath:context.projectPath,sequenceId:context.id,
+        width:context.width,height:context.height,ticksPerFrame:context.ticksPerFrame,expectedVideoTrackCount:context.tracks?.length});
     },
     async writeNativeCaptionDocument(snapshot:NativeCaptionSnapshot,documentText:string,sequenceId=currentId){
       if(!snapshot||typeof snapshot!=='object'||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024||typeof documentText!=='string'||(documentText.length+1)*2>16*1024*1024)throw new Error('Invalid bounded native caption update.');

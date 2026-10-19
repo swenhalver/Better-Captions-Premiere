@@ -1,3 +1,4 @@
+import { validTransparentCarrier } from './carrier.ts';
 import { NATIVE_EFFECT_MATCH_NAME, normalizeNativeMatchName, validateNativeDocument } from './contract.ts';
 import { encodeNativeTransportText, decodeNativeTransportTimeOrigin, MAX_NATIVE_CARRIER_BYTES } from './encode.ts';
 export interface CepNativeLocator {
@@ -36,7 +37,18 @@ function read(){
  var tracks=s.videoTracks;if(r.locator.trackIndex>=tracks.numTracks)fail('Native track changed.');
  var clips=tracks[r.locator.trackIndex].clips;if(r.locator.clipIndex>=clips.numItems)fail('Native clip changed.');
  var c=clips[r.locator.clipIndex];if(String(c.nodeId)!==r.locator.clipNodeId)fail('Native clip identity changed.');
- if(typeof c.isAdjustmentLayer!=='function'||c.isAdjustmentLayer()!==true)fail('Native captions require an adjustment layer.');
+ if(typeof c.isAdjustmentLayer!=='function')fail('Native carrier type is unavailable.');
+ var adjustment=c.isAdjustmentLayer(),carrier=null;
+ if(adjustment!==true){
+  if(adjustment!==false||!c.projectItem||c.projectItem.type!==1||typeof c.projectItem.getMediaPath!=='function'||c.projectItem.getMediaPath()!=='')fail('Native source is not a generated carrier.');
+  if(typeof XMPMeta==='undefined'){if(!ExternalObject.AdobeXMPScript)ExternalObject.AdobeXMPScript=new ExternalObject('lib:AdobeXMPScript');}
+  var metadata=c.projectItem.getProjectMetadata();if(typeof metadata!=='string'||metadata.length>1048576)fail('Native carrier metadata exceeds its bound.');
+  var property=new XMPMeta(metadata).getProperty('http://ns.adobe.com/premierePrivateProjectMetaData/1.0/','BetterCaptionsNativeCarrier');
+  var marker=String(property);if(marker.length>4096)fail('Native carrier marker exceeds its bound.');
+  var m=JSON.parse(marker),keys=0;for(var k in m)if(m.hasOwnProperty(k))keys++;
+  if(keys!==7||m.version!==1||m.owner!=='com.swen.bettercaptions'||m.kind!=='transparent-video'||m.projectItemId!==String(c.projectItem.nodeId)||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(m.creationId)||typeof m.width!=='number'||m.width!==Math.floor(m.width)||m.width<1||m.width>16384||typeof m.height!=='number'||m.height!==Math.floor(m.height)||m.height<1||m.height>16384||JSON.stringify({version:1,owner:m.owner,kind:m.kind,projectItemId:m.projectItemId,creationId:m.creationId,width:m.width,height:m.height})!==marker)fail('Native carrier ownership differs.');
+  carrier={carrierKind:'transparent-video',carrierItemId:m.projectItemId,carrierRevision:marker};
+ }
  var components=c.components;if(components.numItems>128||r.locator.componentIndex>=components.numItems)fail('Native component changed.');
  var fx=components[r.locator.componentIndex];if(!canonical(String(fx.matchName)))fail('Native effect changed.');
  var props=fx.properties;if(props.numItems>128||r.locator.documentParamIndex>=props.numItems)fail('Native parameter changed.');
@@ -45,7 +57,8 @@ function read(){
  var text=param.getValue();if(typeof text!=='string'||!/^BCDOC1:[0-9a-f]+$/.test(text)||text.length%2!==1||(text.length+1)*2>${MAX_NATIVE_CARRIER_BYTES})fail('Native document is not a bounded text carrier.');
  var names=[],nativeCount=0;for(var i=0;i<components.numItems;i++){var name=String(components[i].matchName);names.push(name);if(canonical(name))nativeCount++;}
  if(nativeCount!==1)fail('Ambiguous native component instances.');
- var revision=JSON.stringify({projectPath:String(p.path),sequenceId:String(s.sequenceID),clipNodeId:String(c.nodeId),adjustmentLayer:true,start:String(c.start.ticks),end:String(c.end.ticks),inPoint:String(c.inPoint.ticks),outPoint:String(c.outPoint.ticks),components:names,documentIndex:r.locator.documentParamIndex,documentText:text});
+ var receipt={projectPath:String(p.path),sequenceId:String(s.sequenceID),clipNodeId:String(c.nodeId),adjustmentLayer:adjustment===true,start:String(c.start.ticks),end:String(c.end.ticks),inPoint:String(c.inPoint.ticks),outPoint:String(c.outPoint.ticks),components:names,documentIndex:r.locator.documentParamIndex,documentText:text};if(carrier){receipt.carrierKind=carrier.carrierKind;receipt.carrierItemId=carrier.carrierItemId;receipt.carrierRevision=carrier.carrierRevision;}var revision=JSON.stringify(receipt);
+ if(app.project!==p||String(app.project.path)!==r.locator.projectPath||app.project.activeSequence!==s||String(s.sequenceID)!==r.locator.sequenceId)fail('Native context changed during read.');
  return {param:param,text:text,revision:revision};
 }
 var attempted=false;
@@ -73,7 +86,7 @@ export function buildCepNativeDocumentApplyScript(snapshot: CepNativeSnapshot, d
   // Parse revision only as JSON data; bind it to the selected project/sequence/clip.
   let baseline: Record<string, unknown>;
   try { baseline = JSON.parse(snapshot.revision); } catch { throw new Error('Invalid native revision.'); }
-  if (!baseline || baseline.projectPath !== selected.projectPath || baseline.sequenceId !== selected.sequenceId || baseline.clipNodeId !== selected.clipNodeId || baseline.adjustmentLayer !== true || baseline.documentIndex !== selected.documentParamIndex || !Array.isArray(baseline.components) || !normalizeNativeMatchName(baseline.components[selected.componentIndex])) throw new Error('Native snapshot identity differs.');
+  if (!baseline || baseline.projectPath !== selected.projectPath || baseline.sequenceId !== selected.sequenceId || baseline.clipNodeId !== selected.clipNodeId || !(baseline.adjustmentLayer === true || validTransparentCarrier(baseline)) || baseline.documentIndex !== selected.documentParamIndex || !Array.isArray(baseline.components) || !normalizeNativeMatchName(baseline.components[selected.componentIndex])) throw new Error('Native snapshot identity differs.');
   const normalized = validateNativeDocument(document);
   if (normalized.sequenceId !== selected.sequenceId) throw new Error('Native document sequence differs.');
   const seconds = mode === 'initial-attachment'

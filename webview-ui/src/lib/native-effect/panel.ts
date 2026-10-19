@@ -1,3 +1,4 @@
+import { validTransparentCarrier } from './carrier.ts';
 import { DEFAULT_ANIMATION, DEFAULT_STYLE, type CaptionItem, type SequenceInfo, type SessionState, type StyleConfig, type WordAppearance } from '../types.ts';
 import { resolveAppearance } from '../appearance.ts';
 import { normalizeNativeMatchName, validateNativeDocument, type NativeCaption, type NativeColor, type NativeDocument, type NativeStyle, type NativeWordStyle } from './contract.ts';
@@ -90,7 +91,7 @@ function bindingSnapshot(entry: NativePanelEntry): CepNativeSnapshot {
   if (!normalizeNativeMatchName(entry.matchName) || entry.kind !== 'native-effect' || typeof entry.revision !== 'string' || entry.revision.length > MAX_NATIVE_CARRIER_BYTES) throw new Error('Invalid native caption connection.');
   let revision;
   try { revision = JSON.parse(entry.revision); } catch { throw new Error('Invalid native caption revision.'); }
-  if (!revision || revision.projectPath !== entry.locator.projectPath || revision.sequenceId !== entry.locator.sequenceId || revision.clipNodeId !== entry.clipNodeId || entry.locator.clipNodeId !== entry.clipNodeId || revision.adjustmentLayer !== true || revision.documentIndex !== entry.locator.documentParamIndex || revision.documentText !== entry.documentText || !Array.isArray(revision.components) || revision.components.filter((name: unknown) => normalizeNativeMatchName(name)).length !== 1 || !normalizeNativeMatchName(revision.components[entry.locator.componentIndex])) throw new Error('Native caption revision identity differs.');
+  if (!revision || revision.projectPath !== entry.locator.projectPath || revision.sequenceId !== entry.locator.sequenceId || revision.clipNodeId !== entry.clipNodeId || entry.locator.clipNodeId !== entry.clipNodeId || !(revision.adjustmentLayer === true || validTransparentCarrier(revision, entry.projectItemId)) || revision.documentIndex !== entry.locator.documentParamIndex || revision.documentText !== entry.documentText || !Array.isArray(revision.components) || revision.components.filter((name: unknown) => normalizeNativeMatchName(name)).length !== 1 || !normalizeNativeMatchName(revision.components[entry.locator.componentIndex])) throw new Error('Native caption revision identity differs.');
   for (const [field, revisionField] of [['startTicks', 'start'], ['endTicks', 'end'], ['inTicks', 'inPoint'], ['outTicks', 'outPoint']] as const) {
     if (entry[field] !== revision[revisionField]) throw new Error('Native caption timing changed.');
     tickSeconds(entry[field]);

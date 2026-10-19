@@ -263,6 +263,10 @@ function createHostAPI(options = {}) {
       if(!Array.isArray(knownLinks)||knownLinks.length>10000||!record(options)||Object.keys(options).some(name=>name!=='includeDocuments')||options.includeDocuments!==undefined&&typeof options.includeDocuments!=='boolean')throw new Error('Invalid caption discovery arguments.');
       return backend('readCaptionConnections',[knownLinks,{includeDocuments:options.includeDocuments!==false}],id);
     },
+    async createNativeCaptionDocument(request,id=currentId) {
+      if(!record(request))throw new Error('Invalid native caption creation request.');
+      return backend('createNativeCaptionDocument',[JSON.parse(JSON.stringify(request))],id);
+    },
     async writeNativeCaptionDocument(snapshot,documentText,id=currentId) {
       if(!record(snapshot)||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024||typeof documentText!=='string'||(documentText.length+1)*2>16*1024*1024)throw new Error('Invalid bounded native caption update.');
       return backend('writeNativeCaptionDocument',[snapshot,documentText],id);
@@ -298,12 +302,13 @@ function createHostAPI(options = {}) {
       if (['fetchTranscriptJSON', 'transcribeSequence', 'loadSession', 'readCaptionConnections'].includes(method) && args[0] === undefined) args[0] = currentId;
       if (method==='readCaptionConnections') { args[1]=JSON.parse(JSON.stringify(args[1]??[]));args[2]=JSON.parse(JSON.stringify(args[2]??{})); }
       if (method==='writeNativeCaptionDocument') { if(args[2]===undefined)args[2]=currentId;args[0]=JSON.parse(JSON.stringify(args[0]??null)); }
+      if(method==='createNativeCaptionDocument'){if(args[1]===undefined)args[1]=currentId;args[0]=JSON.parse(JSON.stringify(args[0]??null));}
       if (method==='saveSession')args[0]=JSON.parse(JSON.stringify(args[0]??null));
       if (['showInPremiere', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'selectCaptionClip', 'readCaptionArea', 'editCaptionArea'].includes(method) && args[1] === undefined) args[1] = currentId;
       let id=currentId;
       if(['fetchTranscriptJSON','transcribeSequence','loadSession','readCaptionConnections'].includes(method))id=args[0];
       else if(method==='saveSession')id=args[0]?.sequenceId;
-      else if(['showInPremiere','readTimeline','readCaptionMotion','readCaptionGeometry','readCaptionSelection','selectCaptionClip','readCaptionArea','editCaptionArea','beginCaption','readCaptionConsolidation'].includes(method))id=args[1];
+      else if(['showInPremiere','readTimeline','readCaptionMotion','readCaptionGeometry','readCaptionSelection','selectCaptionClip','readCaptionArea','editCaptionArea','beginCaption','readCaptionConsolidation','createNativeCaptionDocument'].includes(method))id=args[1];
       else if(['preflightCaptionClips','applyCaptionClips','writeNativeCaptionDocument'].includes(method))id=args[2];
       else if(['saveCaptionFrames','finishCaption','applyConsolidatedCaption'].includes(method))id=args[3];
       const context=['getActiveSequenceInfo','loadStylePresets','saveStylePresets'].includes(method)?null:contexts.get(key(id??currentId));

@@ -6,7 +6,7 @@ export const SERVICE_ACTIONS = [
   'getFonts', 'getFontCatalog', 'beginCaption', 'saveCaptionFrames', 'finishCaption',
   'preflightCaptionClips', 'prepareCaptionTrack', 'applyCaptionClips', 'readTimeline', 'showInPremiere',
   'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'patchCaptionKeyValues',
-  'readCaptionConnections', 'writeNativeCaptionDocument',
+  'readCaptionConnections', 'writeNativeCaptionDocument', 'createNativeCaptionDocument',
 ] as const;
 const READ_ACTIONS = new Set(['getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 const ARG_COUNTS: Record<string, number[]> = {
@@ -14,7 +14,7 @@ const ARG_COUNTS: Record<string, number[]> = {
   getFonts: [0], getFontCatalog: [0], beginCaption: [1], saveCaptionFrames: [3], finishCaption: [3, 4],
   preflightCaptionClips: [2, 3], prepareCaptionTrack: [2, 3, 4], applyCaptionClips: [2, 3, 4], readTimeline: [1], showInPremiere: [1],
   selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1], readCaptionAreaDescriptor: [1], patchCaptionKeyValues: [2],
-  readCaptionConnections:[2],writeNativeCaptionDocument:[2],
+  readCaptionConnections:[2],writeNativeCaptionDocument:[2],createNativeCaptionDocument:[1],
 };
 interface Request { version: number; id: string; createdAt: number; expiresAt?: number; sequenceId: string; projectPath: string; action: string; args: any[]; }
 interface ServiceOptions { api?: any; fs?: any; path?: any; os?: any; crypto?: any; process?: any; platform?: any; root?: string; intervalMs?: number; maxRequestsPerPoll?: number; }
@@ -72,6 +72,7 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
     case 'patchCaptionKeyValues': return api.patchCaptionKeyValues(a, b, id);
     case 'readCaptionSelection': return api.readCaptionSelection(a, id);
     case 'readCaptionConnections': return api.readCaptionConnections(id,a,b);
+    case 'createNativeCaptionDocument': return api.createNativeCaptionDocument(a,id);
     case 'writeNativeCaptionDocument': return api.writeNativeCaptionDocument(a,b,id);
     default: throw new Error('Unsupported caption service action.');
   }
