@@ -31,6 +31,49 @@ int main(int argc,char** argv){
  for(int value=0;value<=2;++value){param.mType=kPrParamType_Int32;param.mInt32=value;assert(bubbleMode(param)==value+1);}
  for(int value:{-1,3,2147483647}){param.mType=kPrParamType_Int32;param.mInt32=value;rejects([&]{bubbleMode(param);});}
  param.mType=kPrParamType_Int64;param.mInt64=0;rejects([&]{bubbleMode(param);});
+ // Host-observed divisor normalization must preserve full/half/quarter caption
+ // selection, grouping, wrapping and pixel-sized styles without mutating source.
+ Document previewSource;previewSource.containers.push_back({"preview",false,{{"Caption",0,1,false},{"reflow",1,2,false},{"checks",2,3,false}}});
+ previewSource.timeOriginSeconds=3600;
+ for(auto* style:{&previewSource.style.current,&previewSource.style.upcoming,&previewSource.style.spoken}){
+  style->fontSize=64;style->padding=10;style->radius=14;style->outlineWidth=2;style->shadowBlur=4;style->shadowX=6;style->shadowY=8;
+ }
+ previewSource.style.current.bubble=true;previewSource.style.current.bubbleColor={0,.8,.2,1};
+ const auto originalPreviewBytes=encode(previewSource);
+ auto near=[](double a,double b){assert(std::abs(a-b)<1e-8);};
+ auto measured=[](const std::string& text,const WordStyle& style){double font=style.fontSize*style.sizeScale;return Metrics{text.size()*font*.5,font*.8,font*.2};};
+ for(double time:{.5,1.5,2.5}){
+  auto fullGeometry=previewGeometry(1,1,.5,.75,400,220,1280,720);
+  auto fullDoc=previewSource;better_captions::adobe::applyNativeStyle(fullDoc,64,{1,1,1,1},fullGeometry.sx,fullGeometry.sy);
+  const auto fullFrame=layoutFrame(fullDoc,time,fullGeometry.box,measured);
+  const auto fullGroups=regroup(fullDoc,56);
+  for(unsigned divisor:{1u,2u,4u}){
+   const auto geometry=previewGeometry(divisor,divisor,.5,.75,400,220,1280/divisor,720/divisor);
+   auto scaledDoc=previewSource;better_captions::adobe::applyNativeStyle(scaledDoc,64,{1,1,1,1},geometry.sx,geometry.sy);
+   const auto scaledFrame=layoutFrame(scaledDoc,time,geometry.box,measured);
+   near(geometry.box.x*divisor,fullGeometry.box.x);near(geometry.box.y*divisor,fullGeometry.box.y);near(geometry.box.width*divisor,400);near(geometry.box.height*divisor,220);
+   assert(scaledFrame.words.size()==3&&scaledFrame.overflow==fullFrame.overflow);
+   for(std::size_t index=0;index<scaledFrame.words.size();++index){const auto& run=scaledFrame.words[index];const auto& baseRun=fullFrame.words[index];
+    assert(run.wordIndex==baseRun.wordIndex&&run.state==baseRun.state&&run.text==baseRun.text);
+    near(run.x*divisor,baseRun.x);near(run.baseline*divisor,baseRun.baseline);near(run.width*divisor,baseRun.width);
+    near(run.style.fontSize*divisor,64);near(run.style.padding*divisor,10);near(run.style.radius*divisor,14);near(run.style.outlineWidth*divisor,2);near(run.style.shadowBlur*divisor,4);near(run.style.shadowX*divisor,6);near(run.style.shadowY*divisor,8);
+   }
+   near(scaledDoc.style.wordSpacing*divisor,previewSource.style.wordSpacing);
+   auto scaledGroups=regroup(scaledDoc,56);assert(scaledGroups.size()==fullGroups.size());for(std::size_t index=0;index<scaledGroups.size();++index)assert(scaledGroups[index].containerId==fullGroups[index].containerId&&scaledGroups[index].firstWord==fullGroups[index].firstWord&&scaledGroups[index].wordCount==fullGroups[index].wordCount);
+   auto actual=macos::rasterize(scaledDoc,time,geometry.box,1280/divisor,720/divisor);bool visible=false;for(std::size_t index=3;index<actual.pixels.size();index+=4)visible=visible||actual.pixels[index]!=0;assert(visible);
+  }
+ }
+ assert(encode(previewSource)==originalPreviewBytes);
+ // Fractional divisors are valid; do not round them or assume power-of-two.
+ auto fractional=previewGeometry(1.5,1.5,.25,.75,600,180,854,480);near(fractional.sx,2.0/3);near(fractional.box.width,400);near(fractional.box.height,120);near(fractional.box.x,13.5);near(fractional.box.y,300);
+ // Independent divisor/box scales retain the existing SY font vs SX spacing
+ // contract, without asserting anisotropic glyph/PAR rendering acceptance.
+ auto anisotropic=previewGeometry(2,4,.5,.75,400,220,640,180);near(anisotropic.box.x,220);near(anisotropic.box.y,107.5);near(anisotropic.box.width,200);near(anisotropic.box.height,55);
+ auto anisotropicDoc=previewSource;better_captions::adobe::applyNativeStyle(anisotropicDoc,64,{1,1,1,1},anisotropic.sx,anisotropic.sy);near(anisotropicDoc.style.current.fontSize,16);near(anisotropicDoc.style.current.padding,2.5);near(anisotropicDoc.style.current.outlineWidth,.5);near(anisotropicDoc.style.current.shadowX,3);near(anisotropicDoc.style.current.shadowY,2);near(anisotropicDoc.style.wordSpacing,6);
+ for(double invalid:{0.,-1.,.5,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}){rejects([&]{previewGeometry(invalid,1,.5,.75,400,220,1280,720);});rejects([&]{previewGeometry(1,invalid,.5,.75,400,220,1280,720);});}
+ rejects([&]{previewGeometry(1,1,.5,.75,400,220,0,720);});rejects([&]{previewGeometry(1,1,.5,.75,400,220,8193,1);});rejects([&]{previewGeometry(1,1,.5,.75,400,220,8192,8192);});
+ rejects([&]{previewGeometry(1,1,.5,.75,0,220,1280,720);});rejects([&]{previewGeometry(1,1,std::numeric_limits<double>::infinity(),.75,400,220,1280,720);});
+ (void)previewGeometry(1,1,.5,.5,400,220,8192,4096); // Existing pixel-count cap boundary.
  // Shader reference accepts premult overlay, all mixed16/32f combinations and
  // padded pitches. Sentinel padding and no-opacity RGB identity are checked.
  auto device=MTLCreateSystemDefaultDevice();assert(device);NSError* error=nil;

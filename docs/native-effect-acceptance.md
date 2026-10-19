@@ -11,8 +11,12 @@ is an experimental effect, not production-ready.
 
 ## Current opt-in Metal acceptance
 
-The separate experimental effect remains installed with the accepted straight-alpha
-Metal candidate (executable SHA-256 prefix `a5156eda`, metallib prefix `dd6d2a53`).
+The separate experimental effect uses the straight-alpha Metal renderer. The
+reduced-preview repair was host-tested in diagnostic candidate `3e425102`;
+the matching diagnostics-disabled candidate is `8c4ad9b0` (metallib `dd6d2a53`).
+The latter is built and signature-verified; its final installation is pending a
+coordinated Premiere restart. The timing/alpha receipts below originally used
+candidate `a5156eda` and do not alone establish reduced-preview acceptance.
 The Better Captions panel remains **0.7.11**. Restoring the failed CPU-only candidate
 would remove this verified fix; it is retained only as historical evidence.
 
@@ -59,10 +63,59 @@ human-saved baseline retain identical SHA-256
 `c4259feec4b32e0a52c1f2a72ef9f049626d74133fa91fee1d2788a62cd97d03`.
 
 The prototype synchronously waits for its Metal command and has no performance
-acceptance yet. Uniform preview scaling is locally tested; unequal X/Y scales are
-not accepted. Only one experimental bundle with this identifier was loaded during
+acceptance yet. Uniform preview scaling has the live acceptance recorded below;
+unequal X/Y scales are not accepted. Only one experimental bundle with this identifier was loaded during
 host testing; module-relative metallib lookup remains a hardening item before
 supporting multiple simultaneous copies.
+
+## Live reduced-resolution preview repair
+
+A real Program Monitor scrub reproduced a completely black frame at playback
+resolution 1/2 while the same caption effect and footage worked at Full. An empty
+adjustment layer did not cause the problem. A behavior-preserving diagnostic
+build then recorded raw GPU downsample factors **2 × 2** for 640 × 360 half
+playback, and **4 × 4** for 320 × 180 quarter playback. Precompute rejected those
+values as `Invalid downsample scale`; the incoming/returned realtime hint stayed
+one. This is a renderer validation defect, not a Premiere preference reset.
+
+`previewGeometry` now validates finite SDK divisors of at least one and converts
+them to reciprocal pixel scales. Native box dimensions, font sizes, spacing,
+outline, bubble and shadow dimensions use those scales. Position still uses the
+normalized point and actual requested frame dimensions. Caption bytes and the
+verified `inClipTime` clock are unchanged.
+
+Installed repaired diagnostic executable:
+`3e42510253893417cf6ac13cb1b51375be4fb3319a092b95e876e90c1a5caf1f`.
+Active QE `startScrubbing`/`scrubTo` requests, with screenshots taken before
+`endScrubbing`, passed at Full, 1/2 and 1/4. Fresh half and quarter frames reached
+both Precompute and Metal Render successfully with no diagnostic exceptions.
+No export, width edit or Apply action was used to force those frames. A repeated
+seek at the already paused CTI reused a Full cached frame and was excluded from
+the half-resolution dispatch proof; a fresh 5.2-second request established it.
+The visible highlighted-word bounds match across the three preview resolutions;
+spoken-word vertical bounds differ by at most one displayed pixel.
+
+Focused assertions run in the actual Metal ASAN/UBSAN harness cover full/half/
+quarter grouping, wrapping, word state, normalized geometry, style dimensions,
+CoreText visibility and source-document immutability. Fractional divisors and
+independent X/Y box/style scales are tested locally, including invalid input
+rejection; these tests do not claim host anisotropic glyph/PAR acceptance.
+
+The diagnostics-disabled executable is
+`8c4ad9b0acc11fbec2ef8d3f5b13f01282fce2f6d6891875790e71c348e4dbf4`.
+Its renderer overlays, native headers and non-generated compilation inputs match
+the tested diagnostic build byte-for-byte. Only the generated diagnostic define
+changes from one to zero. All adapter and compositor checks pass; the metallib
+is unchanged. Extra per-process scrub-logger strings are absent, while the
+pre-existing bounded GPU trace remains.
+
+Local receipts are in `/tmp/better-captions-scrub-1792368450664/`, including
+`diagnostic-318-half-summary.json`, `diagnostic-318-quarter-summary.json`,
+`fixed-diagnostic-matrix.json`, `fixed-diagnostic-visible-bounds.json` and captured
+Program Monitor frames. Reopen preserved all 22 sequence graphs exactly before
+the user's subsequent base-footage test move. Those user edits are retained;
+old caption fixtures are not restored over them. The production project remained
+closed and retained its previously recorded SHA-256.
 
 ## Earlier verified evidence
 
@@ -125,7 +178,9 @@ Build hashes identify snapshots, not acceptance:
 | Same mapping with opt-in numeric render diagnostics | `d23470ea5cc798a2de18d8d45bc47e544b57f5bee04e32bc3365748d116ad633` |
 | Installed panel-integration/control candidate | `688697ac134ff530f9e02121f4843a53b33346b50c7cba40615631a9c910ec03` |
 | Normal typography candidate restored after timing probes | `6312eaabae8795ca9f4efa20a116cac9bf11f09c299b18e0368518ed7f62f74d` |
-| Current installed straight-alpha Metal candidate | `a5156eda8b80d317fe1d0bedc07b699a4fd17eb7da1b64144e422c394380c9f0` |
+| Earlier straight-alpha Metal timing/alpha candidate | `a5156eda8b80d317fe1d0bedc07b699a4fd17eb7da1b64144e422c394380c9f0` |
+| Installed reduced-preview repair with scrub diagnostics | `3e42510253893417cf6ac13cb1b51375be4fb3319a092b95e876e90c1a5caf1f` |
+| Matching diagnostics-disabled reduced-preview repair | `8c4ad9b0acc11fbec2ef8d3f5b13f01282fce2f6d6891875790e71c348e4dbf4` |
 
 The current `CaptionComposite.metallib` SHA-256 is
 `dd6d2a53a07ec92e8a43dcd9bab97c53f7370c7ea6e53e53a6dfe88827eff5bd`.

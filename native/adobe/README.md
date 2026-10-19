@@ -8,9 +8,10 @@ vendored. Keep SDK downloads outside this repository and retain their license.
 ## Current experimental Mac status
 
 The opt-in straight-alpha Metal compositor is the installed experimental effect;
-the panel remains 0.7.11. Executable SHA-256 prefix `a5156eda`, metallib prefix
-`dd6d2a53` identify the accepted candidate. It is not production-ready and is
-separate from the ordinary CPU build below.
+the panel remains 0.7.11. The reduced-preview repair was verified in diagnostic
+candidate `3e425102`; the matching diagnostics-disabled candidate is `8c4ad9b0`.
+Both use metallib prefix `dd6d2a53`. See the acceptance record for installation
+status. This path is experimental and separate from the ordinary CPU build below.
 
 Actual SDR Mac host exports now pass 30 fps baseline/UI-Razor/moved-split raw-pixel
 equality and whole-layer movement with captions following their adjustment layer.
@@ -34,8 +35,16 @@ were archived and removed, all 22 original scratch graphs/CTIs were preserved,
 and four private control plug-ins were moved to recovery while Premiere was quit.
 The production project's SHA-256 is unchanged.
 
+Actual active Program Monitor scrubs at Full, 1/2 and 1/4 resolution now show
+both underlying footage and captions. Premiere's GPU downsample fields are
+divisors: the observed half/quarter requests report 2/4, respectively. The
+renderer converts them to reciprocal geometry/style scales before rendering.
+Previously it rejected values above one and returned an error that blacked out
+the entire adjustment-layer result. Full-resolution export acceptance alone did
+not exercise that failure. The repair changes no caption document or render clock.
+
 The current candidate supports the verified single-bundle setup and uniform
-preview scaling. Unequal X/Y downsample behavior and module-relative metallib
+preview scaling. Unequal X/Y glyph/PAR behavior and module-relative metallib
 lookup remain hardening items. Synchronous Metal completion has not been
 performance-qualified.
 
@@ -56,6 +65,15 @@ It emits `gpu-caption-provenance.json` with the archived base, actual overlaid
 source hashes, effective patched inputs, SDK header hashes, current compiler
 versions and output hashes. The accepted candidate also has a retrospective
 manifest, explicitly distinguished from contemporaneous build evidence.
+
+For a separate scrub investigation, set `BC_GPU_SCRUB_DIAGNOSTICS=1` and use a
+separate `BC_NATIVE_OUTPUT_DIR`. The default is zero. This adds numeric callback
+entry/exit/error/duration records, raw preview divisors, quality and realtime
+hints to `/tmp/better-captions-native-gpu-scrub-<PID>.log`. The file is owner-only,
+bounded to 32 MiB and 65,536 records per process, and uses a nonblocking write
+lock. Contended records may be dropped. Caption contents are not logged. The
+flag does not alter rendering or realtime hints; the existing bounded legacy
+GPU trace is independent of this opt-in logger. Provenance records the flag.
 
 Install that explicit artifact only after quitting Premiere:
 
@@ -139,8 +157,8 @@ are adjusted for downsampling. Point positions are used directly: the SDK
 explicitly states that hosts already adjust point control values for downsampling.
 The official SDK's CCU renderer follows the same rule. A compiled full/half render
 test passes host-adjusted point values and verifies normalized text placement.
-Premiere resolution-switch testing and expanded/cropped buffer behavior remain
-separate host acceptance cases.
+These CPU checks are distinct from the Metal path's live Full/half/quarter
+acceptance above. Expanded/cropped buffers remain separate host acceptance cases.
 
 The CEP string carrier is implemented following observed UTF-16 serialized values;
 CEP write/readback and edited transcript rendering passed in Premiere on the

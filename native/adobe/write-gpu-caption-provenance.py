@@ -114,6 +114,9 @@ def write_manifest(args: argparse.Namespace) -> Path:
                 for name in OVERLAYS
             },
             "effective_compilation_inputs": {name: record(snapshot / name) for name in inputs},
+            "generated_companion_defines": constants(
+                snapshot / "native/adobe/gpu_caption_renderer.mm",
+                ("BC_GPU_SCRUB_DIAGNOSTICS",)),
             "native_header_snapshot": tree_hashes(snapshot / "native", (".h", ".hpp")),
             "test_translation_units": {name: record(snapshot / name) for name in TESTS},
             "effective_patched_build_script": record(snapshot / "native/adobe/build-macos.sh"),

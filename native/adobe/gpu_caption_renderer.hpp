@@ -27,6 +27,17 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifndef BC_GPU_SCRUB_DIAGNOSTICS
+#define BC_GPU_SCRUB_DIAGNOSTICS 0
+#endif
+#if BC_GPU_SCRUB_DIAGNOSTICS != 0 && BC_GPU_SCRUB_DIAGNOSTICS != 1
+#error BC_GPU_SCRUB_DIAGNOSTICS must be 0 or 1
+#endif
+#if BC_GPU_SCRUB_DIAGNOSTICS
+#include <chrono>
+#include <cerrno>
+#include <sys/file.h>
+#endif
 
 namespace better_captions::adobe::gpu_caption_renderer {
 // Verified on Premiere 26.5.2: native color GetParam is Int64 with four
@@ -108,6 +119,75 @@ inline const char* knownValidationReason(const char* value){
  if(value)for(const char* literal:known)if(std::strcmp(value,literal)==0)return literal;
  return "external-validation-or-allocation";
 }
+// Opt-in diagnostic scopes do not inspect ioPrivatePluginData on entry.
+// Only bindKnownInstance(), called after successful construction/state validation,
+// copies the timebase. No state pointer is retained for logger/destructor access.
+#if BC_GPU_SCRUB_DIAGNOSTICS
+class ScrubScope {
+ using Clock=std::chrono::steady_clock;
+ const PrGPUFilterInstance* instance_;
+ const PrGPUFilterRenderParams* render_;
+ int phase_,incomingRealtime_;
+ std::uint64_t id_;
+ Clock::time_point start_;
+ PrTime ticksPerSecond_=0;
+ TraceData data_{};
+ bool finished_=false;
+ static std::uint64_t nextID() noexcept {static std::atomic<std::uint64_t> id{0};return id.fetch_add(1,std::memory_order_relaxed)+1;}
+ void emit(int event,long long result,const char* reason) noexcept {
+  // Logging must not perturb caller errno or throw through an Adobe callback.
+  const int savedErrno=errno;
+  static std::atomic<unsigned> records{0};
+  if(records.fetch_add(1,std::memory_order_relaxed)>=65536){errno=savedErrno;return;}
+  char path[160];const long pid=long(::getpid());
+  const int pathLength=std::snprintf(path,sizeof(path),"/tmp/better-captions-native-gpu-scrub-%ld.log",pid);
+  if(pathLength<=0||pathLength>=int(sizeof(path))){errno=savedErrno;return;}
+  const int file=::open(path,O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK,0600);
+  if(file<0){errno=savedErrno;return;}
+  // Nonblocking lock makes the byte cap exact across diagnostic writers without
+  // waiting behind another callback. Contended log records may be dropped.
+  if(::flock(file,LOCK_EX|LOCK_NB)!=0){::close(file);errno=savedErrno;return;}
+  const auto elapsed=std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-start_).count();
+  const double fps=render_&&ticksPerSecond_>0&&render_->inRenderTicksPerFrame>0?double(ticksPerSecond_)/double(render_->inRenderTicksPerFrame):0;
+  char line[1200];const int n=std::snprintf(line,sizeof(line),
+   "gpu-scrub pid=%ld callback=%llu phase=%d event=%d result=%lld reason=%s durationUs=%lld node=%d timeline=%d device=%u realtimeIncoming=%d realtimeReturned=%d clip=%lld seq=%lld ticksPerFrame=%lld ticksPerSecond=%lld fps=%.12g width=%u height=%u downsampleX=%.9g downsampleY=%.9g quality=%d count=%lld index=%lld cpuFormat=%u inputFormat=%u overlayFormat=%u outputFormat=%u cpuPitch=%lld inputPitch=%lld overlayPitch=%lld outputPitch=%lld\n",
+   pid,static_cast<unsigned long long>(id_),phase_,event,result,reason,static_cast<long long>(elapsed),
+   instance_?int(instance_->inNodeID):0,instance_?int(instance_->inTimelineID):0,instance_?unsigned(instance_->inDeviceIndex):0,incomingRealtime_,instance_?int(instance_->outIsRealtime):0,
+   render_?static_cast<long long>(render_->inClipTime):0,render_?static_cast<long long>(render_->inSequenceTime):0,render_?static_cast<long long>(render_->inRenderTicksPerFrame):0,static_cast<long long>(ticksPerSecond_),fps,
+   render_?unsigned(render_->inRenderWidth):0,render_?unsigned(render_->inRenderHeight):0,render_?double(render_->inDownsampleFactorX):0,render_?double(render_->inDownsampleFactorY):0,render_?int(render_->inQuality):-1,
+   data_.count,data_.index,data_.cpuFormat,data_.inputFormat,data_.overlayFormat,data_.outputFormat,data_.cpuPitch,data_.inputPitch,data_.overlayPitch,data_.outputPitch);
+  struct stat info{};
+  if(n>0&&n<int(sizeof(line))&&!::fstat(file,&info)&&S_ISREG(info.st_mode)&&info.st_uid==::getuid()&&info.st_nlink==1&&(info.st_mode&0777)==0600&&info.st_size>=0&&info.st_size<=32*1024*1024-n)
+   (void)::write(file,line,static_cast<std::size_t>(n));
+  (void)::flock(file,LOCK_UN);::close(file);errno=savedErrno;
+ }
+public:
+ ScrubScope(int phase,const PrGPUFilterInstance* instance,const PrGPUFilterRenderParams* render) noexcept
+  :instance_(instance),render_(render),phase_(phase),incomingRealtime_(instance?int(instance->outIsRealtime):0),id_(nextID()),start_(Clock::now()) {emit(0,0,"entry");}
+ void bindKnownInstance(const PrGPUFilterInstance* instance) noexcept {
+  // Caller has just constructed State or successfully called state(instance).
+  if(instance&&instance->ioPrivatePluginData)ticksPerSecond_=static_cast<const State*>(instance->ioPrivatePluginData)->ticksPerSecond;
+ }
+ void details(const TraceData& data) noexcept {data_=data;}
+ void exception() noexcept {
+  try{throw;}catch(const RendererError& error){emit(2,suiteError_Fail,error.what());}
+  catch(const std::invalid_argument& error){emit(2,suiteError_Fail,knownValidationReason(error.what()));}
+  catch(...){emit(2,suiteError_Fail,"external-validation-or-allocation");}
+ }
+ prSuiteError finish(prSuiteError result) noexcept {if(!finished_){emit(1,static_cast<long long>(result),"return");finished_=true;}return result;}
+ ~ScrubScope() noexcept {if(!finished_)emit(3,suiteError_Fail,"scope-unwound");}
+ ScrubScope(const ScrubScope&)=delete;ScrubScope& operator=(const ScrubScope&)=delete;
+};
+#else
+class ScrubScope {
+public:
+ ScrubScope(int,const PrGPUFilterInstance*,const PrGPUFilterRenderParams*) noexcept {}
+ void bindKnownInstance(const PrGPUFilterInstance*) noexcept {}
+ void details(const TraceData&) noexcept {}
+ void exception() noexcept {}
+ prSuiteError finish(prSuiteError result) noexcept {return result;}
+};
+#endif
 inline prSuiteError failure(int phase,const PrGPUFilterInstance* instance,const PrGPUFilterRenderParams* r,const TraceData& d={}){
  try{throw;}catch(const RendererError& error){trace(phase,instance,r,0,error.what(),d);}catch(const std::invalid_argument& error){trace(phase,instance,r,0,knownValidationReason(error.what()),d);}catch(...){trace(phase,instance,r,0,"external-validation-or-allocation",d);}return suiteError_Fail;
 }
@@ -140,6 +220,23 @@ inline NativeWordControls wordControls(State& s,const PrGPUFilterInstance& i,PrT
  const auto popup=read(first+3);TraceData info;info.index=first+3;info.popupType=popup.mType;info.popupValue=popup.mType==kPrParamType_Int32?popup.mInt32:-1;trace(6,&i,renderParams,1,"bubble-popup",info);c.bubbleMode=bubbleMode(popup);
  c.bubbleTint=tint(read(first+4));c.bubbleOpacityPercent=number(read(first+5));c.paddingPercent=number(read(first+6));c.radiusPercent=number(read(first+7));return c;
 }
+// Premiere GPU factors are divisors: live half-resolution host requests use 2.
+// Convert once before applying pixel geometry/styles. No FPS or clock changes.
+struct PreviewGeometry {double sx=1,sy=1;LayoutBox box;};
+inline PreviewGeometry previewGeometry(double divisorX,double divisorY,double positionX,double positionY,
+                                      double nativeWidth,double nativeHeight,std::uint32_t renderWidth,std::uint32_t renderHeight){
+ require(std::isfinite(divisorX)&&std::isfinite(divisorY)&&divisorX>=1&&divisorY>=1,"Invalid downsample divisor");
+ require(renderWidth>0&&renderHeight>0&&renderWidth<=8192&&renderHeight<=8192&&std::uint64_t(renderWidth)*renderHeight<=33554432,"Render dimensions exceed bounds");
+ require(std::isfinite(positionX)&&std::isfinite(positionY)&&std::isfinite(nativeWidth)&&std::isfinite(nativeHeight)&&nativeWidth>0&&nativeHeight>0,"Invalid preview layout geometry");
+ PreviewGeometry result;result.sx=1.0/divisorX;result.sy=1.0/divisorY;
+ require(std::isfinite(result.sx)&&std::isfinite(result.sy)&&result.sx>0&&result.sy>0,"Invalid normalized downsample scale");
+ const double width=nativeWidth*result.sx,height=nativeHeight*result.sy;
+ result.box={positionX*renderWidth-width/2,positionY*renderHeight-height/2,width,height};
+ require(std::isfinite(result.box.x)&&std::isfinite(result.box.y)&&std::isfinite(width)&&std::isfinite(height)&&width>0&&height>0,"Invalid scaled preview layout");
+ // Unequal divisors retain existing box/spacing SX and glyph-size/padding SY
+ // behavior. This does NOT claim an anisotropic glyph transform or PAR proof.
+ return result;
+}
 struct Snapshot {Document document;LayoutBox box;std::size_t maxChars=56;double seconds=0;};
 inline Snapshot snapshot(State& s,const PrGPUFilterInstance& i,const PrGPUFilterRenderParams& r){
  using namespace parameters;
@@ -152,10 +249,9 @@ inline Snapshot snapshot(State& s,const PrGPUFilterInstance& i,const PrGPUFilter
  auto binary=normalizeCarrier(reinterpret_cast<const std::uint8_t*>(carrier.mMemoryPtr),size);
  Snapshot result;result.document=decode(binary);trace(7,&i,&r,1,"stage-document-decoded");
  auto point=param(s,i,Position,r.inClipTime);require(point.mType==kPrParamType_Point&&std::isfinite(point.mPoint.x)&&std::isfinite(point.mPoint.y),"Position parameter type mismatch");
- const double sx=r.inDownsampleFactorX,sy=r.inDownsampleFactorY;
- require(std::isfinite(sx)&&std::isfinite(sy)&&sx>0&&sy>0&&sx<=1&&sy<=1,"Invalid downsample scale");
- const double width=number(param(s,i,Width,r.inClipTime))*sx,height=number(param(s,i,Height,r.inClipTime))*sy;
- result.box={point.mPoint.x*r.inRenderWidth-width/2,point.mPoint.y*r.inRenderHeight-height/2,width,height};
+ const auto geometry=previewGeometry(r.inDownsampleFactorX,r.inDownsampleFactorY,point.mPoint.x,point.mPoint.y,
+  number(param(s,i,Width,r.inClipTime)),number(param(s,i,Height,r.inClipTime)),r.inRenderWidth,r.inRenderHeight);
+ const double sx=geometry.sx,sy=geometry.sy;result.box=geometry.box;
  const double chars=number(param(s,i,MaxChars,r.inClipTime));require(chars>=1&&chars<=500&&std::floor(chars)==chars,"Invalid grouping count");result.maxChars=static_cast<std::size_t>(chars);
  trace(7,&i,&r,1,"stage-layout-controls");NativeAppearanceControls c;
  if(count>=Count-1){c.current=wordControls(s,i,r.inClipTime,CurrentSize,&r);c.spoken=wordControls(s,i,r.inClipTime,SpokenSize,&r);c.upcoming=wordControls(s,i,r.inClipTime,UpcomingSize,&r);}
@@ -177,29 +273,30 @@ inline void copyOverlay(const macos::Bitmap& bitmap,char* destination,std::int32
  }
 }
 inline prSuiteError create(PrGPUFilterInstance* instance){
+ ScrubScope scrub(0,instance,nullptr);
  try{require(instance&&instance->piSuites&&instance->piSuites->utilFuncs&&instance->piSuites->utilFuncs->getSPBasicSuite,"Missing plugin suites");
   instance->ioPrivatePluginData=nullptr;auto* basic=instance->piSuites->utilFuncs->getSPBasicSuite();
-  instance->ioPrivatePluginData=new State(basic,instance->inDeviceIndex);trace(0,instance,nullptr,1,"ok");return suiteError_NoError;
- }catch(...){return failure(0,instance,nullptr);}
+  instance->ioPrivatePluginData=new State(basic,instance->inDeviceIndex);scrub.bindKnownInstance(instance);trace(0,instance,nullptr,1,"ok");return scrub.finish(suiteError_NoError);
+ }catch(...){scrub.exception();return scrub.finish(failure(0,instance,nullptr));}
 }
 inline prSuiteError dispose(PrGPUFilterInstance* instance){if(!instance)return suiteError_InvalidParms;delete static_cast<State*>(instance->ioPrivatePluginData);instance->ioPrivatePluginData=nullptr;return suiteError_NoError;}
 inline prSuiteError dependencies(PrGPUFilterInstance* instance,const PrGPUFilterRenderParams* r,csSDK_int32* query,PrGPUFilterFrameDependency* dependency){
- TraceData info;info.index=query?*query:-1;
- try{(void)state(instance);require(r&&query&&dependency,"Missing dependency arguments");if(*query!=0){trace(2,instance,r,1,"no-additional-dependencies",info);return suiteError_NotImplemented;}
+ ScrubScope scrub(2,instance,r);TraceData info;info.index=query?*query:-1;
+ try{(void)state(instance);scrub.bindKnownInstance(instance);require(r&&query&&dependency,"Missing dependency arguments");if(*query!=0){trace(2,instance,r,1,"no-additional-dependencies",info);scrub.details(info);return scrub.finish(suiteError_NotImplemented);}
   require(r->inRenderWidth&&r->inRenderHeight&&r->inRenderWidth<=8192&&r->inRenderHeight<=8192&&std::uint64_t(r->inRenderWidth)*r->inRenderHeight<=33554432,"Invalid precompute dimensions");
   require(r->inRenderPARNum&&r->inRenderPARDen,"Invalid pixel aspect");*dependency={};dependency->outDependencyType=PrGPUDependency_Precompute;dependency->outSequenceTime=r->inSequenceTime;
   dependency->outPrecomputePixelFormat=PrPixelFormat_BGRP_4444_8u;dependency->outPrecomputeFrameWidth=r->inRenderWidth;dependency->outPrecomputeFrameHeight=r->inRenderHeight;
-  dependency->outPrecomputeFramePARNumerator=r->inRenderPARNum;dependency->outPrecomputeFramePARDenominator=r->inRenderPARDen;dependency->outPrecomputeFrameFieldType=r->inRenderFieldType;info.cpuFormat=PrPixelFormat_BGRP_4444_8u;/* Sole dependency: leave query unchanged; increment only when another exists. */trace(2,instance,r,1,"ok",info);return suiteError_NoError;
- }catch(...){return failure(2,instance,r,info);}
+  dependency->outPrecomputeFramePARNumerator=r->inRenderPARNum;dependency->outPrecomputeFramePARDenominator=r->inRenderPARDen;dependency->outPrecomputeFrameFieldType=r->inRenderFieldType;info.cpuFormat=PrPixelFormat_BGRP_4444_8u;/* Sole dependency: leave query unchanged; increment only when another exists. */trace(2,instance,r,1,"ok",info);scrub.details(info);return scrub.finish(suiteError_NoError);
+ }catch(...){scrub.details(info);scrub.exception();return scrub.finish(failure(2,instance,r,info));}
 }
 inline prSuiteError precompute(PrGPUFilterInstance* instance,const PrGPUFilterRenderParams* r,csSDK_int32 index,PPixHand frame){
- TraceData info;info.index=index;trace(3,instance,r,2,"enter",info);
- try{auto& s=state(instance);require(r&&frame&&index==0,"Invalid overlay precompute index");PrPixelFormat format{};prRect bounds{};csSDK_int32 stride=0;char* pixels=nullptr;
+ ScrubScope scrub(3,instance,r);TraceData info;info.index=index;trace(3,instance,r,2,"enter",info);
+ try{auto& s=state(instance);scrub.bindKnownInstance(instance);require(r&&frame&&index==0,"Invalid overlay precompute index");PrPixelFormat format{};prRect bounds{};csSDK_int32 stride=0;char* pixels=nullptr;
   const auto formatError=s.ppix->GetPixelFormat(frame,&format);info.cpuFormat=static_cast<unsigned>(format);require(!formatError&&format==PrPixelFormat_BGRP_4444_8u,"Unexpected precompute format");
   require(!s.ppix->GetBounds(frame,&bounds)&&bounds.left==0&&bounds.top==0&&bounds.right==int(r->inRenderWidth)&&bounds.bottom==int(r->inRenderHeight),"Unexpected precompute bounds");
   const auto pitchError=s.ppix->GetRowBytes(frame,&stride);info.cpuPitch=stride;require(!pitchError&&!s.ppix->GetPixels(frame,PrPPixBufferAccess_WriteOnly,&pixels)&&pixels,"Precompute buffer inaccessible");
-  auto snap=snapshot(s,*instance,*r);trace(7,instance,r,1,"stage-snapshot-ready",info);auto bitmap=macos::rasterize(snap.document,snap.seconds,snap.box,r->inRenderWidth,r->inRenderHeight,snap.maxChars);trace(7,instance,r,1,"stage-raster-ready",info);copyOverlay(bitmap,pixels,stride);trace(3,instance,r,1,"ok",info);return suiteError_NoError;
- }catch(...){return failure(3,instance,r,info);}
+  auto snap=snapshot(s,*instance,*r);trace(7,instance,r,1,"stage-snapshot-ready",info);auto bitmap=macos::rasterize(snap.document,snap.seconds,snap.box,r->inRenderWidth,r->inRenderHeight,snap.maxChars);trace(7,instance,r,1,"stage-raster-ready",info);copyOverlay(bitmap,pixels,stride);trace(3,instance,r,1,"ok",info);scrub.details(info);return scrub.finish(suiteError_NoError);
+ }catch(...){scrub.details(info);scrub.exception();return scrub.finish(failure(3,instance,r,info));}
 }
 struct GPUFrame {id<MTLBuffer> buffer=nil;std::uint32_t stride=0;bool half=false;};
 inline GPUFrame gpuFrame(State& s,PPixHand frame,const PrGPUFilterRenderParams& r,unsigned device,PrPixelFormat* actual=nullptr,TraceData* traceData=nullptr,int role=0){
@@ -216,8 +313,8 @@ inline GPUFrame gpuFrame(State& s,PPixHand frame,const PrGPUFilterRenderParams& 
  return {buffer,static_cast<std::uint32_t>(stride),half};
 }
 inline prSuiteError render(PrGPUFilterInstance* instance,const PrGPUFilterRenderParams* r,const PPixHand* frames,csSDK_size_t frameCount,PPixHand* out){
- PPixHand owned=nullptr;TraceData info;info.count=static_cast<long long>(frameCount);trace(4,instance,r,2,"enter",info);
- try{auto& s=state(instance);require(r&&frames&&frameCount==2&&out,"Expected current input and one overlay dependency");
+ ScrubScope scrub(4,instance,r);PPixHand owned=nullptr;TraceData info;info.count=static_cast<long long>(frameCount);trace(4,instance,r,2,"enter",info);
+ try{auto& s=state(instance);scrub.bindKnownInstance(instance);require(r&&frames&&frameCount==2&&out,"Expected current input and one overlay dependency");
   PrPixelFormat inputFormat{};auto input=gpuFrame(s,frames[0],*r,instance->inDeviceIndex,&inputFormat,&info,0);auto overlay=gpuFrame(s,frames[1],*r,instance->inDeviceIndex,nullptr,&info,1);
   require(!s.gpu->CreateGPUPPix(instance->inDeviceIndex,inputFormat,r->inRenderWidth,r->inRenderHeight,r->inRenderPARNum,r->inRenderPARDen,r->inRenderFieldType,&owned)&&owned,"GPU output allocation failed");
   auto output=gpuFrame(s,owned,*r,instance->inDeviceIndex,nullptr,&info,2);CompositeParams p{r->inRenderWidth,r->inRenderHeight,input.stride,overlay.stride,output.stride,input.half,overlay.half,output.half,BC_GPU_OVERLAY_STRAIGHT,BC_GPU_INPUT_STRAIGHT,BC_GPU_OUTPUT_STRAIGHT};
@@ -231,8 +328,8 @@ inline prSuiteError render(PrGPUFilterInstance* instance,const PrGPUFilterRender
    // exposes command errors; this is a known throughput cost, not final caching.
    [command waitUntilCompleted];require(command.status==MTLCommandBufferStatusCompleted,"Metal caption composite failed");
   }
-  *out=owned;owned=nullptr;trace(4,instance,r,1,"ok",info);return suiteError_NoError;
- }catch(...){if(owned&&instance&&instance->ioPrivatePluginData)static_cast<State*>(instance->ioPrivatePluginData)->ppix->Dispose(owned);return failure(4,instance,r,info);}
+  *out=owned;owned=nullptr;trace(4,instance,r,1,"ok",info);scrub.details(info);return scrub.finish(suiteError_NoError);
+ }catch(...){scrub.details(info);scrub.exception();if(owned&&instance&&instance->ioPrivatePluginData)static_cast<State*>(instance->ioPrivatePluginData)->ppix->Dispose(owned);return scrub.finish(failure(4,instance,r,info));}
 }
 } // namespace better_captions::adobe::gpu_caption_renderer
 extern "C" __attribute__((visibility("default"))) prSuiteError xGPUFilterEntry(csSDK_uint32 version,csSDK_int32* index,prBool startup,piSuitesPtr,PrGPUFilter* filter,PrGPUFilterInfo* info){

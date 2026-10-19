@@ -5,6 +5,8 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 : "${AE_SDK_EXAMPLES:?Set official AE SDK Examples}"
 : "${PREMIERE_SDK_HEADERS:?Set official Premiere SDK Headers}"
 probe_ref="${BC_NATIVE_PROBE_REF:-HEAD}"
+scrub_diagnostics="${BC_GPU_SCRUB_DIAGNOSTICS:-0}"
+case "$scrub_diagnostics" in 0|1) ;; *) printf '%s\n' 'BC_GPU_SCRUB_DIAGNOSTICS must be 0 or 1' >&2; exit 1;; esac
 probe_commit="$(git -C "$root" rev-parse --verify --end-of-options "$probe_ref^{commit}")"
 probe_short="${probe_commit:0:7}"
 snapshot="$(mktemp -d "/tmp/bc-gpu-caption-$probe_short.XXXXXX")"
@@ -13,7 +15,7 @@ git -C "$root" archive "$probe_commit" | tar -x -C "$snapshot"
 for file in gpu_caption_renderer.hpp caption_composite.metal gpu_caption_test.mm gpu_float_eligibility.hpp; do
  cp "$root/native/adobe/$file" "$snapshot/native/adobe/$file"
 done
-printf '#include "gpu_caption_renderer.hpp"\n' > "$snapshot/native/adobe/gpu_caption_renderer.mm"
+printf '#define BC_GPU_SCRUB_DIAGNOSTICS %s\n#include "gpu_caption_renderer.hpp"\n' "$scrub_diagnostics" > "$snapshot/native/adobe/gpu_caption_renderer.mm"
 python3 - "$snapshot/native/adobe" <<'PY'
 from pathlib import Path
 import sys
@@ -43,7 +45,7 @@ xcrun -sdk macosx metallib "$output/CaptionComposite.air" -o "$resources/Caption
 BC_NATIVE_OUTPUT_DIR="$output" BC_ENABLE_RENDER_TIME_DIAGNOSTICS=0 BC_ENABLE_CUSTOM_UI_PROBE=0 BC_ENABLE_SOURCE_TIME_PROBE=0 BC_ENABLE_ADJUSTMENT_TIME_PROBE=0 bash "$snapshot/native/adobe/build-macos.sh"
 codesign --verify --deep --strict "$output/BetterCaptionsNativeProbe.plugin"
 includes=(-I "$PREMIERE_SDK_HEADERS" -I "$AE_SDK_EXAMPLES/Headers" -I "$AE_SDK_EXAMPLES/Headers/SP" -I "$AE_SDK_EXAMPLES/Util" -I "$AE_SDK_EXAMPLES/Resources")
-xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
+xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined -DBC_GPU_SCRUB_DIAGNOSTICS="$scrub_diagnostics" "${includes[@]}" \
  "$snapshot/native/adobe/gpu_caption_test.mm" "$snapshot/native/core/caption_core.cpp" "$snapshot/native/macos/caption_rasterizer.mm" \
  -framework Metal -framework Foundation -framework CoreText -framework CoreGraphics -framework CoreFoundation -o "$output/gpu_caption_test"
 "$output/gpu_caption_test" "$resources/CaptionComposite.metallib"
