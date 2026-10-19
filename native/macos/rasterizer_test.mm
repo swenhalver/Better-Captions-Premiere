@@ -55,6 +55,18 @@ int main(){
   const auto fullAlpha=255*run.style.opacity*run.style.bubbleColor.a;
   check(wrappedBitmap.pixels[y*wrappedBitmap.stride+left*4+3]<fullAlpha/2&&wrappedBitmap.pixels[y*wrappedBitmap.stride+right*4+3]<fullAlpha/2,"A wrapped physical line lost its rounded first or last endpoint");}
 
+ // Actual native pixels move with the compact line-height multiplier; .6
+ // can intentionally overlap lines while larger values add vertical gap.
+ std::vector<macos::Bitmap> linePixels;
+ for(double spacing:{.6,1.2,2.0}){auto lineDoc=connected;lineDoc.style.lineHeight=spacing;
+  const LayoutBox lineBox{10,10,75,300,1};const auto frame=layoutFrame(lineDoc,1.5,lineBox,nativeMeasure);check(frame.words.size()==2,"Line spacing fixture did not wrap");
+  const auto& firstRun=frame.words.front();const double lineExtent=firstRun.height;
+  check(std::abs(frame.words.back().baseline-firstRun.baseline-lineExtent*spacing)<1e-9,"Native line spacing did not move physical line baselines");
+  for(const auto& run:frame.words)check(!run.bubbleJoinLeft&&!run.bubbleJoinRight,"Line spacing joined separate wrapped lines");
+  linePixels.push_back(macos::rasterize(lineDoc,1.5,lineBox,640,360));
+ }
+ check(linePixels[0].pixels!=linePixels[1].pixels&&linePixels[1].pixels!=linePixels[2].pixels,"Line-height changes did not affect actual native pixels");
+ check(visible(linePixels[0]).bottom<visible(linePixels[1]).bottom&&visible(linePixels[1]).bottom<visible(linePixels[2]).bottom,"Native line-height pixels did not gain increasing vertical gap");
  Document pages;pages.containers.push_back({"pages",false,{{"First.",0,1,true},{"Second.",1,2,true},{"Third.",2,3,true},{"Last.",3,4,true}}});
  for(auto* s:{&pages.style.current,&pages.style.upcoming,&pages.style.spoken})s->fontSize=32;
  const auto unchangedPages=encode(pages);

@@ -135,7 +135,7 @@ export function validateNativeStyle(input: unknown): NativeStyle {
   const s = record(input, ['upcoming', 'current', 'spoken', 'wordSpacing', 'lineHeight', 'titleCase', 'baseFontWeight', 'letterCase']);
   if (s.letterCase !== undefined && (!['uppercase','lowercase'].includes(s.letterCase as string) || s.titleCase)) throw new Error('Invalid native display letter case.');
   if (typeof s.titleCase !== 'boolean') throw new Error('Invalid display-only Title Case flag.');
-  return { upcoming: wordStyle(s.upcoming), current: wordStyle(s.current), spoken: wordStyle(s.spoken), wordSpacing: numeric(s.wordSpacing, 0, 4096), lineHeight: numeric(s.lineHeight, 1, 10), titleCase: s.titleCase, ...(s.letterCase === undefined ? {} : {letterCase:s.letterCase as 'uppercase'|'lowercase'}), ...(s.baseFontWeight === undefined ? {} : {baseFontWeight:numeric(s.baseFontWeight,1,1000)}) };
+  return { upcoming: wordStyle(s.upcoming), current: wordStyle(s.current), spoken: wordStyle(s.spoken), wordSpacing: numeric(s.wordSpacing, 0, 4096), lineHeight: numeric(s.lineHeight, .6, 10), titleCase: s.titleCase, ...(s.letterCase === undefined ? {} : {letterCase:s.letterCase as 'uppercase'|'lowercase'}), ...(s.baseFontWeight === undefined ? {} : {baseFontWeight:numeric(s.baseFontWeight,1,1000)}) };
 }
 export function defaultNativeStyle(): NativeStyle {
   const word: NativeWordStyle = { fontFamily: 'Arial', fontSize: 64, sizeScale: 1, opacity: 1, color: {r:1,g:1,b:1,a:1}, bubble: false, bubbleColor: {r:0,g:0,b:0,a:1}, padding:8, radius:10, outlineWidth:0, outlineColor:{r:0,g:0,b:0,a:1}, shadowBlur:0, shadowX:0, shadowY:0, shadowColor:{r:0,g:0,b:0,a:.5} };

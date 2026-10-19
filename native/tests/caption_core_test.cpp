@@ -121,6 +121,17 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  assert(!wrapJoins.words[0].bubbleJoinLeft&&wrapJoins.words[0].bubbleJoinRight&&wrapJoins.words[1].bubbleJoinLeft&&!wrapJoins.words[1].bubbleJoinRight&&!wrapJoins.words[2].bubbleJoinLeft&&!wrapJoins.words[2].bubbleJoinRight);
  joined.style.current.bubbleColor.a=0;const auto transparentJoin=layoutFrame(joined,1.5,{0,0,300,300},measure);for(const auto& run:transparentJoin.words)assert(!run.bubbleJoinLeft&&!run.bubbleJoinRight);
  joined.style.current.bubbleColor.a=1;assert(encode(joined)==joinBytes); // joins are derived, not a new format
+ // The ribbon's .6 lower bound is valid native spacing. Multipliers change
+ // physical line baselines without changing horizontal layout or corner joins.
+ for(double spacing:{.6,1.2,2.0,10.0}){
+  joined.style.lineHeight=spacing;const auto spaced=layoutFrame(joined,1.5,{0,0,65,1000},measure);
+  assert(std::abs(spaced.words[2].baseline-spaced.words[0].baseline-24*spacing)<1e-10);
+  assert(spaced.words[0].x==wrapJoins.words[0].x&&spaced.words[2].x==wrapJoins.words[2].x);
+  assert(spaced.words[0].bubbleJoinRight&&!spaced.words[1].bubbleJoinRight&&!spaced.words[2].bubbleJoinLeft&&!spaced.words[2].bubbleJoinRight);
+  const auto bytes=encode(joined);assert(decode(bytes).style.lineHeight==spacing&&encode(decode(bytes))==bytes);
+ }
+ for(double spacing:{.599999,0.0,-1.0,10.00001,std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity()}){auto invalidSpacing=joined;invalidSpacing.style.lineHeight=spacing;rejects([&]{validate(invalidSpacing);});}
+
  auto v5Bad=encode(bubbles);auto v5Fill=bubbles;v5Fill.style.current.bubbleFillSpaces=true;v5Bad=encode(v5Fill);v5Bad.back()=2;rejects([&]{decode(v5Bad);});
  auto again=layoutFrame(bubbles,0.1,{0,0,1200,300},measure);
  assert(again.words.size()==bubbleFrame.words.size());for(std::size_t i=0;i<again.words.size();++i)assert(again.words[i].x==bubbleFrame.words[i].x&&again.words[i].baseline==bubbleFrame.words[i].baseline&&again.words[i].text==bubbleFrame.words[i].text);

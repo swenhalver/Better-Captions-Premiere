@@ -456,3 +456,15 @@ test('native bubble spaces rehydrate and edit per state without changing layout,
  }
  assert.ok(NATIVE_PANEL_CAPABILITIES.supportedWordStyleFields.includes('bubbleFillSpaces'));
 });
+
+
+test('native line spacing accepts the ribbon minimum and preserves legacy maximum without changing caption data',()=>{
+ const {session,binding:connected}=binding();
+ for(const lineHeight of [.6,1.2,2,10]){
+  const edited=clone(session);edited.style.lineHeight=lineHeight;const expected=clone(connected.document);expected.style.lineHeight=lineHeight;
+  const next=prepareNativePanelUpdate(connected,edited);assert.deepEqual(next,expected);
+  const text=encodeNativeTransportText(next),restored=decodeNativePanelDocument(text,id);assert.equal(restored.style.lineHeight,lineHeight);assert.deepEqual(restored.captions,connected.document.captions);assert.equal(encodeNativeTransportText(restored),text);
+  assert.equal(rehydrateNativePanel(entry(next),sequence()).session.style.lineHeight,lineHeight);
+ }
+ for(const lineHeight of [.599999,0,-1,10.001,NaN,Infinity,'0.6',undefined]){const edited=clone(session);edited.style.lineHeight=lineHeight;assert.throws(()=>prepareNativePanelUpdate(connected,edited));}
+});

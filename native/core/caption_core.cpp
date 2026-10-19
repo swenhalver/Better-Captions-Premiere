@@ -85,7 +85,7 @@ void validate(const Document& d) {
  require(bytes<=kMaxDocumentBytes/2,"text limit exceeded");style(d.style.upcoming);style(d.style.current);style(d.style.spoken);
  require(d.style.letterCase>=0&&d.style.letterCase<=2&&!(d.style.letterCase&&d.style.titleCase),"invalid display letter case");
  require(finite(d.style.wordSpacing)&&d.style.wordSpacing>=0&&d.style.wordSpacing<=4096,"invalid word spacing");
- require(finite(d.style.lineHeight)&&d.style.lineHeight>=1&&d.style.lineHeight<=10,"invalid line height");
+ require(finite(d.style.lineHeight)&&d.style.lineHeight>=.6&&d.style.lineHeight<=10,"invalid line height");
 }
 std::vector<Phrase> regroup(const Document& d,std::size_t maxChars,double pause) {
  validate(d);require(maxChars>=1&&maxChars<=500,"invalid character count");require(finite(pause)&&pause>=0&&pause<=60,"invalid pause");

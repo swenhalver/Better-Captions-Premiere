@@ -111,6 +111,7 @@ test('TS encoder bytes roundtrip through actual C++ decoder and encoder', async 
       assert.deepEqual(new Uint8Array(readFileSync(output)),v4,'v4 display case is byte-exact across TS and C++');
     }
     const spaces=structuredClone(typography);spaces.style.current.bubbleFillSpaces=true;spaces.style.spoken.bubbleFillSpaces=true;
+    spaces.style.lineHeight=.6;
     const v5=encodeNativeDocument(spaces);assert.equal(new DataView(v5.buffer).getUint32(4,true),5);assert.equal(v5.length,v3.length+16);
     writeFileSync(input,v5);execFileSync(executable,['--roundtrip',input,output]);
     assert.deepEqual(new Uint8Array(readFileSync(output)),v5,'v5 bubble space flags are byte-exact across TS and C++');
@@ -350,4 +351,10 @@ test('bubble space flags retain legacy bytes, roundtrip all three states and rej
   const malformed='BCDOC1:'+bytes.toString('hex');assert.throws(()=>decodeNativePanelDocument(malformed,'seq-1'));assert.throws(()=>decodeNativeTransportTimeOrigin(malformed));
  }
  for(const value of [1,0,null,'true',{}]){const data=document();data.style.current.bubbleFillSpaces=value;assert.throws(()=>validateNativeDocument(data),/bubble spaces flag/);}
+});
+
+
+test('native document line spacing uses the visible .6 minimum and retains legacy 10 maximum',()=>{
+ for(const lineHeight of [.6,1.2,2,10]){const data=document();data.style.lineHeight=lineHeight;assert.equal(validateNativeDocument(data).style.lineHeight,lineHeight);}
+ for(const lineHeight of [.599999,0,-.6,10.000001,NaN,Infinity,null,'0.6']){const data=document();data.style.lineHeight=lineHeight;assert.throws(()=>validateNativeDocument(data));}
 });
