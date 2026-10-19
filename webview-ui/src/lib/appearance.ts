@@ -7,9 +7,9 @@ export type ResolvedAppearance = Required<WordAppearance>;
 export function resolveAppearance(style: StyleConfig, key: WordStateKey): ResolvedAppearance {
   const base: ResolvedAppearance = {
     fontFamily: style.fontFamily, fontWeight: style.fontWeight, fontWeightOffset: null, fontSize: style.fontSize,
-    sizeScale: 1, color: style.textColor, opacity: 1, italic: false, letterSpacing: 0,
+    sizeScale: 1, color: style.textColor, opacity: 1, italic: false, underline: false, letterSpacing: 0,
     textTransform: style.textTransform, bubble: false, bubbleColor: '#000000',
-    bubbleOpacity: 1, bubbleFillSpaces: false, padding: 8, radius: 10,
+    bubbleOpacity: 1, bubbleFillSpaces: false, padding: 8, bubblePaddingInline: 8, bubblePaddingBlock: 8, radius: 10,
     strokeEnabled: style.strokeEnabled, strokeColor: style.strokeColor,
     strokeOpacity: style.strokeOpacity, strokeWidth: style.strokeWidth,
     shadowEnabled: style.shadowEnabled, shadowColor: style.shadowColor,
@@ -19,6 +19,8 @@ export function resolveAppearance(style: StyleConfig, key: WordStateKey): Resolv
   const saved = style[key];
   const family = saved?.fontFamily || style.fontFamily;
   return { ...base, ...saved, fontFamily: family,
+    bubblePaddingInline: saved?.bubblePaddingInline ?? saved?.padding ?? base.padding,
+    bubblePaddingBlock: saved?.bubblePaddingBlock ?? saved?.padding ?? base.padding,
     fontWeight: saved?.fontWeightOffset === 100 ? nextFontWeight(family, style.fontWeight)
       : resolveFontWeight(family, saved?.fontWeightOffset === 0 ? style.fontWeight : saved?.fontWeight ?? style.fontWeight),
     fontSize: saved?.fontSize ?? style.fontSize * (saved?.sizeScale ?? 1) };

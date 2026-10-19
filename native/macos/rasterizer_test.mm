@@ -67,6 +67,27 @@ int main(){
  }
  check(linePixels[0].pixels!=linePixels[1].pixels&&linePixels[1].pixels!=linePixels[2].pixels,"Line-height changes did not affect actual native pixels");
  check(visible(linePixels[0]).bottom<visible(linePixels[1]).bottom&&visible(linePixels[1]).bottom<visible(linePixels[2]).bottom,"Native line-height pixels did not gain increasing vertical gap");
+ // Real CoreGraphics bounds use inline padding horizontally and block
+ // padding vertically, with legacy uniform padding as an independent fallback.
+ Document axisPixels;axisPixels.containers.push_back({"axis-pixels",false,{{"MM",0,2,false}}});axisPixels.style.current.fontSize=32;axisPixels.style.current.bubble=true;axisPixels.style.current.color.a=0;axisPixels.style.current.shadowColor.a=0;axisPixels.style.current.bubbleColor={1,0,0,1};axisPixels.style.current.radius=0;
+ const LayoutBox axisBox{10,10,400,250,1};const auto legacyPixelBounds=visible(macos::rasterize(axisPixels,.5,axisBox,640,360));
+ axisPixels.style.current.bubblePaddingInline=20;axisPixels.style.current.bubblePaddingBlock=3;
+ const auto axesBitmap=macos::rasterize(axisPixels,.5,axisBox,640,360);const auto axesBounds=visible(axesBitmap);
+ check(axesBounds.right-axesBounds.left>=legacyPixelBounds.right-legacyPixelBounds.left+23,"Native inline padding did not widen the actual bubble pixels");
+ check(axesBounds.bottom-axesBounds.top<=legacyPixelBounds.bottom-legacyPixelBounds.top-9,"Native block padding did not tighten actual bubble pixels independently");
+ const auto axesFrame=layoutFrame(axisPixels,.5,axisBox,nativeMeasure);axisPixels.style.current.bubblePaddingBlock=30;
+ const auto tallerBitmap=macos::rasterize(axisPixels,.5,axisBox,640,360);const auto tallerBounds=visible(tallerBitmap);const auto tallerFrame=layoutFrame(axisPixels,.5,axisBox,nativeMeasure);
+ check(tallerBounds.right-tallerBounds.left==axesBounds.right-axesBounds.left&&tallerBounds.bottom-tallerBounds.top>axesBounds.bottom-axesBounds.top+50,"Block padding changed width or did not grow vertical pixels");
+ check(tallerFrame.words[0].width==axesFrame.words[0].width&&tallerFrame.words[0].height==axesFrame.words[0].height+54,"Native block geometry changed the inline dimension");
+ // CoreText renders a real underline without altering glyph layout. Explicit
+ // off matches an old unset style exactly; it is not a formatting-only flag.
+ Document underlineDoc;underlineDoc.containers.push_back({"underline",false,{{"HHHH",0,2,false}}});underlineDoc.style.current.fontSize=48;underlineDoc.style.current.color={1,0,0,1};
+ const LayoutBox underlineBox{20,20,500,200,1};const auto withoutUnderline=macos::rasterize(underlineDoc,.5,underlineBox,640,300);const auto underlineBefore=layoutFrame(underlineDoc,.5,underlineBox,nativeMeasure);
+ underlineDoc.style.current.underline=1;const auto withUnderline=macos::rasterize(underlineDoc,.5,underlineBox,640,300);const auto underlineAfter=layoutFrame(underlineDoc,.5,underlineBox,nativeMeasure);
+ check(underlineBefore.words[0].x==underlineAfter.words[0].x&&underlineBefore.words[0].width==underlineAfter.words[0].width&&underlineBefore.words[0].baseline==underlineAfter.words[0].baseline,"Underline changed native glyph layout");
+ std::size_t addedUnderline=0;for(std::size_t pixel=0;pixel<withUnderline.pixels.size();pixel+=4)if(withUnderline.pixels[pixel+3]>0&&withoutUnderline.pixels[pixel+3]==0)addedUnderline++;
+ check(addedUnderline>50&&count(withUnderline)>count(withoutUnderline),"CoreText did not render actual underline pixels");
+ underlineDoc.style.current.underline=0;check(macos::rasterize(underlineDoc,.5,underlineBox,640,300).pixels==withoutUnderline.pixels,"Explicit underline off did not preserve legacy pixels");
  Document pages;pages.containers.push_back({"pages",false,{{"First.",0,1,true},{"Second.",1,2,true},{"Third.",2,3,true},{"Last.",3,4,true}}});
  for(auto* s:{&pages.style.current,&pages.style.upcoming,&pages.style.spoken})s->fontSize=32;
  const auto unchangedPages=encode(pages);

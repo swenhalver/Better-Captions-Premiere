@@ -51,7 +51,7 @@ struct Shaped {
  Ref<CTFontRef> font;
  Ref<CGColorSpaceRef> space;
  Ref<CGColorRef> fill,stroke;
- Ref<CFNumberRef> strokeWidth;
+ Ref<CFNumberRef> strokeWidth,underlineStyle;
  Ref<CFDictionaryRef> attributes;
  Ref<CFAttributedStringRef> attributed;
  Ref<CTLineRef> line;
@@ -62,14 +62,15 @@ struct Shaped {
  static CGColorRef color(CGColorSpaceRef space,const Color& c,double opacity){CGFloat values[]={c.r,c.g,c.b,c.a*opacity};return CGColorCreate(space,values);}
  static CFNumberRef number(double width,double size){double percent=width>0?100*width/size:0;return CFNumberCreate(nullptr,kCFNumberDoubleType,&percent);}
  static CTFontRef selectFont(const WordStyle& style,double baseWeight,bool& synthetic,FrameFonts* fonts){if(fonts)return fonts->select(style,baseWeight,synthetic);auto choice=font_detail::choose(style,baseWeight);synthetic=choice.info.syntheticItalic;return choice.font;}
- static CFDictionaryRef attrs(CTFontRef f,CGColorRef fill,CGColorRef stroke,CFNumberRef w){
-  const void* keys[]={kCTFontAttributeName,kCTForegroundColorAttributeName,kCTStrokeColorAttributeName,kCTStrokeWidthAttributeName};
-  const void* values[]={f,fill,stroke,w};return CFDictionaryCreate(nullptr,keys,values,4,&kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
+ static CFNumberRef underlineNumber(){int mode=kCTUnderlineStyleSingle;return CFNumberCreate(nullptr,kCFNumberIntType,&mode);}
+ static CFDictionaryRef attrs(CTFontRef f,CGColorRef fill,CGColorRef stroke,CFNumberRef w,CFNumberRef underline,bool enabled){
+  const void* keys[]={kCTFontAttributeName,kCTForegroundColorAttributeName,kCTStrokeColorAttributeName,kCTStrokeWidthAttributeName,kCTUnderlineStyleAttributeName};
+  const void* values[]={f,fill,stroke,w,underline};return CFDictionaryCreate(nullptr,keys,values,enabled?5:4,&kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
  }
  Shaped(const std::string& s,const WordStyle& style,double baseWeight,FrameFonts* fonts=nullptr,bool outlineOnly=false):text(utf8(s)),
  font(selectFont(style,baseWeight,syntheticItalic,fonts)),space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB)),
  fill(color(space,style.color,style.opacity)),stroke(color(space,style.outlineColor,style.opacity)),
- strokeWidth(number(outlineOnly?style.outlineWidth:0,style.fontSize*style.sizeScale)),attributes(attrs(font,fill,stroke,strokeWidth)),
+ strokeWidth(number(outlineOnly?style.outlineWidth:0,style.fontSize*style.sizeScale)),underlineStyle(underlineNumber()),attributes(attrs(font,fill,stroke,strokeWidth,underlineStyle,style.underline>0&&!outlineOnly)),
  attributed(CFAttributedStringCreate(nullptr,text,attributes)),line(CTLineCreateWithAttributedString(attributed)){}
  CGRect inkBounds()const{return CTLineGetBoundsWithOptions(line,kCTLineBoundsUseGlyphPathBounds);}
  double offsetX()const{return syntheticItalic?std::max(0.0,-double(inkBounds().origin.x)):0;}
@@ -110,7 +111,7 @@ Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::
  CGContextClipToRect(context,CGRectMake(box.x,height-box.y-box.height,box.width,box.height));
  if(frame.rolling)CGContextClipToRect(context,CGRectMake(frame.viewport.x,height-frame.viewport.y-frame.viewport.height,frame.viewport.width,frame.viewport.height));
  for(const auto& run:frame.words){
-  const auto& s=run.style;Shaped shaped(run.text,s,document.style.baseFontWeight,&fonts);auto m=shaped.metrics();double pad=s.bubble?s.padding:0;
+  const auto& s=run.style;Shaped shaped(run.text,s,document.style.baseFontWeight,&fonts);auto m=shaped.metrics();double inlinePad=s.bubble?s.inlinePadding():0,pad=s.bubble?s.blockPadding():0;
   CGContextSaveGState(context);
   if(s.bubble){
    Ref<CGColorRef> bubble(Shaped::color(space,s.bubbleColor,s.opacity));CGContextSetFillColorWithColor(context,bubble);
@@ -123,7 +124,7 @@ Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::
    Ref<CGColorRef> shadow(Shaped::color(space,s.shadowColor,s.opacity));
    CGContextSetShadowWithColor(context,CGSizeMake(s.shadowX,-s.shadowY),s.shadowBlur,shadow);
   }
-  CGContextSetTextMatrix(context,CGAffineTransformIdentity);CGContextSetTextPosition(context,run.x+pad+shaped.offsetX(),height-run.baseline);
+  CGContextSetTextMatrix(context,CGAffineTransformIdentity);CGContextSetTextPosition(context,run.x+inlinePad+shaped.offsetX(),height-run.baseline);
   // CoreText's combined fill/stroke mode paints into the glyph interior.
   // Keep the stroke below an unchanged fill, with identical font and origin.
   // Group shadowed passes so the completed text casts one shadow.
@@ -132,7 +133,7 @@ Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::
   if(outlined){
    Shaped outline(run.text,s,document.style.baseFontWeight,&fonts,true);
    CTLineDraw(outline.line,context);
-   CGContextSetTextPosition(context,run.x+pad+shaped.offsetX(),height-run.baseline);
+   CGContextSetTextPosition(context,run.x+inlinePad+shaped.offsetX(),height-run.baseline);
   }
   CTLineDraw(shaped.line,context);
   if(outlined&&shadow)CGContextEndTransparencyLayer(context);

@@ -36,9 +36,11 @@ void style(const WordStyle& s) {
  require(finite(s.opacity)&&s.opacity>=0&&s.opacity<=1,"invalid opacity");
  require(s.fontWeight==0||(finite(s.fontWeight)&&s.fontWeight>=1&&s.fontWeight<=1000),"invalid font weight");
  require(s.italic>=-1&&s.italic<=1,"invalid italic mode");
+ require(s.underline>=-1&&s.underline<=1,"invalid underline mode");
  require(s.fontWeightOffset==-1||s.fontWeightOffset==0||s.fontWeightOffset==100,"invalid relative weight mode");
  for(double v:{s.padding,s.radius,s.outlineWidth,s.shadowBlur}) require(finite(v)&&v>=0&&v<=4096,"invalid style extent");
  require(finite(s.shadowX)&&finite(s.shadowY)&&std::abs(s.shadowX)<=4096&&std::abs(s.shadowY)<=4096,"invalid shadow offset");
+ for(double axis:{s.bubblePaddingInline,s.bubblePaddingBlock})require(axis==-1||(finite(axis)&&axis>=0&&axis<=4096),"invalid bubble axis padding");
  color(s.color);color(s.bubbleColor);color(s.outlineColor);color(s.shadowColor);
 }
 bool visibleBubble(const WordStyle& s) { return s.bubble&&s.opacity>0&&s.bubbleColor.a>0; }
@@ -105,7 +107,8 @@ std::vector<std::uint8_t> encode(const Document& d) {
  bool typography=d.style.baseFontWeight!=0;
  for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken})typography=typography||s->fontWeight!=0||s->italic!=-1||s->fontWeightOffset!=-1;
  if(d.style.letterCase&&wireVersion<4)wireVersion=4;else if(typography&&wireVersion<3)wireVersion=3;else if(wireVersion==1&&d.timeOriginSeconds!=0)wireVersion=2;
- for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken})if(s->bubbleFillSpaces)wireVersion=5;
+ for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken})if(s->bubbleFillSpaces&&wireVersion<5)wireVersion=5;
+ for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken})if(s->bubblePaddingInline!=-1||s->bubblePaddingBlock!=-1||s->underline!=-1)wireVersion=6;
  Writer w;w.u(0x50414342);w.u(wireVersion);w.u(static_cast<std::uint32_t>(d.containers.size()));
  for(const auto& c:d.containers){w.s(c.id);w.u(c.manualSplit);w.u(static_cast<std::uint32_t>(c.words.size()));for(const auto& a:c.words){w.s(a.text);w.d(a.start);w.d(a.end);w.u(a.endOfSentence);}}
  writeStyle(w,d.style.upcoming);writeStyle(w,d.style.current);writeStyle(w,d.style.spoken);w.d(d.style.wordSpacing);w.d(d.style.lineHeight);w.u(d.style.titleCase);
@@ -113,6 +116,8 @@ std::vector<std::uint8_t> encode(const Document& d) {
  if(wireVersion>=3){w.d(d.style.baseFontWeight);for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){w.d(s->fontWeight);w.u(static_cast<std::uint32_t>(s->italic+1));w.u(s->fontWeightOffset==-1?0:s->fontWeightOffset==0?1:2);}}
  if(wireVersion>=4)w.u(d.style.letterCase);
  if(wireVersion>=5)for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken})w.u(s->bubbleFillSpaces);
+ if(wireVersion>=6)for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){w.d(s->bubblePaddingInline);w.d(s->bubblePaddingBlock);}
+ if(wireVersion>=6)for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken})w.u(static_cast<std::uint32_t>(s->underline+1));
  require(w.b.size()<=kMaxDocumentBytes,"document size exceeded");return w.b;
 }
 Document decode(const std::vector<std::uint8_t>& b) {
@@ -124,6 +129,8 @@ Document decode(const std::vector<std::uint8_t>& b) {
  if(wireVersion>=3){d.style.baseFontWeight=r.d();for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){s->fontWeight=r.d();const auto italic=r.u(),offset=r.u();require(italic<=2&&offset<=2,"invalid native typography mode");s->italic=static_cast<int>(italic)-1;s->fontWeightOffset=offset==0?-1:offset==1?0:100;}}
  if(wireVersion>=4)d.style.letterCase=static_cast<int>(r.u());
  if(wireVersion>=5)for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken})s->bubbleFillSpaces=r.flag();
+ if(wireVersion>=6)for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){s->bubblePaddingInline=r.d();s->bubblePaddingBlock=r.d();}
+ if(wireVersion>=6)for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){auto mode=r.u();require(mode<=2,"invalid underline mode");s->underline=static_cast<int>(mode)-1;}
  require(r.p==b.size(),"trailing document bytes");validate(d);return d;
 }
 std::string displayText(const std::string& text,bool title,int letterCase) {
@@ -162,8 +169,8 @@ Metrics worstMetrics(const std::string& text,const Style& style,const MeasureTex
  Metrics reserved;
  for(const auto* state:{&style.upcoming,&style.current,&style.spoken}){
   auto metrics=measure(text,*state);require(finite(metrics.width)&&finite(metrics.ascent)&&finite(metrics.descent)&&metrics.width>=0&&metrics.ascent>=0&&metrics.descent>=0&&metrics.width<=1e9&&metrics.ascent<=1e9&&metrics.descent<=1e9,"invalid text metrics");
-  const double pad=state->bubble?state->padding:0;
-  reserved.width=std::max(reserved.width,metrics.width+2*pad);reserved.ascent=std::max(reserved.ascent,metrics.ascent+pad);reserved.descent=std::max(reserved.descent,metrics.descent+pad);
+  const double inlinePad=state->bubble?state->inlinePadding():0,blockPad=state->bubble?state->blockPadding():0;
+  reserved.width=std::max(reserved.width,metrics.width+2*inlinePad);reserved.ascent=std::max(reserved.ascent,metrics.ascent+blockPad);reserved.descent=std::max(reserved.descent,metrics.descent+blockPad);
  }return reserved;
 }
 struct RollingSlot {std::size_t index=0;std::string text;Metrics reserved;double left=0;};
@@ -227,21 +234,21 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
      const auto& word=container.words[slot.index];if(word.start>time)continue;
      const auto state=time<word.end?WordState::Current:WordState::Spoken;
      auto style=state==WordState::Current?d.style.current:d.style.spoken;const auto metrics=measure(slot.text,style);
-     const double pad=style.bubble?style.padding:0,width=metrics.width+2*pad;
+     const double pad=style.bubble?style.blockPadding():0,width=metrics.width+(style.bubble?2*style.inlinePadding():0);
      const double x=left+lineInset(box,line.width)+slot.left+(slot.reserved.width-width)/2;
      DrawWord run{slot.text,container.id,slot.index,state,style,x,top+maxAscent,width,metrics.ascent+metrics.descent+2*pad};
      run.bubbleJoinLeft=previousBubbleJoin;
      if(style.bubble&&style.bubbleFillSpaces&&slotIndex+1<line.words.size()){
       const auto& next=line.words[slotIndex+1];
       if(!punctuation(next.text)){const auto& nextWord=container.words[next.index];const auto& nextStyle=time<nextWord.start?d.style.upcoming:time<nextWord.end?d.style.current:d.style.spoken;
-       const auto nextMetrics=measure(next.text,nextStyle);const double nextWidth=nextMetrics.width+(nextStyle.bubble?2*nextStyle.padding:0);
+       const auto nextMetrics=measure(next.text,nextStyle);const double nextWidth=nextMetrics.width+(nextStyle.bubble?2*nextStyle.inlinePadding():0);
        const double nextX=left+lineInset(box,line.width)+next.left+(next.reserved.width-nextWidth)/2;run.bubbleExtraWidth=std::max(0.0,nextX-x-width);
        run.bubbleJoinRight=visibleBubble(style)&&visibleBubble(nextStyle)&&nextWord.start<=time;}
      }
      previousBubbleJoin=run.bubbleJoinRight;
      if(settled)settled->emplace(slot.index,run);
      run.style.opacity*=alpha;
-     run.style.fontSize*=scale;run.style.padding*=scale;run.style.radius*=scale;run.style.outlineWidth*=scale;run.style.shadowBlur*=scale;run.style.shadowX*=scale;run.style.shadowY*=scale;
+     run.style.fontSize*=scale;run.style.padding*=scale;if(run.style.bubblePaddingInline>=0)run.style.bubblePaddingInline*=scale;if(run.style.bubblePaddingBlock>=0)run.style.bubblePaddingBlock*=scale;run.style.radius*=scale;run.style.outlineWidth*=scale;run.style.shadowBlur*=scale;run.style.shadowX*=scale;run.style.shadowY*=scale;
      run.x=centerX+(x-centerX)*scale+shiftX;run.baseline=centerY+(top+maxAscent-centerY)*scale+shiftY;run.width*=scale;run.height*=scale;run.bubbleExtraWidth*=scale;
      result.words.push_back(std::move(run));
     }
@@ -346,7 +353,7 @@ Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const Measu
    for(std::size_t i=p.firstWord;i<p.firstWord+p.wordCount;++i){const auto& w=it->words[i];WordState state=time<w.start?WordState::Upcoming:time<w.end?WordState::Current:WordState::Spoken;
    WordStyle s=state==WordState::Current?d.style.current:state==WordState::Spoken?d.style.spoken:d.style.upcoming;
    auto text=transform?transform(w.text,d.style):displayText(w.text,d.style.titleCase,d.style.letterCase);auto m=measure(text,s);require(finite(m.width)&&finite(m.ascent)&&finite(m.descent)&&m.width>=0&&m.ascent>=0&&m.descent>=0&&m.width<=1e9&&m.ascent<=1e9&&m.descent<=1e9,"invalid text metrics");
-   double pad=s.bubble?s.padding:0;double width=m.width+2*pad,ascent=m.ascent+pad,descent=m.descent+pad;
+   double inlinePad=s.bubble?s.inlinePadding():0,blockPad=s.bubble?s.blockPadding():0;double width=m.width+2*inlinePad,ascent=m.ascent+blockPad,descent=m.descent+blockPad;
    double gap=!line.empty()&&!punctuation(text)?d.style.wordSpacing:0;
    if(!line.empty()&&!punctuation(text)&&lineWidth+gap+width>box.width){flush();gap=0;}
    lineWidth+=gap+width;lineAscent=std::max(lineAscent,ascent);lineDescent=std::max(lineDescent,descent);if(lineWidth>box.width)result.overflow=true;

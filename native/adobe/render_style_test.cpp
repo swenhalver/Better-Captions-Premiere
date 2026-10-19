@@ -36,6 +36,9 @@ int main(){try{
  auto appearanceHalf=source;adobe::applyNativeStyle(appearanceHalf,128,{1,1,1,1},0.5,0.5,controls);
  check(appearanceHalf.style.current.fontSize==source.style.current.fontSize*1.5);
  check(appearanceHalf.style.current.padding==source.style.current.padding&&appearanceHalf.style.current.radius==source.style.current.radius/4);
+ auto axes=source;axes.style.current.bubblePaddingInline=10;axes.style.current.bubblePaddingBlock=3;
+ adobe::applyNativeStyle(axes,64,{1,1,1,1},.5,.25,controls);
+ check(axes.style.current.bubblePaddingInline==10&&axes.style.current.bubblePaddingBlock==1.5); // native Padding% then axis-specific downsampling
  controls.current.bubbleMode=3;auto off=source;adobe::applyNativeStyle(off,64,{1,1,1,1},1,1,controls);check(!off.style.current.bubble);
  bool rejected=false;controls.current.sizePercent=0;try{adobe::applyNativeStyle(off,64,{1,1,1,1},1,1,controls);}catch(const std::invalid_argument&){rejected=true;}check(rejected);
  std::cout<<"Native styles passed: neutral byte equality, independent state overrides, bubble mode/tint/opacity/extents, alpha preservation and downsampling.\n";return 0;

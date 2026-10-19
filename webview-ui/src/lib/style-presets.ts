@@ -24,7 +24,7 @@ export function presetName(value: string): string {
 export function validatePresetLook(value: unknown): PresetLook {
   exact(value, ['style', 'animation'], 'preset');
   exact(value.style, styleKeys, 'preset style', ['wordSpacing']);
-  for (const state of ['spokenWord', 'activeWord', 'upcomingWord']) exact(value.style[state], wordKeys, 'word style', ['fontWeightOffset', 'bubbleFillSpaces']);
+  for (const state of ['spokenWord', 'activeWord', 'upcomingWord']) exact(value.style[state], wordKeys, 'word style', ['fontWeightOffset', 'bubbleFillSpaces', 'bubblePaddingInline', 'bubblePaddingBlock', 'underline']);
   validateStylePatch(value.style);
   exact(value.animation, ['preset', 'fadeInDuration', 'fadeOutDuration', 'highlightColor'], 'preset animation');
   const a = value.animation;

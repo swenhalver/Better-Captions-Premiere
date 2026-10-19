@@ -468,3 +468,23 @@ test('native line spacing accepts the ribbon minimum and preserves legacy maximu
  }
  for(const lineHeight of [.599999,0,-1,10.001,NaN,Infinity,'0.6',undefined]){const edited=clone(session);edited.style.lineHeight=lineHeight;assert.throws(()=>prepareNativePanelUpdate(connected,edited));}
 });
+
+
+test('native inline/block bubble padding edits preserve the other axis and legacy uniform fallback',()=>{
+ const {session,binding:connected}=binding();assert.equal(session.style.activeWord.bubblePaddingInline,undefined);assert.equal(session.style.activeWord.bubblePaddingBlock,undefined);
+ for(const [key,native] of [['activeWord','current'],['spokenWord','spoken'],['upcomingWord','upcoming']])for(const axis of ['bubblePaddingInline','bubblePaddingBlock']){
+  const edited=clone(session);edited.style[key][axis]=axis==='bubblePaddingInline'?25:0;const next=prepareNativePanelUpdate(connected,edited),expected=clone(connected.document);expected.style[native][axis]=edited.style[key][axis];assert.deepEqual(next,expected);
+  const restored=rehydrateNativePanel(entry(next),sequence());assert.equal(restored.session.style[key][axis],edited.style[key][axis]);assert.equal(restored.session.style[key].padding,session.style[key].padding);
+  const off=clone(restored.session);delete off.style[key][axis];const reset=prepareNativePanelUpdate(restored.binding,off);assert.equal(reset.style[native][axis],undefined);assert.deepEqual(reset.style,connected.document.style);
+ }
+});
+
+
+test('native underline changes only the requested state and explicit false resets without affecting other typography',()=>{
+ const {session,binding:connected}=binding();
+ for(const [key,native] of [['activeWord','current'],['spokenWord','spoken'],['upcomingWord','upcoming']])for(const underline of [true,false]){
+  const edited=clone(session);edited.style[key].underline=underline;const next=prepareNativePanelUpdate(connected,edited),expected=clone(connected.document);expected.style[native].underline=underline;assert.deepEqual(next,expected);
+  const restored=rehydrateNativePanel(entry(next),sequence());assert.equal(restored.session.style[key].underline,underline);const reset=clone(restored.session);delete reset.style[key].underline;assert.deepEqual(prepareNativePanelUpdate(restored.binding,reset).style,connected.document.style);
+ }
+ assert.ok(NATIVE_PANEL_CAPABILITIES.supportedWordStyleFields.includes('underline'));
+});

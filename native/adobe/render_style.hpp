@@ -25,7 +25,7 @@ inline void applyNativeWordControls(WordStyle& style,const NativeWordControls& c
  if(controls.bubbleMode!=1)style.bubble=controls.bubbleMode==2;
  style.bubbleColor.r*=controls.bubbleTint.r;style.bubbleColor.g*=controls.bubbleTint.g;style.bubbleColor.b*=controls.bubbleTint.b;
  style.bubbleColor.a*=controls.bubbleOpacityPercent/100;
- style.padding*=controls.paddingPercent/100;style.radius*=controls.radiusPercent/100;
+ style.padding*=controls.paddingPercent/100;if(style.bubblePaddingInline>=0)style.bubblePaddingInline*=controls.paddingPercent/100;if(style.bubblePaddingBlock>=0)style.bubblePaddingBlock*=controls.paddingPercent/100;style.radius*=controls.radiusPercent/100;
 }
 // Native controls modulate the document instead of replacing its state styles.
 // 64 and RGB white are neutral. Called on a render-local document copy only.
@@ -39,7 +39,7 @@ inline void applyNativeStyle(Document& document,double globalSize,const Color& t
  for(auto* style:{&document.style.upcoming,&document.style.current,&document.style.spoken}) {
   style->fontSize*=globalSize/64.0*sy;
   style->color.r*=tint.r;style->color.g*=tint.g;style->color.b*=tint.b;
-  style->padding*=sy;style->radius*=sy;style->outlineWidth*=sy;
+  style->padding*=sy;if(style->bubblePaddingInline>=0)style->bubblePaddingInline*=sx;if(style->bubblePaddingBlock>=0)style->bubblePaddingBlock*=sy;style->radius*=sy;style->outlineWidth*=sy;
   style->shadowBlur*=sy;style->shadowX*=sx;style->shadowY*=sy;
  }
  document.style.wordSpacing*=sx;

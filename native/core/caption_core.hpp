@@ -5,7 +5,7 @@
 #include <vector>
 
 namespace better_captions {
-constexpr std::uint32_t kSchemaVersion = 5;
+constexpr std::uint32_t kSchemaVersion = 6;
 constexpr std::size_t kMaxWords = 100000;
 constexpr std::size_t kMaxDocumentBytes = 16 * 1024 * 1024;
 constexpr std::size_t kMaxGroupsPerPage = 100;
@@ -20,12 +20,15 @@ struct WordStyle {
     std::string fontFamily="Arial";
     // Zero / -1 preserve legacy named-face selection until explicitly styled.
     double fontWeight=0;
-    int italic=-1, fontWeightOffset=-1; // offset100 means next available heavier
+    int italic=-1, underline=-1, fontWeightOffset=-1; // offset100 means next available heavier
     double fontSize=64, sizeScale=1, opacity=1;
     Color color;
     bool bubble=false, bubbleFillSpaces=false;
     Color bubbleColor{0,0,0,1};
     double padding=8,radius=10,outlineWidth=0;
+    double bubblePaddingInline=-1,bubblePaddingBlock=-1; // -1 inherits legacy uniform padding
+    double inlinePadding()const{return bubblePaddingInline<0?padding:bubblePaddingInline;}
+    double blockPadding()const{return bubblePaddingBlock<0?padding:bubblePaddingBlock;}
     Color outlineColor{0,0,0,1};
     double shadowBlur=0,shadowX=0,shadowY=0;
     Color shadowColor{0,0,0,0.5};

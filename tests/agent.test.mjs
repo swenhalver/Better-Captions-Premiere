@@ -35,3 +35,14 @@ test('agent word background space flags are independent strict booleans',()=>{
  assert.deepEqual(validateStylePatch(patch),patch);
  for(const bubbleFillSpaces of [null,0,1,'true',{}])assert.throws(()=>validateStylePatch({activeWord:{bubbleFillSpaces}}));
 });
+
+
+test('agent exposes independent bounded bubble padding axes',()=>{
+ const patch={activeWord:{bubblePaddingInline:25},spokenWord:{bubblePaddingBlock:0},upcomingWord:{bubblePaddingInline:3,bubblePaddingBlock:12}};assert.deepEqual(validateStylePatch(patch),patch);
+ for(const axis of ['bubblePaddingInline','bubblePaddingBlock'])for(const value of [-1,101,NaN,Infinity,'2',null])assert.throws(()=>validateStylePatch({activeWord:{[axis]:value}}));
+});
+
+
+test('agent underline is independently selectable and strictly boolean',()=>{
+ const patch={activeWord:{underline:true},spokenWord:{underline:false},upcomingWord:{underline:true}};assert.deepEqual(validateStylePatch(patch),patch);for(const underline of [0,1,'true',null])assert.throws(()=>validateStylePatch({activeWord:{underline}}));
+});

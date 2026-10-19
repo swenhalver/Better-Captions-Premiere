@@ -99,9 +99,12 @@ export interface WordAppearance {
   bubble: boolean;
   /** Color the following interword gap, without extending past a line end. */
   bubbleFillSpaces?: boolean;
+  underline?: boolean;
   bubbleColor: string;
   bubbleOpacity: number;
   padding: number;
+  bubblePaddingInline?: number;
+  bubblePaddingBlock?: number;
   radius: number;
 }
 

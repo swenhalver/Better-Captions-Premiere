@@ -115,6 +115,9 @@ test('TS encoder bytes roundtrip through actual C++ decoder and encoder', async 
     const v5=encodeNativeDocument(spaces);assert.equal(new DataView(v5.buffer).getUint32(4,true),5);assert.equal(v5.length,v3.length+16);
     writeFileSync(input,v5);execFileSync(executable,['--roundtrip',input,output]);
     assert.deepEqual(new Uint8Array(readFileSync(output)),v5,'v5 bubble space flags are byte-exact across TS and C++');
+    Object.assign(spaces.style.current,{bubblePaddingInline:19,bubblePaddingBlock:3.5});spaces.style.upcoming.bubblePaddingBlock=0;spaces.style.current.underline=true;spaces.style.spoken.underline=false;
+    const v6=encodeNativeDocument(spaces);assert.equal(new DataView(v6.buffer).getUint32(4,true),6);assert.equal(v6.length,v5.length+60);
+    writeFileSync(input,v6);execFileSync(executable,['--roundtrip',input,output]);assert.deepEqual(new Uint8Array(readFileSync(output)),v6,'v6 independent padding is byte-exact across TS and C++');
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -357,4 +360,23 @@ test('bubble space flags retain legacy bytes, roundtrip all three states and rej
 test('native document line spacing uses the visible .6 minimum and retains legacy 10 maximum',()=>{
  for(const lineHeight of [.6,1.2,2,10]){const data=document();data.style.lineHeight=lineHeight;assert.equal(validateNativeDocument(data).style.lineHeight,lineHeight);}
  for(const lineHeight of [.599999,0,-.6,10.000001,NaN,Infinity,null,'0.6']){const data=document();data.style.lineHeight=lineHeight;assert.throws(()=>validateNativeDocument(data));}
+});
+
+
+test('axis padding v6 retains old bytes when absent, roundtrips explicit zero and validates both axes',async()=>{
+ const {encodeNativeDocument,encodeNativeTransportText,decodeNativeTransportTimeOrigin}=await import('../webview-ui/src/lib/native-effect/encode.ts');
+ const {decodeNativePanelDocument}=await import('../webview-ui/src/lib/native-effect/panel.ts');
+ for(const binaryVersion of [1,2,3,4,5]){const data=document();data.binaryVersion=binaryVersion;const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');assert.equal(encodeNativeTransportText(decoded),text);for(const state of ['upcoming','current','spoken']){assert.equal(decoded.style[state].bubblePaddingInline,undefined);assert.equal(decoded.style[state].bubblePaddingBlock,undefined);}}
+ const data=document();data.timeOriginSeconds=123.5;Object.assign(data.style.current,{bubblePaddingInline:0,bubblePaddingBlock:4096});Object.assign(data.style.upcoming,{bubblePaddingInline:12.5});data.style.spoken.bubblePaddingBlock=3;
+ const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');assert.equal(decoded.binaryVersion,6);assert.deepEqual(decoded.style,data.style);assert.equal(decodeNativeTransportTimeOrigin(text),123.5);assert.equal(encodeNativeTransportText(decoded),text);
+ for(const axis of ['bubblePaddingInline','bubblePaddingBlock'])for(const value of [-1,-.01,4096.01,NaN,Infinity,null,'10']){const bad=document();bad.style.current[axis]=value;assert.throws(()=>validateNativeDocument(bad));}
+ const bytes=Buffer.from(text.slice(7),'hex');for(const value of [-2,4097,Infinity,NaN]){const bad=Buffer.from(bytes);bad.writeDoubleLE(value,bad.length-60);const carrier='BCDOC1:'+bad.toString('hex');assert.throws(()=>decodeNativePanelDocument(carrier,'seq-1'));assert.throws(()=>decodeNativeTransportTimeOrigin(carrier));}
+});
+
+
+test('native underline is an independent optional boolean with byte-exact absent legacy state and strict tri-state footer',async()=>{
+ const {encodeNativeTransportText,decodeNativeTransportTimeOrigin}=await import('../webview-ui/src/lib/native-effect/encode.ts');const {decodeNativePanelDocument}=await import('../webview-ui/src/lib/native-effect/panel.ts');
+ for(const state of ['upcoming','current','spoken'])for(const underline of [true,false]){const data=document();data.timeOriginSeconds=42.25;data.style[state].underline=underline;const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');assert.equal(decoded.binaryVersion,6);assert.deepEqual(decoded.style,data.style);assert.equal(decodeNativeTransportTimeOrigin(text),42.25);assert.equal(encodeNativeTransportText(decoded),text);}
+ for(const value of [null,0,1,'true',{}]){const data=document();data.style.current.underline=value;assert.throws(()=>validateNativeDocument(data),/underline flag/);}
+ const data=document();data.style.current.underline=true;const bytes=Buffer.from(encodeNativeTransportText(data).slice(7),'hex');for(const offset of [bytes.length-12,bytes.length-8,bytes.length-4]){const bad=Buffer.from(bytes);bad.writeUInt32LE(3,offset);const text='BCDOC1:'+bad.toString('hex');assert.throws(()=>decodeNativePanelDocument(text,'seq-1'));assert.throws(()=>decodeNativeTransportTimeOrigin(text));}
 });

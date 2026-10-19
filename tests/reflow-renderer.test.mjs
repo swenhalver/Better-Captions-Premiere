@@ -49,3 +49,19 @@ test('canvas bubble joins reset at each physical line and keep independent state
  const wrapped=paint(60);assert.deepEqual(wrapped.map(({rect})=>rect.slice(5)),[[false,true],[true,false],[false,false]],'each wrapped line keeps its own rounded first/last end');
  style.activeWord.bubbleOpacity=0;const transparent=paint(300);assert.deepEqual(transparent.map(({rect})=>rect.slice(5)),[[false,false],[false,false],[false,false]],'invisible bubble cannot erase an outer rounded endpoint');
 });
+
+
+test('canvas independent bubble padding uses legacy fallback and changes only requested dimensions',()=>{
+ const cue={id:'axes',text:'AA',startTime:0,endTime:2,words:[{text:'AA',startTime:0,endTime:2,isActive:false}]};const style=structuredClone(DEFAULT_STYLE);Object.assign(style,{fontSize:20,backgroundEnabled:false,shadowEnabled:false,strokeEnabled:false,wordSpacing:100});Object.assign(style.activeWord,{fontSize:20,sizeScale:1,padding:8,bubble:true,bubbleFillSpaces:false,shadowEnabled:false,strokeEnabled:false});
+ const paint=()=>{const ctx=context(),renderer=new CaptionRenderer(ctx,720,1280),rects=[];renderer.bubbleRect=(...rect)=>rects.push(rect);renderer.renderFrame(cue,.5,style,{...DEFAULT_ANIMATION,preset:'karaoke',fadeInDuration:0,fadeOutDuration:0},{width:400,height:250});return rects[0];};
+ const legacy=paint();style.activeWord.bubblePaddingInline=20;style.activeWord.bubblePaddingBlock=3;const axes=paint();assert.equal(axes[2],legacy[2]+24);assert.equal(axes[3],legacy[3]-10);
+ style.activeWord.bubblePaddingBlock=30;const taller=paint();assert.equal(taller[2],axes[2]);assert.equal(taller[3],axes[3]+54);
+ delete style.activeWord.bubblePaddingInline;assert.equal(paint()[2],legacy[2]);
+});
+
+
+test('canvas draws selected underline with word color/opacity without moving glyphs',()=>{
+ const cue={id:'underline',text:'Hello',startTime:0,endTime:2,words:[{text:'Hello',startTime:0,endTime:2,isActive:false}]};const style=structuredClone(DEFAULT_STYLE);Object.assign(style.activeWord,{fontSize:30,sizeScale:1,bubble:false,color:'#336699',opacity:.4});const paint=()=>{const ctx=context(),rects=[];ctx.fillRect=(...rect)=>rects.push({rect,color:ctx.fillStyle,alpha:ctx.globalAlpha});new CaptionRenderer(ctx,720,1280).renderFrame(cue,.5,style,{...DEFAULT_ANIMATION,preset:'karaoke',fadeInDuration:0,fadeOutDuration:0},{width:400,height:200});return{ctx,rects};};
+ const before=paint();assert.equal(before.rects.length,0);style.activeWord.underline=true;const underlined=paint();assert.deepEqual(underlined.ctx.texts,before.ctx.texts);assert.equal(underlined.rects.length,1);assert.equal(underlined.rects[0].color,'#336699');assert.equal(underlined.rects[0].alpha,.4);assert.equal(underlined.rects[0].rect[0],underlined.ctx.texts[0].x);assert.equal(underlined.rects[0].rect[2],75);
+ style.activeWord.underline=false;assert.equal(paint().rects.length,0);
+});

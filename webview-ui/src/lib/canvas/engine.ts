@@ -65,13 +65,13 @@ export class CaptionRenderer {
       // bubble/effect padding uses the shared word gap instead of being added
       // twice to every word, which made unhighlighted words look far apart.
       for(const state of all){
-        const a=appearance(style,state),pad=(a.bubble?a.padding:0)+effectPadding(a);
+        const a=appearance(style,state),pad=(a.bubble?a.bubblePaddingInline:0)+effectPadding(a),verticalPad=(a.bubble?a.bubblePaddingBlock:0)+effectPadding(a);
         c.font=this.font(style,a);const transformed=transformCaptionText(text,a.textTransform,precedingText),metrics=c.measureText(transformed);
         const textWidth=this.measureText(transformed,a);
         glyphWidth=Math.max(glyphWidth,textWidth);outerWidth=Math.max(outerWidth,textWidth+2*pad);
         extents[state]=textWidth/2+pad;
         const halfHeight=Math.max(a.fontSize*.6,metrics.actualBoundingBoxAscent||0,metrics.actualBoundingBoxDescent||0);
-        rowHeight=Math.max(rowHeight,2*(halfHeight+pad));
+        rowHeight=Math.max(rowHeight,2*(halfHeight+verticalPad));
       }
       return {word,text,precedingText,width:naturalSpacing?glyphWidth:outerWidth,outerWidth,extents,continuation,gapBefore:0};
     };
@@ -164,17 +164,17 @@ export class CaptionRenderer {
             const nextText=transformCaptionText(next.text,nextAppearance.textTransform,next.precedingText);
             const ownFont=c.font;c.font=this.font(style,nextAppearance);
             const nextWidth=this.measureText(nextText,nextAppearance);c.font=ownFont;
-            const nextLeft=x+wm.width+next.gapBefore+(next.width-nextWidth)/2-(nextAppearance.bubble?nextAppearance.padding:0);
-            fillSpace=Math.max(0,nextLeft-(tx+actualWidth+a.padding));
+            const nextLeft=x+wm.width+next.gapBefore+(next.width-nextWidth)/2-(nextAppearance.bubble?nextAppearance.bubblePaddingInline:0);
+            fillSpace=Math.max(0,nextLeft-(tx+actualWidth+a.bubblePaddingInline));
             const nextVisible=!['typewriter','pop','bounce'].includes(animation.preset)||time>=next.word.startTime;
             joinRight=a.opacity>0&&a.bubbleOpacity>0&&nextVisible&&nextAppearance.bubble&&nextAppearance.opacity>0&&nextAppearance.bubbleOpacity>0;
           }
           previousBubbleJoin=joinRight;
-          c.fillStyle=rgba(a.bubbleColor,a.bubbleOpacity);this.bubbleRect(tx-a.padding,y-a.fontSize*.6-a.padding,actualWidth+2*a.padding+fillSpace,a.fontSize*1.2+2*a.padding,a.radius,joinLeft,joinRight);c.fill();
+          c.fillStyle=rgba(a.bubbleColor,a.bubbleOpacity);this.bubbleRect(tx-a.bubblePaddingInline,y-a.fontSize*.6-a.bubblePaddingBlock,actualWidth+2*a.bubblePaddingInline+fillSpace,a.fontSize*1.2+2*a.bubblePaddingBlock,a.radius,joinLeft,joinRight);c.fill();
         }
         if(a.shadowEnabled){c.shadowColor=rgba(a.shadowColor,a.shadowOpacity);c.shadowBlur=a.shadowBlur;c.shadowOffsetX=a.shadowOffsetX;c.shadowOffsetY=a.shadowOffsetY;}
         if(a.strokeEnabled&&a.strokeWidth>0){c.strokeStyle=rgba(a.strokeColor,a.strokeOpacity);c.lineWidth=a.strokeWidth*2;c.lineJoin='round';this.paintText(visibleText,tx,y,a,true);c.shadowBlur=0;}
-        c.fillStyle=a.color;this.paintText(visibleText,tx,y,a);c.restore();x+=wm.width;
+        c.fillStyle=a.color;this.paintText(visibleText,tx,y,a);if(a.underline)c.fillRect(tx,y+a.fontSize*.4,actualWidth,Math.max(1,a.fontSize/18));c.restore();x+=wm.width;
       }
     });c.restore();return layout;
   }

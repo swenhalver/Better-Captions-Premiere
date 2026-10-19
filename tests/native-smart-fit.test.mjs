@@ -101,3 +101,12 @@ test('displayed Smart capacity tracks native overrides while retaining manual li
  assert.equal(nativeSmartFitCharacterCapacity(binding,session,null),null);
  binding.clip.smartLineFit=false;assert.equal(nativeSmartFitCharacterCapacity(binding,session,measure),null);
 });
+
+
+test('Smart fit counts inline bubble padding while block padding leaves width capacity unchanged',()=>{
+ const states=appearances();for(const state of states){state.bubble=true;state.bubblePaddingInline=4;state.bubblePaddingBlock=4;}
+ const input=[caption('AA BB CC DD')],options={width:100,wordSpacing:5,appearances:states},measure=()=>20;
+ const before=smartFitCharacterCapacity(input,options,measure),groups=smartFitCaptionPhrases(input,options,measure);
+ for(const state of states)state.bubblePaddingBlock=100;assert.equal(smartFitCharacterCapacity(input,options,measure),before);assert.deepEqual(smartFitCaptionPhrases(input,options,measure),groups);
+ for(const state of states)state.bubblePaddingInline=25;assert.ok(smartFitCharacterCapacity(input,options,measure)<before);assert.ok(smartFitCaptionPhrases(input,options,measure)[0].renderSegments.length>groups[0].renderSegments.length);
+});

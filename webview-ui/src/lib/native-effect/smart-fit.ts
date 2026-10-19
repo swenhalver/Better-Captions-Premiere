@@ -35,7 +35,7 @@ export function applyNativeFitState(appearance: ResolvedAppearance, globalFontSc
   if (typeof override !== 'object' || override === null || Array.isArray(override) || Object.keys(override).some(key => !['sizeScale','bubbleMode','paddingScale'].includes(key)) ||
     !Number.isFinite(override.sizeScale) || override.sizeScale < .01 || override.sizeScale > 4 || !Number.isInteger(override.bubbleMode) || override.bubbleMode < 1 || override.bubbleMode > 3 ||
     !Number.isFinite(override.paddingScale) || override.paddingScale < 0 || override.paddingScale > 4 || !Number.isFinite(globalFontScale) || globalFontScale <= 0 || globalFontScale > 16) throw new Error('Invalid native smart line fit state overrides.');
-  return { ...appearance, fontSize: appearance.fontSize * override.sizeScale * globalFontScale, padding: appearance.padding * override.paddingScale,
+  return { ...appearance, fontSize: appearance.fontSize * override.sizeScale * globalFontScale, padding: appearance.padding * override.paddingScale, bubblePaddingInline: (appearance.bubblePaddingInline??appearance.padding)*override.paddingScale, bubblePaddingBlock: (appearance.bubblePaddingBlock??appearance.padding)*override.paddingScale,
     bubble: override.bubbleMode === 1 ? appearance.bubble : override.bubbleMode === 2 };
 }
 
@@ -67,7 +67,8 @@ function smartFitMetrics(options: SmartFitOptions, measure: SmartFitMeasure) {
       if (!Number.isFinite(appearance.fontSize) || appearance.fontSize <= 0 || !Number.isFinite(appearance.padding) || appearance.padding < 0) throw new Error('Invalid smart line fit typography.');
       const measured = measure(smartFitDisplayText(text, appearance.textTransform), appearance);
       if (!Number.isFinite(measured) || measured < 0 || measured > 1e9) throw new Error('Native smart line fit measurement failed.');
-      return measured + (appearance.bubble ? 2 * appearance.padding : 0);
+      const inlinePad=appearance.bubblePaddingInline??appearance.padding;if(!Number.isFinite(inlinePad)||inlinePad<0)throw new Error('Invalid smart line fit padding.');
+      return measured + (appearance.bubble ? 2 * inlinePad : 0);
     }));
     cache.set(text, value); return value;
   };

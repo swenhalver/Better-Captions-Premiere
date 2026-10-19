@@ -122,3 +122,11 @@ test('presets save independent bubble space choices while loading older looks wi
  const legacy=structuredClone(saved);for(const key of ['activeWord','spokenWord','upcomingWord'])delete legacy.style[key].bubbleFillSpaces;
  assert.equal(resolveAppearance(applyPresetLook(source,legacy).style,'activeWord').bubbleFillSpaces,false);
 });
+
+
+test('presets retain independent padding and underline while older looks inherit uniform padding',()=>{
+ const source=structuredClone(DEFAULT_STYLE);Object.assign(source.activeWord,{padding:12,bubblePaddingInline:25,bubblePaddingBlock:3,underline:true});source.spokenWord.underline=false;
+ const saved=capturePresetLook(source,structuredClone(DEFAULT_ANIMATION)),restored=applyPresetLook(structuredClone(DEFAULT_STYLE),saved);assert.equal(restored.style.activeWord.bubblePaddingInline,25);assert.equal(restored.style.activeWord.bubblePaddingBlock,3);assert.equal(restored.style.activeWord.underline,true);assert.equal(restored.style.spokenWord.underline,false);
+ const legacy=structuredClone(saved);for(const key of ['activeWord','spokenWord','upcomingWord']){delete legacy.style[key].bubblePaddingInline;delete legacy.style[key].bubblePaddingBlock;delete legacy.style[key].underline;}
+ const old=applyPresetLook(source,legacy).style;assert.equal(resolveAppearance(old,'activeWord').bubblePaddingInline,12);assert.equal(resolveAppearance(old,'activeWord').bubblePaddingBlock,12);assert.equal(resolveAppearance(old,'activeWord').underline,false);
+});

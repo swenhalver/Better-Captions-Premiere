@@ -9,7 +9,7 @@ export const NATIVE_PARAMETERS = ['positionX', 'positionY', 'width', 'height'] a
 export type NativeParameter = typeof NATIVE_PARAMETERS[number];
 export interface NativeWord { text: string; start: number; end: number; endOfSentence: boolean; }
 export interface NativeCaption { id: string; start: number; end: number; manualSplit: boolean; words: NativeWord[]; }
-export interface NativeDocument { version: 1; animationAuthority: 'premiere-effect'; sequenceId: string; captions: NativeCaption[]; style: NativeStyle; timeOriginSeconds: number; binaryVersion?: 1 | 2 | 3 | 4 | 5; }
+export interface NativeDocument { version: 1; animationAuthority: 'premiere-effect'; sequenceId: string; captions: NativeCaption[]; style: NativeStyle; timeOriginSeconds: number; binaryVersion?: 1 | 2 | 3 | 4 | 5 | 6; }
 export interface NativeHostEvidence {
   host: 'premiere'; matchName: string; loaded: boolean; renderVerified: boolean;
   parameterReadWriteVerified: boolean; serializationVerified: boolean;
@@ -60,8 +60,8 @@ export function validateNativeDocument(input: unknown): NativeDocument {
     });
     return { id: captionId, start, end, manualSplit: caption.manualSplit, words: result };
   });
-  if (doc.binaryVersion !== undefined && ![1,2,3,4,5].includes(doc.binaryVersion as number)) throw new Error('Unsupported native binary version.');
-  return { version: 1, animationAuthority: 'premiere-effect', sequenceId: id(doc.sequenceId), captions, style: validateNativeStyle(doc.style), timeOriginSeconds: doc.timeOriginSeconds === undefined ? 0 : numeric(doc.timeOriginSeconds, -864000, 864000), ...(doc.binaryVersion === undefined ? {} : { binaryVersion: doc.binaryVersion as 1|2|3|4|5 }) };
+  if (doc.binaryVersion !== undefined && ![1,2,3,4,5,6].includes(doc.binaryVersion as number)) throw new Error('Unsupported native binary version.');
+  return { version: 1, animationAuthority: 'premiere-effect', sequenceId: id(doc.sequenceId), captions, style: validateNativeStyle(doc.style), timeOriginSeconds: doc.timeOriginSeconds === undefined ? 0 : numeric(doc.timeOriginSeconds, -864000, 864000), ...(doc.binaryVersion === undefined ? {} : { binaryVersion: doc.binaryVersion as 1|2|3|4|5|6 }) };
 }
 export function requireNativeHost(evidence: NativeHostEvidence): void {
   if (evidence.host !== 'premiere' || !normalizeNativeMatchName(evidence.matchName) || evidence.loaded !== true || evidence.renderVerified !== true || evidence.parameterReadWriteVerified !== true || evidence.serializationVerified !== true) throw new Error('Native effect is unavailable or unverified. No automatic movie fallback.');
@@ -111,9 +111,9 @@ export function planNativeMigration(input: unknown, evidence: NativeHostEvidence
 
 export interface NativeColor { r: number; g: number; b: number; a: number; }
 export interface NativeWordStyle {
-  fontWeight?: number; italic?: boolean; fontWeightOffset?: 0 | 100 | null;
+  fontWeight?: number; italic?: boolean; underline?: boolean; fontWeightOffset?: 0 | 100 | null;
   fontFamily: string; fontSize: number; sizeScale: number; opacity: number; color: NativeColor;
-  bubble: boolean; bubbleFillSpaces?: boolean; bubbleColor: NativeColor; padding: number; radius: number; outlineWidth: number;
+  bubble: boolean; bubbleFillSpaces?: boolean; bubblePaddingInline?: number; bubblePaddingBlock?: number; bubbleColor: NativeColor; padding: number; radius: number; outlineWidth: number;
   outlineColor: NativeColor; shadowBlur: number; shadowX: number; shadowY: number; shadowColor: NativeColor;
 }
 export interface NativeStyle { upcoming: NativeWordStyle; current: NativeWordStyle; spoken: NativeWordStyle; wordSpacing: number; lineHeight: number; titleCase: boolean; letterCase?: 'uppercase' | 'lowercase'; baseFontWeight?: number; }
@@ -122,14 +122,15 @@ function nativeColor(input: unknown): NativeColor {
   return { r: numeric(c.r, 0, 1), g: numeric(c.g, 0, 1), b: numeric(c.b, 0, 1), a: numeric(c.a, 0, 1) };
 }
 function wordStyle(input: unknown): NativeWordStyle {
-  const keys = ['fontFamily', 'fontSize', 'sizeScale', 'opacity', 'color', 'bubble', 'bubbleColor', 'padding', 'radius', 'outlineWidth', 'outlineColor', 'shadowBlur', 'shadowX', 'shadowY', 'shadowColor', 'fontWeight', 'italic', 'fontWeightOffset', 'bubbleFillSpaces'];
+  const keys = ['fontFamily', 'fontSize', 'sizeScale', 'opacity', 'color', 'bubble', 'bubbleColor', 'padding', 'radius', 'outlineWidth', 'outlineColor', 'shadowBlur', 'shadowX', 'shadowY', 'shadowColor', 'fontWeight', 'italic', 'fontWeightOffset', 'bubbleFillSpaces', 'bubblePaddingInline', 'bubblePaddingBlock', 'underline'];
   const s = record(input, keys);
   if (typeof s.fontFamily !== 'string' || !s.fontFamily.trim() || new TextDecoder().decode(new TextEncoder().encode(s.fontFamily)) !== s.fontFamily || new TextEncoder().encode(s.fontFamily).length > 256 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(s.fontFamily)) throw new Error('Invalid native font family.');
   if (typeof s.bubble !== 'boolean') throw new Error('Invalid native bubble flag.');
   if (s.bubbleFillSpaces !== undefined && typeof s.bubbleFillSpaces !== 'boolean') throw new Error('Invalid native bubble spaces flag.');
+  if (s.underline !== undefined && typeof s.underline !== 'boolean') throw new Error('Invalid native underline flag.');
   if (s.italic !== undefined && typeof s.italic !== 'boolean') throw new Error('Invalid native italic flag.');
   if (s.fontWeightOffset !== undefined && s.fontWeightOffset !== null && s.fontWeightOffset !== 0 && s.fontWeightOffset !== 100) throw new Error('Invalid native relative weight mode.');
-  return { fontFamily: s.fontFamily, fontSize: numeric(s.fontSize, 0.01, 4096), sizeScale: numeric(s.sizeScale, .01, 16), opacity: numeric(s.opacity, 0, 1), color: nativeColor(s.color), bubble: s.bubble, bubbleColor: nativeColor(s.bubbleColor), padding: numeric(s.padding, 0, 4096), radius: numeric(s.radius, 0, 4096), outlineWidth: numeric(s.outlineWidth, 0, 4096), outlineColor: nativeColor(s.outlineColor), shadowBlur: numeric(s.shadowBlur, 0, 4096), shadowX: numeric(s.shadowX, -4096, 4096), shadowY: numeric(s.shadowY, -4096, 4096), shadowColor: nativeColor(s.shadowColor), ...(s.bubbleFillSpaces === undefined ? {} : {bubbleFillSpaces:s.bubbleFillSpaces as boolean}), ...(s.fontWeight === undefined ? {} : {fontWeight:numeric(s.fontWeight,1,1000)}), ...(s.italic === undefined ? {} : {italic:s.italic as boolean}), ...(s.fontWeightOffset === undefined ? {} : {fontWeightOffset:s.fontWeightOffset as 0|100|null}) };
+  return { fontFamily: s.fontFamily, fontSize: numeric(s.fontSize, 0.01, 4096), sizeScale: numeric(s.sizeScale, .01, 16), opacity: numeric(s.opacity, 0, 1), color: nativeColor(s.color), bubble: s.bubble, bubbleColor: nativeColor(s.bubbleColor), padding: numeric(s.padding, 0, 4096), radius: numeric(s.radius, 0, 4096), outlineWidth: numeric(s.outlineWidth, 0, 4096), outlineColor: nativeColor(s.outlineColor), shadowBlur: numeric(s.shadowBlur, 0, 4096), shadowX: numeric(s.shadowX, -4096, 4096), shadowY: numeric(s.shadowY, -4096, 4096), shadowColor: nativeColor(s.shadowColor), ...(s.underline === undefined ? {} : {underline:s.underline as boolean}), ...(s.bubblePaddingInline === undefined ? {} : {bubblePaddingInline:numeric(s.bubblePaddingInline,0,4096)}), ...(s.bubblePaddingBlock === undefined ? {} : {bubblePaddingBlock:numeric(s.bubblePaddingBlock,0,4096)}), ...(s.bubbleFillSpaces === undefined ? {} : {bubbleFillSpaces:s.bubbleFillSpaces as boolean}), ...(s.fontWeight === undefined ? {} : {fontWeight:numeric(s.fontWeight,1,1000)}), ...(s.italic === undefined ? {} : {italic:s.italic as boolean}), ...(s.fontWeightOffset === undefined ? {} : {fontWeightOffset:s.fontWeightOffset as 0|100|null}) };
 }
 export function validateNativeStyle(input: unknown): NativeStyle {
   const s = record(input, ['upcoming', 'current', 'spoken', 'wordSpacing', 'lineHeight', 'titleCase', 'baseFontWeight', 'letterCase']);

@@ -132,6 +132,21 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  }
  for(double spacing:{.599999,0.0,-1.0,10.00001,std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity()}){auto invalidSpacing=joined;invalidSpacing.style.lineHeight=spacing;rejects([&]{validate(invalidSpacing);});}
 
+ // Independent padding changes only its own geometry; legacy uniform padding
+ // remains the fallback and old documents keep their byte-exact version.
+ Document axes;axes.containers.push_back({"axes",false,{{"AA",0,1,false},{"BB",1,2,false}}});
+ for(auto* style:{&axes.style.current,&axes.style.upcoming,&axes.style.spoken}){style->fontSize=20;style->bubble=true;style->padding=8;style->radius=0;}
+ const auto legacyAxes=encode(axes);assert(decode(legacyAxes).schemaVersion==3);assert(encode(decode(legacyAxes))==legacyAxes);
+ axes.style.current.bubblePaddingInline=20;axes.style.current.bubblePaddingBlock=3;
+ const auto axisFrame=layoutFrame(axes,.5,{0,0,200,300},measure);assert(axisFrame.words[0].width==60&&axisFrame.words[0].height==26&&axisFrame.words[1].width==36&&axisFrame.words[1].height==36);
+ const auto axisBytes=encode(axes);assert(decode(axisBytes).schemaVersion==6&&encode(decode(axisBytes))==axisBytes);assert(decode(axisBytes).style.current.bubblePaddingInline==20&&decode(axisBytes).style.current.bubblePaddingBlock==3&&decode(axisBytes).style.upcoming.bubblePaddingInline==-1);
+ auto moreBlock=axes;moreBlock.style.current.bubblePaddingBlock=30;const auto blockFrame=layoutFrame(moreBlock,.5,{0,0,200,300},measure);assert(blockFrame.words[0].width==axisFrame.words[0].width&&blockFrame.words[0].height==80);
+ const auto axisGroups=regroupToWidth(axes,200,measure);auto hugeBlock=axes;hugeBlock.style.current.bubblePaddingBlock=100;assert(regroupToWidth(hugeBlock,200,measure).size()==axisGroups.size());auto hugeInline=axes;hugeInline.style.current.bubblePaddingInline=100;assert(regroupToWidth(hugeInline,200,measure).size()>axisGroups.size());
+ for(double invalidAxis:{-2.0,-.5,4096.1,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}){auto invalidAxes=axes;invalidAxes.style.current.bubblePaddingInline=invalidAxis;rejects([&]{validate(invalidAxes);});invalidAxes=axes;invalidAxes.style.current.bubblePaddingBlock=invalidAxis;rejects([&]{validate(invalidAxes);});}
+ auto underlined=axes;underlined.style.current.underline=1;underlined.style.spoken.underline=0;
+ const auto underlineBytes=encode(underlined);assert(decode(underlineBytes).schemaVersion==6&&encode(decode(underlineBytes))==underlineBytes);assert(decode(underlineBytes).style.current.underline==1&&decode(underlineBytes).style.spoken.underline==0&&decode(underlineBytes).style.upcoming.underline==-1);
+ const auto underFrame=layoutFrame(underlined,.5,{0,0,200,300},measure);assert(underFrame.words[0].width==axisFrame.words[0].width&&underFrame.words[0].height==axisFrame.words[0].height&&underFrame.words[0].baseline==axisFrame.words[0].baseline);
+ auto invalidUnderline=underlineBytes;invalidUnderline.back()=3;rejects([&]{decode(invalidUnderline);});underlined.style.current.underline=2;rejects([&]{validate(underlined);});
  auto v5Bad=encode(bubbles);auto v5Fill=bubbles;v5Fill.style.current.bubbleFillSpaces=true;v5Bad=encode(v5Fill);v5Bad.back()=2;rejects([&]{decode(v5Bad);});
  auto again=layoutFrame(bubbles,0.1,{0,0,1200,300},measure);
  assert(again.words.size()==bubbleFrame.words.size());for(std::size_t i=0;i<again.words.size();++i)assert(again.words[i].x==bubbleFrame.words[i].x&&again.words[i].baseline==bubbleFrame.words[i].baseline&&again.words[i].text==bubbleFrame.words[i].text);
