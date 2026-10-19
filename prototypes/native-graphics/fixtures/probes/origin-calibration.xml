@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Public FCP7 Text origin probe. Labels describe requested XML values; Premiere mapping is unverified. -->
+<xmeml version="5">
+  <sequence id="bc-probe-origin-1080p30-v1">
+    <name>BC probe 1 - Text origin center right up</name><duration>180</duration>
+    <rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+    <timecode><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate><string>00:00:00:00</string><frame>0</frame><displayformat>NDF</displayformat></timecode>
+    <media><video>
+      <format><samplecharacteristics><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate><width>1920</width><height>1080</height><anamorphic>FALSE</anamorphic><pixelaspectratio>square</pixelaspectratio><fielddominance>none</fielddominance></samplecharacteristics></format>
+      <track><enabled>TRUE</enabled><locked>FALSE</locked></track>
+      <track>
+        <generatoritem id="bc-probe-origin-center-v1">
+          <name>P1 CENTER origin h0 v0 size32</name><duration>60</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+          <in>0</in><out>60</out><start>0</start><end>60</end><enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+          <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+            <parameter><parameterid>str</parameterid><name>Text</name><value>ORIGIN CENTER</value></parameter>
+            <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+            <parameter><parameterid>fontsize</parameterid><name>Size</name><value>32</value></parameter>
+            <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>1</value></parameter>
+            <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+            <parameter><parameterid>fontcolor</parameterid><name>Font Color</name><value><alpha>255</alpha><red>255</red><green>255</green><blue>255</blue></value></parameter>
+            <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0</horiz><vert>0</vert></value></parameter>
+          </effect>
+          <sourcetrack><mediatype>video</mediatype></sourcetrack>
+        </generatoritem>
+        <generatoritem id="bc-probe-origin-right-v1">
+          <name>P1 RIGHT origin h0.25 v0 size32</name><duration>60</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+          <in>0</in><out>60</out><start>60</start><end>120</end><enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+          <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+            <parameter><parameterid>str</parameterid><name>Text</name><value>ORIGIN RIGHT</value></parameter>
+            <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+            <parameter><parameterid>fontsize</parameterid><name>Size</name><value>32</value></parameter>
+            <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>1</value></parameter>
+            <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+            <parameter><parameterid>fontcolor</parameterid><name>Font Color</name><value><alpha>255</alpha><red>255</red><green>255</green><blue>255</blue></value></parameter>
+            <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0.25</horiz><vert>0</vert></value></parameter>
+          </effect>
+          <sourcetrack><mediatype>video</mediatype></sourcetrack>
+        </generatoritem>
+        <generatoritem id="bc-probe-origin-up-v1">
+          <name>P1 UP origin h0 v-0.25 size32</name><duration>60</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+          <in>0</in><out>60</out><start>120</start><end>180</end><enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+          <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+            <parameter><parameterid>str</parameterid><name>Text</name><value>ORIGIN UP</value></parameter>
+            <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+            <parameter><parameterid>fontsize</parameterid><name>Size</name><value>32</value></parameter>
+            <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>1</value></parameter>
+            <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+            <parameter><parameterid>fontcolor</parameterid><name>Font Color</name><value><alpha>255</alpha><red>255</red><green>255</green><blue>255</blue></value></parameter>
+            <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0</horiz><vert>-0.25</vert></value></parameter>
+          </effect>
+          <sourcetrack><mediatype>video</mediatype></sourcetrack>
+        </generatoritem>
+        <enabled>TRUE</enabled><locked>FALSE</locked>
+      </track>
+    </video></media>
+  </sequence>
+</xmeml>

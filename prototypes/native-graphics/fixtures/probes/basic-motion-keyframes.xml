@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Public Basic Motion effectid basic, scale/center parameters, attached as a filter to a Text generator. -->
+<xmeml version="5">
+  <sequence id="bc-probe-basic-motion-1080p30-v1">
+    <name>BC probe 3 - Basic Motion keys on native Text</name><duration>90</duration>
+    <rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+    <timecode><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate><string>00:00:00:00</string><frame>0</frame><displayformat>NDF</displayformat></timecode>
+    <media><video>
+      <format><samplecharacteristics><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate><width>1920</width><height>1080</height><anamorphic>FALSE</anamorphic><pixelaspectratio>square</pixelaspectratio><fielddominance>none</fielddominance></samplecharacteristics></format>
+      <track><enabled>TRUE</enabled><locked>FALSE</locked></track>
+      <track>
+        <generatoritem id="bc-probe-basic-motion-keyed-v1">
+          <name>P3 KEYS f0 scale100 center0,0 to f60 scale85 center0.10,-0.05</name><duration>90</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+          <in>0</in><out>90</out><start>0</start><end>90</end><enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+          <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+            <parameter><parameterid>str</parameterid><name>Text</name><value>BASIC MOTION KEYS</value></parameter>
+            <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+            <parameter><parameterid>fontsize</parameterid><name>Size</name><value>32</value></parameter>
+            <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>1</value></parameter>
+            <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+            <parameter><parameterid>fontcolor</parameterid><name>Font Color</name><value><alpha>255</alpha><red>255</red><green>255</green><blue>255</blue></value></parameter>
+            <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0</horiz><vert>0</vert></value></parameter>
+          </effect>
+          <sourcetrack><mediatype>video</mediatype></sourcetrack>
+          <filter><enabled>TRUE</enabled>
+            <effect><name>Basic Motion</name><effectid>basic</effectid><effectcategory>motion</effectcategory><effecttype>motion</effecttype><mediatype>video</mediatype>
+              <parameter><parameterid>scale</parameterid><name>Scale</name><valuemin>0</valuemin><valuemax>1000</valuemax>
+                <interpolation><name>FCPCurve</name></interpolation>
+                <keyframe><when>0</when><value>100</value><inscale>0</inscale><outscale>0</outscale></keyframe>
+                <keyframe><when>60</when><value>85</value><inscale>0</inscale><outscale>0</outscale></keyframe>
+              </parameter>
+              <parameter><parameterid>center</parameterid><name>Center</name>
+                <interpolation><name>FCPCurve</name></interpolation>
+                <keyframe><when>0</when><value><horiz>0</horiz><vert>0</vert></value><inscale>0</inscale><outscale>0</outscale></keyframe>
+                <keyframe><when>60</when><value><horiz>0.10</horiz><vert>-0.05</vert></value><inscale>0</inscale><outscale>0</outscale></keyframe>
+              </parameter>
+            </effect>
+          </filter>
+        </generatoritem>
+        <enabled>TRUE</enabled><locked>FALSE</locked>
+      </track>
+    </video></media>
+  </sequence>
+</xmeml>

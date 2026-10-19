@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Premiere importer calibration only. Apple documents styles 1-4; style 0 is a deliberate host probe. No valuelist, matching the current writer. -->
+<xmeml version="5">
+  <sequence id="bc-probe-fontstyle-0123-v1-8cf27e4d">
+    <name>BC probe 4 - Arial styles 0 1 2 3 - 8cf27e4d</name><duration>240</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+    <timecode><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate><string>00:00:00:00</string><frame>0</frame><displayformat>NDF</displayformat></timecode>
+    <media><video>
+      <format><samplecharacteristics><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate><width>1920</width><height>1080</height><anamorphic>FALSE</anamorphic><pixelaspectratio>square</pixelaspectratio><fielddominance>none</fielddominance></samplecharacteristics></format>
+      <track><enabled>TRUE</enabled><locked>FALSE</locked></track>
+      <track>
+        <generatoritem id="bc-probe-fontstyle-0123-v1-8cf27e4d-style-0">
+          <name>P4 FONTSTYLE 0 - Arial - 8cf27e4d</name><duration>60</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+          <in>0</in><out>60</out><start>0</start><end>60</end><enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+          <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+            <parameter><parameterid>str</parameterid><name>Text</name><value>STYLE 0 - Hamburgefonts 012345</value></parameter>
+            <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+            <parameter><parameterid>fontsize</parameterid><name>Size</name><value>32</value></parameter>
+            <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>0</value></parameter>
+            <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+            <parameter><parameterid>fontcolor</parameterid><name>Font Color</name><value><alpha>255</alpha><red>255</red><green>255</green><blue>255</blue></value></parameter>
+            <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0</horiz><vert>0</vert></value></parameter>
+          </effect>
+          <sourcetrack><mediatype>video</mediatype></sourcetrack>
+        </generatoritem>
+        <generatoritem id="bc-probe-fontstyle-0123-v1-8cf27e4d-style-1">
+          <name>P4 FONTSTYLE 1 - Arial - 8cf27e4d</name><duration>60</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+          <in>0</in><out>60</out><start>60</start><end>120</end><enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+          <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+            <parameter><parameterid>str</parameterid><name>Text</name><value>STYLE 1 - Hamburgefonts 012345</value></parameter>
+            <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+            <parameter><parameterid>fontsize</parameterid><name>Size</name><value>32</value></parameter>
+            <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>1</value></parameter>
+            <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+            <parameter><parameterid>fontcolor</parameterid><name>Font Color</name><value><alpha>255</alpha><red>255</red><green>255</green><blue>255</blue></value></parameter>
+            <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0</horiz><vert>0</vert></value></parameter>
+          </effect>
+          <sourcetrack><mediatype>video</mediatype></sourcetrack>
+        </generatoritem>
+        <generatoritem id="bc-probe-fontstyle-0123-v1-8cf27e4d-style-2">
+          <name>P4 FONTSTYLE 2 - Arial - 8cf27e4d</name><duration>60</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+          <in>0</in><out>60</out><start>120</start><end>180</end><enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+          <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+            <parameter><parameterid>str</parameterid><name>Text</name><value>STYLE 2 - Hamburgefonts 012345</value></parameter>
+            <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+            <parameter><parameterid>fontsize</parameterid><name>Size</name><value>32</value></parameter>
+            <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>2</value></parameter>
+            <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+            <parameter><parameterid>fontcolor</parameterid><name>Font Color</name><value><alpha>255</alpha><red>255</red><green>255</green><blue>255</blue></value></parameter>
+            <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0</horiz><vert>0</vert></value></parameter>
+          </effect>
+          <sourcetrack><mediatype>video</mediatype></sourcetrack>
+        </generatoritem>
+        <generatoritem id="bc-probe-fontstyle-0123-v1-8cf27e4d-style-3">
+          <name>P4 FONTSTYLE 3 - Arial - 8cf27e4d</name><duration>60</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+          <in>0</in><out>60</out><start>180</start><end>240</end><enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+          <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+            <parameter><parameterid>str</parameterid><name>Text</name><value>STYLE 3 - Hamburgefonts 012345</value></parameter>
+            <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+            <parameter><parameterid>fontsize</parameterid><name>Size</name><value>32</value></parameter>
+            <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>3</value></parameter>
+            <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+            <parameter><parameterid>fontcolor</parameterid><name>Font Color</name><value><alpha>255</alpha><red>255</red><green>255</green><blue>255</blue></value></parameter>
+            <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0</horiz><vert>0</vert></value></parameter>
+          </effect>
+          <sourcetrack><mediatype>video</mediatype></sourcetrack>
+        </generatoritem>
+        <enabled>TRUE</enabled><locked>FALSE</locked>
+      </track>
+    </video></media>
+  </sequence>
+</xmeml>

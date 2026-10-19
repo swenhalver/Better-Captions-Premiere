@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Public Text parameters with Apple's generic parameter/keyframe encoding; Premiere support is the experiment. -->
+<xmeml version="5">
+  <sequence id="bc-probe-text-keys-1080p30-v1">
+    <name>BC probe 2 - Text static versus size color keys</name><duration>180</duration>
+    <rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+    <timecode><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate><string>00:00:00:00</string><frame>0</frame><displayformat>NDF</displayformat></timecode>
+    <media><video>
+      <format><samplecharacteristics><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate><width>1920</width><height>1080</height><anamorphic>FALSE</anamorphic><pixelaspectratio>square</pixelaspectratio><fielddominance>none</fielddominance></samplecharacteristics></format>
+      <track><enabled>TRUE</enabled><locked>FALSE</locked></track>
+      <track>
+        <generatoritem id="bc-probe-text-static-v1">
+          <name>P2 BASELINE static size32 RGB255-255-255</name><duration>90</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+          <in>0</in><out>90</out><start>0</start><end>90</end><enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+          <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+            <parameter><parameterid>str</parameterid><name>Text</name><value>TEXT STATIC BASELINE</value></parameter>
+            <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+            <parameter><parameterid>fontsize</parameterid><name>Size</name><value>32</value></parameter>
+            <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>1</value></parameter>
+            <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+            <parameter><parameterid>fontcolor</parameterid><name>Font Color</name><value><alpha>255</alpha><red>255</red><green>255</green><blue>255</blue></value></parameter>
+            <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0</horiz><vert>0</vert></value></parameter>
+          </effect>
+          <sourcetrack><mediatype>video</mediatype></sourcetrack>
+        </generatoritem>
+        <generatoritem id="bc-probe-text-keyed-v1">
+          <name>P2 KEYS local f0 size32 white to f60 size48 RGB255-64-64</name><duration>90</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+          <in>0</in><out>90</out><start>90</start><end>180</end><enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+          <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+            <parameter><parameterid>str</parameterid><name>Text</name><value>TEXT SIZE AND COLOR KEYS</value></parameter>
+            <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+            <parameter><parameterid>fontsize</parameterid><name>Size</name><valuemin>0</valuemin><valuemax>1000</valuemax>
+              <interpolation><name>FCPCurve</name></interpolation>
+              <keyframe><when>0</when><value>32</value><inscale>0</inscale><outscale>0</outscale></keyframe>
+              <keyframe><when>60</when><value>48</value><inscale>0</inscale><outscale>0</outscale></keyframe>
+            </parameter>
+            <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>1</value></parameter>
+            <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+            <parameter><parameterid>fontcolor</parameterid><name>Font Color</name>
+              <interpolation><name>FCPCurve</name></interpolation>
+              <keyframe><when>0</when><value><alpha>255</alpha><red>255</red><green>255</green><blue>255</blue></value><inscale>0</inscale><outscale>0</outscale></keyframe>
+              <keyframe><when>60</when><value><alpha>255</alpha><red>255</red><green>64</green><blue>64</blue></value><inscale>0</inscale><outscale>0</outscale></keyframe>
+            </parameter>
+            <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0</horiz><vert>0</vert></value></parameter>
+          </effect>
+          <sourcetrack><mediatype>video</mediatype></sourcetrack>
+        </generatoritem>
+        <enabled>TRUE</enabled><locked>FALSE</locked>
+      </track>
+    </video></media>
+  </sequence>
+</xmeml>
