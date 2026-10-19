@@ -71,6 +71,33 @@ int main(){
  Document fontDocument; fontDocument.containers.push_back({"font",false,{{"Caption",0,1,false}}});
  fontDocument.style.current=upright;const auto regularPixels=macos::rasterize(fontDocument,.5,{20,20,500,120},640,180);
  fontDocument.style.current=bold;check(regularPixels.pixels!=macos::rasterize(fontDocument,.5,{20,20,500,120},640,180).pixels,"Weight selection did not change rendered glyphs");
+ // Outline is a lower layer: an unchanged clean fill must cover its inner
+ // half, preserving the solid interior/weight of the unoutlined glyphs.
+ Document outlined;outlined.containers.push_back({"outline",false,{{"Thin aim",0,1,false}}});
+ for(auto* style:{&outlined.style.current,&outlined.style.upcoming,&outlined.style.spoken}){*style=upright;style->color={1,1,1,1};style->outlineColor={0,0,0,1};}
+ const auto clean=macos::rasterize(outlined,.5,{20,20,500,120},640,180);
+ outlined.style.current.outlineWidth=8;
+ const auto edged=macos::rasterize(outlined,.5,{20,20,500,120},640,180);
+ std::size_t interior=0,outlinePixels=0;
+ for(std::size_t i=0;i<clean.pixels.size();i+=4){
+  if(clean.pixels[i+3]==255&&clean.pixels[i]>=252){++interior;check(edged.pixels[i]>=250&&edged.pixels[i+1]>=250&&edged.pixels[i+2]>=250,"Outline painted over the clean glyph fill and reduced font weight");}
+  if(edged.pixels[i+3]>200&&edged.pixels[i]<10)++outlinePixels;
+ }
+ check(interior>100&&outlinePixels>100,"Outline layering acceptance did not exercise both layers");
+ const auto cleanMetrics=macos::measureText("Thin aim",upright),outlineMetrics=macos::measureText("Thin aim",outlined.style.current);
+ check(cleanMetrics.width==outlineMetrics.width&&cleanMetrics.ascent==outlineMetrics.ascent&&cleanMetrics.descent==outlineMetrics.descent,"Outline changed glyph layout metrics");
+ // A shared shadow follows the combined outline/fill, and hidden outlines
+ // keep the exact no-outline pixels. Neither pass may leak at zero opacity.
+ outlined.style.current.shadowBlur=4;outlined.style.current.shadowX=3;outlined.style.current.shadowColor={0,0,0,.5};
+ const auto shadowed=macos::rasterize(outlined,.5,{20,20,500,120},640,180);
+ for(std::size_t i=0;i<clean.pixels.size();i+=4)if(clean.pixels[i+3]==255&&clean.pixels[i]>=252)check(shadowed.pixels[i]>=250,"Shadowed outline covered clean fill");
+ outlined.style.current.opacity=0;check(count(macos::rasterize(outlined,.5,{20,20,500,120},640,180))==0,"Layered outline leaked at zero opacity");
+ outlined.style.current.opacity=1;outlined.style.current.shadowBlur=outlined.style.current.shadowX=0;outlined.style.current.outlineColor.a=0;
+ check(macos::rasterize(outlined,.5,{20,20,500,120},640,180).pixels==clean.pixels,"Invisible outline changed clean text");
+ // macOS uses Unicode conversion before measurement/drawing, without changing
+ // source text or phrase boundaries (including length-expanding upper case).
+ Document cased;const std::string sourceCase="Straße café";cased.containers.push_back({"case",false,{{sourceCase,0,1,false}}});
+ for(int mode:{1,2}){cased.style.letterCase=mode;auto expected=cased;expected.style.letterCase=0;expected.containers[0].words[0].text=mode==1?"STRASSE CAFÉ":"straße café";check(macos::rasterize(cased,.5,{20,20,500,120},640,180).pixels==macos::rasterize(expected,.5,{20,20,500,120},640,180).pixels,"Native Unicode display case differs from clean transformed text");check(cased.containers[0].words[0].text==sourceCase,"Display case modified the source transcript");}
  // Exercise a real installed regular-only family. Synthetic italic must draw
  // slanted glyphs and account for their horizontal ink when measuring/reflowing.
  bool syntheticTested=false;

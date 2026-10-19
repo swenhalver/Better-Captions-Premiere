@@ -23,7 +23,7 @@ test('new transcript becomes one zero-origin native creation with measured spaci
  assert.deepEqual({...input,style:baseline.style},baseline);assert.equal('mediaPath' in plan,false);
 });
 test('creation refuses unrepresentable formatting instead of silently changing existing movies',()=>{
- for(const change of [s=>s.style.backgroundEnabled=true,s=>s.style.textAlign='left',s=>s.style.textTransform='uppercase',s=>s.style.activeWord.letterSpacing=1,s=>s.animation.preset='pop',s=>s.nativeClipId='already']) {
+ for(const change of [s=>s.style.backgroundEnabled=true,s=>s.style.textAlign='left',s=>s.style.activeWord.letterSpacing=1,s=>s.animation.preset='pop',s=>s.nativeClipId='already']) {
   const input=session();change(input);const before=structuredClone(input);assert.throws(()=>prepareNativeCreation(input,16));assert.deepEqual(input,before);
  }
 });
@@ -38,4 +38,12 @@ test('owned transparent carrier rehydrates and edits without fabricated movie li
 });
 test('opening existing movie captions does not automatically migrate or recreate them',()=>{
  const input=session();assert.equal(nativeOutputKind(input),'new-native');input.captions[0].clipNodeId='movie';assert.equal(nativeOutputKind(input),'generated-movie');input.nativeClipId='native';assert.equal(nativeOutputKind(input),'native-effect');
+});
+
+test('native creation keeps upper/lower display modes separate from source words',()=>{
+ for(const mode of ['uppercase','lowercase']){
+  const input=session();input.style.textTransform=mode;const before=structuredClone(input);
+  const plan=prepareNativeCreation(input,16),decoded=decodeNativePanelDocument(plan.documentText,sequenceId);
+  assert.equal(decoded.style.letterCase,mode);assert.equal(decoded.binaryVersion,4);assert.equal(decoded.captions[0].words[0].text,'Hello');assert.deepEqual(input,before);
+ }
 });

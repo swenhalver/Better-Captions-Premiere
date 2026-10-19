@@ -260,7 +260,7 @@ test('an overridden base style is not silently discarded by the native projectio
   assert.equal(prepareNativePanelUpdate(connected, edited).style.upcoming.fontFamily, 'Verdana');
 });
 
-test('shared native Title Case preserves source text and rejects per-state or upper/lowercase', () => {
+test('shared native Title Case preserves source text and rejects different per-state modes', () => {
   const { session, binding: connected } = binding();
   const edited = clone(session); edited.style.activeWord.textTransform = 'titlecase';
   assert.throws(() => prepareNativePanelUpdate(connected, edited), /different word-state case/);
@@ -381,4 +381,19 @@ test('confirmed exact readback advances binding only and rejects differing or st
   assert.equal(connected.document.style.current.opacity, .8, 'Previous binding stays intact');
   assert.throws(() => confirmNativePanelUpdate(connected, prepared, edited, { ...responseEntry, documentText: entry().documentText }), /readback differs/);
   assert.throws(() => confirmNativePanelUpdate(connected, prepared, edited, { ...responseEntry, revision: entry().revision }), /identity/);
+});
+
+test('upper/lower display modes round trip without altering source words, times or native container identity',async()=>{
+ const {decodeNativeTransportTimeOrigin}=await import('../webview-ui/src/lib/native-effect/encode.ts');
+ for(const mode of ['uppercase','lowercase']){
+  const {session,binding:connected}=binding();const edited=clone(session);edited.style.textTransform=mode;
+  for(const key of ['activeWord','upcomingWord','spokenWord'])edited.style[key].textTransform=mode;
+  const prepared=prepareNativePanelUpdate(connected,edited),carrier=encodeNativeTransportText(prepared),decoded=decodeNativePanelDocument(carrier,id);
+  assert.equal(decoded.style.letterCase,mode);assert.equal(decoded.binaryVersion,4);assert.deepEqual(decoded.captions,connected.document.captions);
+  assert.equal(decodeNativeTransportTimeOrigin(carrier),connected.document.timeOriginSeconds);assert.equal(encodeNativeTransportText(decoded),carrier);
+  const restored=rehydrateNativePanel(entry(decoded),{id,name:'Native',frameWidth:1920,frameHeight:1080,frameRate:24,duration:7200});
+  assert.equal(restored.session.style.textTransform,mode);assert.equal(restored.session.style.activeWord.textTransform,mode);
+  const reset=clone(restored.session);reset.style.textTransform='none';for(const key of ['activeWord','upcomingWord','spokenWord'])reset.style[key].textTransform='none';
+  const originalCase=prepareNativePanelUpdate(restored.binding,reset);assert.equal(originalCase.style.letterCase,undefined);assert.equal(originalCase.style.titleCase,false);assert.deepEqual(originalCase.captions,prepared.captions);
+ }
 });

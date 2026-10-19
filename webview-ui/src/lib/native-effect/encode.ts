@@ -1,12 +1,12 @@
 import { validateNativeDocument, validateNativeStyle, type NativeColor, type NativeWordStyle, type NativeStyle } from './contract.ts';
-/** BCAP little-endian v1/v2/v3 payload matching native/core/caption_core.cpp.
+/** BCAP little-endian v1/v2/v3/v4 payload matching native/core/caption_core.cpp.
  * Sequence/clip bounds stay in the panel envelope; the renderer receives source words,
  * manual container identities and styles. No path, code, animation or host mutation. */
 export function encodeNativeDocument(input: unknown): Uint8Array {
   const doc = validateNativeDocument(input), bytes: number[] = [];
   const states = [doc.style.upcoming, doc.style.current, doc.style.spoken];
   const typography = doc.style.baseFontWeight !== undefined || states.some(style => style.fontWeight !== undefined || style.italic !== undefined || style.fontWeightOffset !== undefined && style.fontWeightOffset !== null);
-  const version = typography ? 3 : doc.binaryVersion === 1 && doc.timeOriginSeconds !== 0 ? 2 : doc.binaryVersion ?? 2;
+  const version = Math.max(doc.binaryVersion ?? 2, typography ? 3 : 1, doc.timeOriginSeconds !== 0 ? 2 : 1, doc.style.letterCase ? 4 : 1);
   const u = (n: number) => { for (let i = 0; i < 4; i++) bytes.push((n >>> (8 * i)) & 255); };
   const d = (n: number) => { const b = new Uint8Array(8); new DataView(b.buffer).setFloat64(0, n, true); bytes.push(...b); };
   const s = (text: string) => { const b = new TextEncoder().encode(text); u(b.length); for (const n of b) bytes.push(n); };
@@ -25,6 +25,7 @@ export function encodeNativeDocument(input: unknown): Uint8Array {
   d(doc.style.wordSpacing); d(doc.style.lineHeight); u(Number(doc.style.titleCase));
   if(version>=2)d(doc.timeOriginSeconds);
   if(version>=3){d(doc.style.baseFontWeight??0);for(const word of states){d(word.fontWeight??0);u(word.italic===undefined?0:word.italic?2:1);u(word.fontWeightOffset===100?2:word.fontWeightOffset===0?1:0);}}
+  if(version>=4)u(doc.style.letterCase==='uppercase'?1:doc.style.letterCase==='lowercase'?2:0);
   if (bytes.length > 16 * 1024 * 1024) throw new Error('Native payload exceeds 16 MiB.');
   return Uint8Array.from(bytes);
 }
@@ -67,7 +68,7 @@ export function decodeNativeTransportTimeOrigin(text: unknown): number {
     return value;
   };
   if (u() !== 0x50414342) throw new Error('Invalid native document magic.');
-  const version = u(); if (version !== 1 && version !== 2 && version !== 3) throw new Error('Unsupported native binary version.');
+  const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4) throw new Error('Unsupported native binary version.');
   const containers = u(); if (containers > 10000) throw new Error('Too many native containers.');
   const identities = new Set<string>(); let count = 0;
   for (let i = 0; i < containers; i++) {
@@ -82,6 +83,7 @@ export function decodeNativeTransportTimeOrigin(text: unknown): number {
   const nativeStyle: NativeStyle = { upcoming, current, spoken, wordSpacing: d(), lineHeight: d(), titleCase: flag() };
   const origin = version >= 2 ? d() : 0;
   if(version>=3){const base=d();if(base!==0)nativeStyle.baseFontWeight=base;for(const word of [upcoming,current,spoken] as NativeWordStyle[]){const weight=d(),italic=u(),offset=u();if(italic>2||offset>2)throw new Error('Invalid native typography mode.');if(weight!==0)word.fontWeight=weight;if(italic)word.italic=italic===2;if(offset)word.fontWeightOffset=offset===2?100:0;}}
+  if(version>=4){const mode=u();if(mode>2)throw new Error('Invalid native display letter case.');if(mode)nativeStyle.letterCase=mode===1?'uppercase':'lowercase';}
   validateNativeStyle(nativeStyle);
   if (Math.abs(origin) > 864000 || offset !== bytes.length) throw new Error('Invalid native document origin or trailing bytes.');
   return origin;

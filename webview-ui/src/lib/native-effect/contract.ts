@@ -9,7 +9,7 @@ export const NATIVE_PARAMETERS = ['positionX', 'positionY', 'width', 'height'] a
 export type NativeParameter = typeof NATIVE_PARAMETERS[number];
 export interface NativeWord { text: string; start: number; end: number; endOfSentence: boolean; }
 export interface NativeCaption { id: string; start: number; end: number; manualSplit: boolean; words: NativeWord[]; }
-export interface NativeDocument { version: 1; animationAuthority: 'premiere-effect'; sequenceId: string; captions: NativeCaption[]; style: NativeStyle; timeOriginSeconds: number; binaryVersion?: 1 | 2 | 3; }
+export interface NativeDocument { version: 1; animationAuthority: 'premiere-effect'; sequenceId: string; captions: NativeCaption[]; style: NativeStyle; timeOriginSeconds: number; binaryVersion?: 1 | 2 | 3 | 4; }
 export interface NativeHostEvidence {
   host: 'premiere'; matchName: string; loaded: boolean; renderVerified: boolean;
   parameterReadWriteVerified: boolean; serializationVerified: boolean;
@@ -60,8 +60,8 @@ export function validateNativeDocument(input: unknown): NativeDocument {
     });
     return { id: captionId, start, end, manualSplit: caption.manualSplit, words: result };
   });
-  if (doc.binaryVersion !== undefined && ![1,2,3].includes(doc.binaryVersion as number)) throw new Error('Unsupported native binary version.');
-  return { version: 1, animationAuthority: 'premiere-effect', sequenceId: id(doc.sequenceId), captions, style: validateNativeStyle(doc.style), timeOriginSeconds: doc.timeOriginSeconds === undefined ? 0 : numeric(doc.timeOriginSeconds, -864000, 864000), ...(doc.binaryVersion === undefined ? {} : { binaryVersion: doc.binaryVersion as 1|2|3 }) };
+  if (doc.binaryVersion !== undefined && ![1,2,3,4].includes(doc.binaryVersion as number)) throw new Error('Unsupported native binary version.');
+  return { version: 1, animationAuthority: 'premiere-effect', sequenceId: id(doc.sequenceId), captions, style: validateNativeStyle(doc.style), timeOriginSeconds: doc.timeOriginSeconds === undefined ? 0 : numeric(doc.timeOriginSeconds, -864000, 864000), ...(doc.binaryVersion === undefined ? {} : { binaryVersion: doc.binaryVersion as 1|2|3|4 }) };
 }
 export function requireNativeHost(evidence: NativeHostEvidence): void {
   if (evidence.host !== 'premiere' || !normalizeNativeMatchName(evidence.matchName) || evidence.loaded !== true || evidence.renderVerified !== true || evidence.parameterReadWriteVerified !== true || evidence.serializationVerified !== true) throw new Error('Native effect is unavailable or unverified. No automatic movie fallback.');
@@ -116,7 +116,7 @@ export interface NativeWordStyle {
   bubble: boolean; bubbleColor: NativeColor; padding: number; radius: number; outlineWidth: number;
   outlineColor: NativeColor; shadowBlur: number; shadowX: number; shadowY: number; shadowColor: NativeColor;
 }
-export interface NativeStyle { upcoming: NativeWordStyle; current: NativeWordStyle; spoken: NativeWordStyle; wordSpacing: number; lineHeight: number; titleCase: boolean; baseFontWeight?: number; }
+export interface NativeStyle { upcoming: NativeWordStyle; current: NativeWordStyle; spoken: NativeWordStyle; wordSpacing: number; lineHeight: number; titleCase: boolean; letterCase?: 'uppercase' | 'lowercase'; baseFontWeight?: number; }
 function nativeColor(input: unknown): NativeColor {
   const c = record(input, ['r', 'g', 'b', 'a']);
   return { r: numeric(c.r, 0, 1), g: numeric(c.g, 0, 1), b: numeric(c.b, 0, 1), a: numeric(c.a, 0, 1) };
@@ -131,9 +131,10 @@ function wordStyle(input: unknown): NativeWordStyle {
   return { fontFamily: s.fontFamily, fontSize: numeric(s.fontSize, 0.01, 4096), sizeScale: numeric(s.sizeScale, .01, 16), opacity: numeric(s.opacity, 0, 1), color: nativeColor(s.color), bubble: s.bubble, bubbleColor: nativeColor(s.bubbleColor), padding: numeric(s.padding, 0, 4096), radius: numeric(s.radius, 0, 4096), outlineWidth: numeric(s.outlineWidth, 0, 4096), outlineColor: nativeColor(s.outlineColor), shadowBlur: numeric(s.shadowBlur, 0, 4096), shadowX: numeric(s.shadowX, -4096, 4096), shadowY: numeric(s.shadowY, -4096, 4096), shadowColor: nativeColor(s.shadowColor), ...(s.fontWeight === undefined ? {} : {fontWeight:numeric(s.fontWeight,1,1000)}), ...(s.italic === undefined ? {} : {italic:s.italic as boolean}), ...(s.fontWeightOffset === undefined ? {} : {fontWeightOffset:s.fontWeightOffset as 0|100|null}) };
 }
 export function validateNativeStyle(input: unknown): NativeStyle {
-  const s = record(input, ['upcoming', 'current', 'spoken', 'wordSpacing', 'lineHeight', 'titleCase', 'baseFontWeight']);
+  const s = record(input, ['upcoming', 'current', 'spoken', 'wordSpacing', 'lineHeight', 'titleCase', 'baseFontWeight', 'letterCase']);
+  if (s.letterCase !== undefined && (!['uppercase','lowercase'].includes(s.letterCase as string) || s.titleCase)) throw new Error('Invalid native display letter case.');
   if (typeof s.titleCase !== 'boolean') throw new Error('Invalid display-only Title Case flag.');
-  return { upcoming: wordStyle(s.upcoming), current: wordStyle(s.current), spoken: wordStyle(s.spoken), wordSpacing: numeric(s.wordSpacing, 0, 4096), lineHeight: numeric(s.lineHeight, 1, 10), titleCase: s.titleCase, ...(s.baseFontWeight === undefined ? {} : {baseFontWeight:numeric(s.baseFontWeight,1,1000)}) };
+  return { upcoming: wordStyle(s.upcoming), current: wordStyle(s.current), spoken: wordStyle(s.spoken), wordSpacing: numeric(s.wordSpacing, 0, 4096), lineHeight: numeric(s.lineHeight, 1, 10), titleCase: s.titleCase, ...(s.letterCase === undefined ? {} : {letterCase:s.letterCase as 'uppercase'|'lowercase'}), ...(s.baseFontWeight === undefined ? {} : {baseFontWeight:numeric(s.baseFontWeight,1,1000)}) };
 }
 export function defaultNativeStyle(): NativeStyle {
   const word: NativeWordStyle = { fontFamily: 'Arial', fontSize: 64, sizeScale: 1, opacity: 1, color: {r:1,g:1,b:1,a:1}, bubble: false, bubbleColor: {r:0,g:0,b:0,a:1}, padding:8, radius:10, outlineWidth:0, outlineColor:{r:0,g:0,b:0,a:1}, shadowBlur:0, shadowX:0, shadowY:0, shadowColor:{r:0,g:0,b:0,a:.5} };

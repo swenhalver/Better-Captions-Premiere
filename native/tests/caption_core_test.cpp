@@ -70,6 +70,9 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  auto shortBox=layoutFrame(d,0.4,{0,0,1200,10},measure);assert(shortBox.overflow&&shortBox.words[0].x==frame.words[0].x&&shortBox.words[0].width==frame.words[0].width);
  assert(layoutFrame(d,1.2,{0,0,1200,300},measure).words.empty());assert(layoutFrame(d,2,{0,0,1200,300},measure).words.size()==1);
  assert(displayText("don't STOP naïve café",true)=="Don't Stop Naïve Café");
+ assert(displayText("Mixed-case",false,1)=="MIXED-CASE"&&displayText("Mixed-case",false,2)=="mixed-case");
+ for(int mode:{1,2}){auto cased=sample();cased.style.letterCase=mode;const auto bytes=encode(cased),roundtrip=encode(decode(bytes));assert(bytes==roundtrip&&decode(bytes).schemaVersion==4);auto cf=layoutFrame(cased,.4,{0,0,1200,300},measure);assert(cf.words[0].text==(mode==1?"HELLO":"hello"));assert(cased.containers[0].words[0].text=="HELLO");}
+ auto badCase=sample();badCase.style.letterCase=3;rejects([&]{validate(badCase);});badCase.style.letterCase=1;badCase.style.titleCase=true;rejects([&]{validate(badCase);});
  rejects([&]{layoutFrame(d,0.4,{0,0,1200,300},[](const std::string&,const WordStyle&){return Metrics{-1,0,0};});});
  // Every truncation boundary is rejected; malformed data cannot partially load.
  for(std::size_t i=0;i<encoded.size();++i){std::vector<std::uint8_t> part(encoded.begin(),encoded.begin()+i);rejects([&]{decode(part);});}

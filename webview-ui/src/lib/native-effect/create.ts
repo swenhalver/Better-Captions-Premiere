@@ -21,7 +21,7 @@ export function prepareNativeCreation(session: SessionState, measuredSpace: numb
   if (session.animation.preset !== 'karaoke') throw new Error('Choose Karaoke before creating a native effect. Other panel animation presets remain available with movie captions.');
   const states = ['upcomingWord', 'activeWord', 'spokenWord'] as const;
   const appearances = states.map(state => resolveAppearance(style, state));
-  if (!appearances.every(a => a.textTransform === appearances[0].textTransform && a.letterSpacing === 0) || !['none', 'titlecase'].includes(appearances[0].textTransform)) throw new Error('Native captions support shared As typed or Title Case and zero letter spacing. The original captions were preserved.');
+  if (!appearances.every(a => a.textTransform === appearances[0].textTransform && a.letterSpacing === 0) || !['none', 'titlecase', 'uppercase', 'lowercase'].includes(appearances[0].textTransform)) throw new Error('Native captions support shared text case and zero letter spacing. The original captions were preserved.');
   const position = session.captions[0].position ?? { x: style.positionX, y: style.positionY };
   if (session.captions.some(c => {const effective = c.position ?? {x:style.positionX,y:style.positionY};return effective.x !== position.x || effective.y !== position.y;})) throw new Error('These captions use different positions. Keep their original clips or give them one initial position.');
   const wordStyle = (index: number): NativeWordStyle => {
@@ -39,7 +39,7 @@ export function prepareNativeCreation(session: SessionState, measuredSpace: numb
   });
   const document = validateNativeDocument({ version: 1, binaryVersion: 3, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(session.sequenceId), timeOriginSeconds: 0,
     captions, style: { upcoming: wordStyle(0), current: wordStyle(1), spoken: wordStyle(2), baseFontWeight: style.fontWeight,
-      wordSpacing: measuredSpace * (style.wordSpacing ?? 100) / 100, lineHeight: style.lineHeight, titleCase: appearances[0].textTransform === 'titlecase' } });
+      wordSpacing: measuredSpace * (style.wordSpacing ?? 100) / 100, lineHeight: style.lineHeight, titleCase: appearances[0].textTransform === 'titlecase', ...(['uppercase','lowercase'].includes(appearances[0].textTransform) ? {letterCase:appearances[0].textTransform} : {}) } });
   const endFrame = Math.ceil(Math.max(...captions.map(c => c.end)) * session.frameRate - 1e-7);
   if (endFrame < 1 || endFrame > 1000000) throw new Error('This caption duration exceeds native creation limits.');
   const width = Math.round(session.frameWidth * style.maxWidth);

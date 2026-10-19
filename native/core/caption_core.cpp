@@ -79,6 +79,7 @@ void validate(const Document& d) {
  }
  std::sort(ids.begin(),ids.end());require(std::adjacent_find(ids.begin(),ids.end())==ids.end(),"duplicate container id");
  require(bytes<=kMaxDocumentBytes/2,"text limit exceeded");style(d.style.upcoming);style(d.style.current);style(d.style.spoken);
+ require(d.style.letterCase>=0&&d.style.letterCase<=2&&!(d.style.letterCase&&d.style.titleCase),"invalid display letter case");
  require(finite(d.style.wordSpacing)&&d.style.wordSpacing>=0&&d.style.wordSpacing<=4096,"invalid word spacing");
  require(finite(d.style.lineHeight)&&d.style.lineHeight>=1&&d.style.lineHeight<=10,"invalid line height");
 }
@@ -99,12 +100,13 @@ std::vector<std::uint8_t> encode(const Document& d) {
  validate(d);auto wireVersion=d.schemaVersion;
  bool typography=d.style.baseFontWeight!=0;
  for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken})typography=typography||s->fontWeight!=0||s->italic!=-1||s->fontWeightOffset!=-1;
- if(typography)wireVersion=3;else if(wireVersion==1&&d.timeOriginSeconds!=0)wireVersion=2;
+ if(d.style.letterCase)wireVersion=4;else if(typography&&wireVersion<3)wireVersion=3;else if(wireVersion==1&&d.timeOriginSeconds!=0)wireVersion=2;
  Writer w;w.u(0x50414342);w.u(wireVersion);w.u(static_cast<std::uint32_t>(d.containers.size()));
  for(const auto& c:d.containers){w.s(c.id);w.u(c.manualSplit);w.u(static_cast<std::uint32_t>(c.words.size()));for(const auto& a:c.words){w.s(a.text);w.d(a.start);w.d(a.end);w.u(a.endOfSentence);}}
  writeStyle(w,d.style.upcoming);writeStyle(w,d.style.current);writeStyle(w,d.style.spoken);w.d(d.style.wordSpacing);w.d(d.style.lineHeight);w.u(d.style.titleCase);
  if(wireVersion>=2)w.d(d.timeOriginSeconds);
  if(wireVersion>=3){w.d(d.style.baseFontWeight);for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){w.d(s->fontWeight);w.u(static_cast<std::uint32_t>(s->italic+1));w.u(s->fontWeightOffset==-1?0:s->fontWeightOffset==0?1:2);}}
+ if(wireVersion>=4)w.u(d.style.letterCase);
  require(w.b.size()<=kMaxDocumentBytes,"document size exceeded");return w.b;
 }
 Document decode(const std::vector<std::uint8_t>& b) {
@@ -114,14 +116,16 @@ Document decode(const std::vector<std::uint8_t>& b) {
  for(std::uint32_t j=0;j<k;++j){Word w;w.text=r.s(4096);w.start=r.d();w.end=r.d();w.endOfSentence=r.flag();c.words.push_back(std::move(w));}d.containers.push_back(std::move(c));}
  d.style.upcoming=readStyle(r);d.style.current=readStyle(r);d.style.spoken=readStyle(r);d.style.wordSpacing=r.d();d.style.lineHeight=r.d();d.style.titleCase=r.flag();if(wireVersion>=2)d.timeOriginSeconds=r.d();
  if(wireVersion>=3){d.style.baseFontWeight=r.d();for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){s->fontWeight=r.d();const auto italic=r.u(),offset=r.u();require(italic<=2&&offset<=2,"invalid native typography mode");s->italic=static_cast<int>(italic)-1;s->fontWeightOffset=offset==0?-1:offset==1?0:100;}}
+ if(wireVersion>=4)d.style.letterCase=static_cast<int>(r.u());
  require(r.p==b.size(),"trailing document bytes");validate(d);return d;
 }
-std::string displayText(const std::string& text,bool title) {
+std::string displayText(const std::string& text,bool title,int letterCase) {
+ if(letterCase){std::string out=text;for(char& c:out){if(letterCase==1&&c>='a'&&c<='z')c-=32;else if(letterCase==2&&c>='A'&&c<='Z')c+=32;}return out;}
  if(!title)return text;std::string out=text;bool initial=true;
  for(char& c:out){auto u=static_cast<unsigned char>(c);if(u>=128){initial=false;continue;}if((c>='a'&&c<='z')||(c>='A'&&c<='Z')){if(initial&&c>='a'&&c<='z')c-=32;else if(!initial&&c>='A'&&c<='Z')c+=32;initial=false;}else if(c=='-'||c==' '||c=='\t')initial=true;}
  return out;
 }
-Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measure,std::size_t maxChars,double pause) {
+Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measure,std::size_t maxChars,double pause,const TransformText& transform) {
  require(finite(time),"invalid time");require(finite(box.x)&&finite(box.y)&&finite(box.width)&&finite(box.height)&&box.width>0&&box.height>0,"invalid layout box");require(bool(measure),"missing text measurer");
  require(std::abs(box.x)<=1e7&&std::abs(box.y)<=1e7&&box.width<=1e7&&box.height<=1e7,"layout geometry exceeds bounds");
  Frame result;auto phrases=regroup(d,maxChars,pause);
@@ -131,7 +135,7 @@ Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const Measu
   auto flush=[&](){if(line.empty())return;double x=box.x+(box.width-lineWidth)/2;bool firstRun=true;for(auto& run:line){if(!firstRun&&!punctuation(run.text))x+=d.style.wordSpacing;run.x=x;run.baseline=y+lineAscent;x+=run.width;result.words.push_back(std::move(run));firstRun=false;}double h=lineAscent+lineDescent;if(y+h>box.y+box.height)result.overflow=true;y+=h*d.style.lineHeight;line.clear();lineWidth=lineAscent=lineDescent=0;};
   for(std::size_t i=p.firstWord;i<p.firstWord+p.wordCount;++i){const auto& w=it->words[i];WordState state=time<w.start?WordState::Upcoming:time<w.end?WordState::Current:WordState::Spoken;
    WordStyle s=state==WordState::Current?d.style.current:state==WordState::Spoken?d.style.spoken:d.style.upcoming;
-   auto text=displayText(w.text,d.style.titleCase);auto m=measure(text,s);require(finite(m.width)&&finite(m.ascent)&&finite(m.descent)&&m.width>=0&&m.ascent>=0&&m.descent>=0&&m.width<=1e9&&m.ascent<=1e9&&m.descent<=1e9,"invalid text metrics");
+   auto text=transform?transform(w.text,d.style):displayText(w.text,d.style.titleCase,d.style.letterCase);auto m=measure(text,s);require(finite(m.width)&&finite(m.ascent)&&finite(m.descent)&&m.width>=0&&m.ascent>=0&&m.descent>=0&&m.width<=1e9&&m.ascent<=1e9&&m.descent<=1e9,"invalid text metrics");
    double pad=s.bubble?s.padding:0;double width=m.width+2*pad,ascent=m.ascent+pad,descent=m.descent+pad;
    double gap=!line.empty()&&!punctuation(text)?d.style.wordSpacing:0;
    if(!line.empty()&&!punctuation(text)&&lineWidth+gap+width>box.width){flush();gap=0;}

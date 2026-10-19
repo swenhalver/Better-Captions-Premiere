@@ -26,7 +26,7 @@ export const NATIVE_PANEL_CAPABILITIES = {
   storage: 'embedded-native-document', geometry: 'premiere-effect-controls', animation: 'premiere-effect-controls',
   unsupportedGlobalStyleFields: unsupportedGlobal, unsupportedWordStyleFields: unsupportedWord,
   supportedWordStyleFields: ['fontFamily', 'fontWeight', 'fontWeightOffset', 'italic', 'fontSize', 'sizeScale', 'color', 'opacity', 'bubble', 'bubbleColor', 'bubbleOpacity', 'padding', 'radius', 'strokeColor', 'strokeWidth', 'strokeOpacity', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'],
-  case: 'shared-none-or-ascii-titlecase', wordSpacing: 'native-pixels-not-panel-percent',
+  case: 'shared-as-typed-upper-lower-or-ascii-titlecase', wordSpacing: 'native-pixels-not-panel-percent',
 } as const;
 
 /** Only GUID braces/case are equivalent. Arbitrary identifiers remain exact. */
@@ -53,7 +53,7 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
   const flag = () => { const value = u(); if (value > 1) throw new Error('Invalid native document flag.'); return value === 1; };
   const string = (limit: number) => { const size = u(); if (!size || size > limit) throw new Error('Invalid native document string.'); need(size); const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(offset, offset + size)); offset += size; return value; };
   if (u() !== 0x50414342) throw new Error('Invalid native document magic.');
-  const version = u(); if (version !== 1 && version !== 2 && version !== 3) throw new Error('Unsupported native binary version.');
+  const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4) throw new Error('Unsupported native binary version.');
   const count = u(); if (count > 10000) throw new Error('Too many native caption containers.');
   const captions: NativeCaption[] = []; let totalWords = 0;
   for (let i = 0; i < count; i++) {
@@ -68,6 +68,7 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
   const style: NativeStyle = { upcoming: wordStyle(), current: wordStyle(), spoken: wordStyle(), wordSpacing: d(), lineHeight: d(), titleCase: flag() };
   const timeOriginSeconds = version >= 2 ? d() : 0;
   if(version>=3){const base=d();if(base!==0)style.baseFontWeight=base;for(const word of [style.upcoming,style.current,style.spoken]){const weight=d(),italic=u(),mode=u();if(italic>2||mode>2)throw new Error('Invalid native typography mode.');if(weight!==0)word.fontWeight=weight;if(italic)word.italic=italic===2;if(mode)word.fontWeightOffset=mode===2?100:0;}}
+  if(version>=4){const mode=u();if(mode>2)throw new Error('Invalid native display letter case.');if(mode)style.letterCase=mode===1?'uppercase':'lowercase';}
   if (offset !== bytes.length) throw new Error('Trailing native document bytes.');
   return validateNativeDocument({ version: 1, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(sequenceId), captions, style, timeOriginSeconds, ...(version===2?{}:{binaryVersion:version}) });
 }
@@ -79,9 +80,9 @@ function editColor(previous: NativeColor, value: string): NativeColor {
   if (!/^#[0-9a-f]{6}$/i.test(value)) throw new Error('Native caption colors require six-digit hex values.');
   return { r: Number.parseInt(value.slice(1, 3), 16) / 255, g: Number.parseInt(value.slice(3, 5), 16) / 255, b: Number.parseInt(value.slice(5, 7), 16) / 255, a: previous.a };
 }
-function panelWord(native: NativeWordStyle, titleCase: boolean): WordAppearance {
+function panelWord(native: NativeWordStyle, textCase: WordAppearance['textTransform']): WordAppearance {
   return { fontFamily: native.fontFamily, fontWeight: native.fontWeight??400, fontWeightOffset: native.fontWeightOffset??null, fontSize: native.fontSize * native.sizeScale, sizeScale: native.sizeScale,
-    italic: native.italic??false, letterSpacing: 0, textTransform: titleCase ? 'titlecase' : 'none', color: hexColor(native.color), opacity: native.opacity,
+    italic: native.italic??false, letterSpacing: 0, textTransform: textCase, color: hexColor(native.color), opacity: native.opacity,
     bubble: native.bubble, bubbleColor: hexColor(native.bubbleColor), bubbleOpacity: native.bubbleColor.a, padding: native.padding, radius: native.radius,
     strokeEnabled: native.outlineWidth > 0, strokeWidth: native.outlineWidth, strokeColor: hexColor(native.outlineColor), strokeOpacity: native.outlineColor.a,
     shadowEnabled: native.shadowColor.a > 0 && (native.shadowBlur > 0 || native.shadowX !== 0 || native.shadowY !== 0), shadowColor: hexColor(native.shadowColor), shadowOpacity: native.shadowColor.a,
@@ -114,8 +115,8 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
     shadowEnabled: document.style.upcoming.shadowColor.a > 0 && (document.style.upcoming.shadowBlur > 0 || document.style.upcoming.shadowX !== 0 || document.style.upcoming.shadowY !== 0),
     shadowColor: hexColor(document.style.upcoming.shadowColor), shadowOpacity: document.style.upcoming.shadowColor.a, shadowBlur: document.style.upcoming.shadowBlur,
     shadowOffsetX: document.style.upcoming.shadowX, shadowOffsetY: document.style.upcoming.shadowY, backgroundEnabled: false, textAlign: 'center',
-    lineHeight: document.style.lineHeight, wordSpacing: undefined, textTransform: document.style.titleCase ? 'titlecase' : 'none',
-    upcomingWord: panelWord(document.style.upcoming, document.style.titleCase), activeWord: panelWord(document.style.current, document.style.titleCase), spokenWord: panelWord(document.style.spoken, document.style.titleCase) };
+    lineHeight: document.style.lineHeight, wordSpacing: undefined, textTransform: document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none'),
+    upcomingWord: panelWord(document.style.upcoming, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')), activeWord: panelWord(document.style.current, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')), spokenWord: panelWord(document.style.spoken, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')) };
   const captions: CaptionItem[] = nativeCaptionPhrases(document.captions.map(caption => ({ id: caption.id, text: caption.words.map(word => word.text).join(' '),
     startTime: caption.start + timelineOffsetSeconds, endTime: caption.end + timelineOffsetSeconds, manualSplit: caption.manualSplit,
     words: caption.words.map(word => ({ text: word.text, startTime: word.start + timelineOffsetSeconds, endTime: word.end + timelineOffsetSeconds, endOfSentence: word.endOfSentence, isActive: false })) })), style.maxChars);
@@ -127,7 +128,7 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
     'Native typography supports available font weights, relative B and real or synthetic italic. Letter spacing, alignment and whole-caption backgrounds remain unsupported.',
     `Native word spacing is ${document.style.wordSpacing} px; the panel percentage control is unavailable. Outline/shadow enable switches have no separate persisted native flag.`,
   ];
-  warnings.push('Native text case supports shared As typed or ASCII Title Case only; the source transcript is preserved.');
+  warnings.push('Native text case supports shared As typed, Uppercase, Lowercase or ASCII Title Case; the source transcript is preserved.');
   if (captions.some(caption => caption.startTime < 0)) warnings.push('Some preserved source caption times precede sequence zero after this layer move; no source words were clipped or removed.');
   return { session, binding, warnings, capabilities: NATIVE_PANEL_CAPABILITIES };
 }
@@ -172,18 +173,19 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
     for (const field of unsupportedWord) if (!same(edited.style[key]?.[field], before.style[key]?.[field])) unsupported(`${key}.${field}`);
   }
   const styles = pairs.map(([key]) => resolveAppearance(edited.style, key));
-  if (!styles.every(style => style.textTransform === styles[0].textTransform) || !['none', 'titlecase'].includes(styles[0].textTransform)) unsupported('different word-state case, uppercase or lowercase');
+  if (!styles.every(style => style.textTransform === styles[0].textTransform) || !['none', 'titlecase', 'uppercase', 'lowercase'].includes(styles[0].textTransform)) unsupported('different word-state case');
   const document = clone(binding.document);
   if(edited.style.fontWeight!==before.style.fontWeight||pairs.some(([key])=>edited.style[key]?.fontWeightOffset!==before.style[key]?.fontWeightOffset&&(edited.style[key]?.fontWeightOffset===0||edited.style[key]?.fontWeightOffset===100)))document.style.baseFontWeight=edited.style.fontWeight;
   for (const [key, nativeKey] of pairs) document.style[nativeKey] = updateWord(document.style[nativeKey], resolveAppearance(before.style, key), resolveAppearance(edited.style, key),before.style[key],edited.style[key]);
   if (edited.style.lineHeight !== before.style.lineHeight) document.style.lineHeight = edited.style.lineHeight;
   document.style.titleCase = styles[0].textTransform === 'titlecase';
+  if (styles[0].textTransform === 'uppercase' || styles[0].textTransform === 'lowercase') document.style.letterCase = styles[0].textTransform; else delete document.style.letterCase;
   const upcoming = document.style.upcoming;
   const projectedBase = { fontFamily: upcoming.fontFamily, fontSize: upcoming.fontSize, textColor: hexColor(upcoming.color),
     strokeEnabled: upcoming.outlineWidth > 0, strokeColor: hexColor(upcoming.outlineColor), strokeOpacity: upcoming.outlineColor.a, strokeWidth: upcoming.outlineWidth,
     shadowEnabled: upcoming.shadowColor.a > 0 && (upcoming.shadowBlur > 0 || upcoming.shadowX !== 0 || upcoming.shadowY !== 0),
     shadowColor: hexColor(upcoming.shadowColor), shadowOpacity: upcoming.shadowColor.a, shadowBlur: upcoming.shadowBlur, shadowOffsetX: upcoming.shadowX, shadowOffsetY: upcoming.shadowY,
-    textTransform: document.style.titleCase ? 'titlecase' : 'none' };
+    textTransform: document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none') };
   for (const key of Object.keys(projectedBase) as (keyof typeof projectedBase)[]) {
     if (same(edited.style[key], before.style[key])) continue;
     const wanted = edited.style[key], rendered = projectedBase[key];

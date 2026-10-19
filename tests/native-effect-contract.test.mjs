@@ -104,6 +104,12 @@ test('TS encoder bytes roundtrip through actual C++ decoder and encoder', async 
     writeFileSync(input,v3);execFileSync(executable,['--roundtrip',input,output]);
     assert.deepEqual(new Uint8Array(readFileSync(output)),v3,'v3 typography is byte-exact across TS and C++');
     assert.equal(new DataView(v3.buffer).getUint32(4,true),3);
+    for(const letterCase of ['uppercase','lowercase']){
+      typography.style.letterCase=letterCase;typography.style.titleCase=false;const v4=encodeNativeDocument(typography);
+      assert.equal(new DataView(v4.buffer).getUint32(4,true),4);assert.equal(v4.length,v3.length+4);
+      writeFileSync(input,v4);execFileSync(executable,['--roundtrip',input,output]);
+      assert.deepEqual(new Uint8Array(readFileSync(output)),v4,'v4 display case is byte-exact across TS and C++');
+    }
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
 
