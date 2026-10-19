@@ -2152,7 +2152,7 @@ var BetterCaptionsHost = (function () {
         function skip(bytes) { if (offset + bytes * 2 > text.length) throw new Error('Truncated caption extension words.'); offset += bytes * 2; }
         if (u() !== 1346454338) throw new Error('Invalid caption extension document magic.');
         var version = u(), n = u(), captions = [];
-        if (version < 1 || version > 5 || n > 10000) throw new Error('Invalid caption extension document version or size.');
+        if (version < 1 || version > 6 || n > 10000) throw new Error('Invalid caption extension document version or size.');
         for (var c = 0; c < n; c++) {
             var identityStart = offset, length = u();
             if (!length || length > 256) throw new Error('Invalid caption extension identity.');
@@ -2163,8 +2163,8 @@ var BetterCaptionsHost = (function () {
             captions.push({ identity: identity, count: words, words: text.substring(wordStart, offset) });
         }
         // Walk the immutable style footer before treating it as an opaque
-        // equality proof. v5 appends three bubble-space booleans; it must not
-        // let malformed flags/truncated data reach a duration setter.
+        // equality proof. v5 adds bubble-space flags; v6 adds six optional
+        // padding axes. Malformed footers cannot reach a duration setter.
         var trailerStart = offset;
         for (var state = 0; state < 3; state++) {
             var familyLength = u();
@@ -2183,6 +2183,17 @@ var BetterCaptionsHost = (function () {
         }
         if (version >= 4 && u() > 2) throw new Error('Invalid caption extension case flag.');
         if (version >= 5) for (var fill = 0; fill < 3; fill++) if (u() > 1) throw new Error('Invalid caption extension bubble spaces flag.');
+        if (version >= 6) for (var axis = 0; axis < 6; axis++) {
+            var low = u(), high = u();
+            // IEEE754 little-endian f64: positive encodings sort by these
+            // unsigned words. Permit finite [0,4096], exact -1 sentinel, and
+            // -0 (which the native numeric range also treats as zero). This
+            // avoids lossy number conversion while keeping every footer byte.
+            var validAxis = high < 1085276160 || high === 1085276160 && low === 0;
+            if (high === 3220176896 && low === 0 || high === 2147483648 && low === 0) validAxis = true;
+            if (!validAxis) throw new Error('Invalid caption extension bubble padding axis.');
+        }
+        if (version >= 6) for (var underline = 0; underline < 3; underline++) if (u() > 2) throw new Error('Invalid caption extension underline flag.');
         if (offset !== text.length) throw new Error('Trailing caption extension document bytes.');
         return { version: version, captions: captions, trailer: text.substring(trailerStart) };
     }

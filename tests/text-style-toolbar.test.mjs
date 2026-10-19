@@ -41,7 +41,7 @@ writeFileSync(join(folder, 'LucideIcon.mjs'), icon.js.code);
 const code = compiled.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(sourceUrl));
 writeFileSync(join(folder, 'TextStyleToolbar.mjs'), code);
 const { default: TextStyleToolbar, textStylePatch, textStyleAppearance, textStyleMixed,
-  textStyleBoldState, textStyleBoldDisabled, textStyleBoldPatch, textStyleColorPatch } = await import(pathToFileURL(join(folder, 'TextStyleToolbar.mjs')));
+  textStyleBoldState, textStyleBoldDisabled, textStyleBoldPatch, textStyleColorPatch, textStyleSizeStep } = await import(pathToFileURL(join(folder, 'TextStyleToolbar.mjs')));
 const { default: awaitPicker } = await import(pathToFileURL(join(folder, 'HslaColorPicker.mjs')));
 const { render } = await import(pathToFileURL(require.resolve('svelte/server')));
 const fresh = () => structuredClone(DEFAULT_STYLE);
@@ -342,4 +342,103 @@ test('the normal ribbon opens outline settings and retains its detailed Outline 
   const html=view({nativeMode:true});
   assert.match(html,/<button[^>]*aria-label="Outline settings"[^>]*aria-expanded="false"/);
   assert.match(html,/<button[^>]*role="tab"[^>]*>Outline<\/button>/);
+});
+
+
+test('font size arrows change exactly one pixel within the correct scope bounds', () => {
+  const style=fresh();style.fontSize=60;style.activeWord={...style.activeWord,fontSize:90,sizeScale:1.5};
+  const next=apply(style,textStyleSizeStep(style,'current',1));
+  assert.equal(resolveAppearance(next,'activeWord').fontSize,91);
+  assert.equal(next.fontSize,60);
+  assert.deepEqual(next.spokenWord,style.spokenWord);
+  assert.deepEqual(next.upcomingWord,style.upcomingWord);
+  assert.equal(next.activeWord.color,style.activeWord.color);
+  const base=apply(style,textStyleSizeStep(style,'all',-1));
+  assert.equal(base.fontSize,59);
+  assert.equal(base.activeWord.fontSize,90*59/60,'Base size keeps the saved proportional override');
+  const low={...fresh(),fontSize:8},high={...fresh(),fontSize:400};
+  assert.equal(textStyleSizeStep(low,'all',-1).fontSize,8);
+  assert.equal(textStyleSizeStep(high,'all',1).fontSize,400);
+  const current={...fresh(),activeWord:{...fresh().activeWord,fontSize:1200}};
+  assert.equal(resolveAppearance(apply(current,textStyleSizeStep(current,'current',1)),'activeWord').fontSize,1200);
+});
+
+test('font size buttons surround the number without a visible px suffix and line height follows alignment',()=>{
+  const html=view({style:{...fresh(),fontSize:8}});
+  assert.match(html,/<button[^>]*aria-label="Decrease font size"[^>]*disabled/);
+  assert.match(html,/<button[^>]*aria-label="Increase font size"/);
+  assert.ok(html.indexOf('aria-label="Decrease font size"')<html.indexOf('aria-label="Base font size, px"'));
+  assert.ok(html.indexOf('aria-label="Increase font size"')>html.indexOf('aria-label="Base font size, px"'));
+  assert.doesNotMatch(html,/aria-hidden="true">px<\/span>/);
+  assert.ok(html.indexOf('aria-label="Line height"')>html.indexOf('aria-label="Align right"'));
+});
+
+test('a separate padding-axis edit keeps legacy uniform padding and the other axis intact',()=>{
+  const style=fresh();
+  style.activeWord={...style.activeWord,padding:12,bubblePaddingBlock:4,color:'#9a23bc'};
+  const before=structuredClone(style);
+  const next=apply(style,textStylePatch(style,'current',{bubblePaddingInline:27}));
+  assert.equal(next.activeWord.padding,12);
+  assert.equal(next.activeWord.bubblePaddingInline,27);
+  assert.equal(next.activeWord.bubblePaddingBlock,4);
+  assert.equal(next.activeWord.color,'#9a23bc');
+  assert.deepEqual(next.spokenWord,before.spokenWord);
+  assert.deepEqual(next.upcomingWord,before.upcomingWord);
+  assert.deepEqual(style,before);
+});
+
+test('All words axis changes preserve each state’s other axis and saved uniform fallback',()=>{
+  const style=fresh();
+  const keys=['spokenWord','activeWord','upcomingWord'];
+  for(const [index,key] of keys.entries()) style[key]={...style[key],padding:index+6,bubblePaddingInline:index+10};
+  const next=apply(style,textStylePatch(style,'all',{bubblePaddingBlock:3}));
+  for(const key of keys){
+    assert.equal(next[key].bubblePaddingBlock,3);
+    assert.equal(next[key].bubblePaddingInline,style[key].bubblePaddingInline);
+    assert.equal(next[key].padding,style[key].padding);
+    assert.equal(next[key].color,style[key].color);
+  }
+});
+
+
+test('Underline toggles one word scope without changing color, font or neighbors',()=>{
+  const style=fresh();style.spokenWord={...style.spokenWord,underline:true};
+  const before=structuredClone(style);
+  const next=apply(style,textStylePatch(style,'current',{underline:true}));
+  assert.equal(textStyleAppearance(next,'current').underline,true);
+  assert.deepEqual(next.spokenWord,before.spokenWord);
+  assert.deepEqual(next.upcomingWord,before.upcomingWord);
+  assert.equal(next.activeWord.color,before.activeWord.color);
+  assert.equal(next.activeWord.fontWeight,before.activeWord.fontWeight);
+  assert.deepEqual(style,before);
+});
+
+test('Underline is mixed when scopes differ and All words changes only that decoration',()=>{
+  const style=fresh();style.activeWord={...style.activeWord,underline:true};
+  assert.equal(textStyleMixed(style,'all','underline'),true);
+  const html=view({style});
+  assert.match(html,/<button[^>]*aria-label="Underline"[^>]*aria-pressed="mixed"/);
+  const next=apply(style,textStylePatch(style,'all',{underline:false}));
+  for(const key of ['spokenWord','activeWord','upcomingWord']){
+    assert.equal(next[key].underline,false);
+    assert.equal(next[key].color,style[key]?.color);
+    assert.equal(next[key].fontWeight,style[key]?.fontWeight);
+  }
+});
+
+
+test('Outline icon previews the selected word text fill and outline stroke with independent alpha',()=>{
+  const style=fresh();style.activeWord={...style.activeWord,color:'#a1b2c3',opacity:.4,strokeColor:'#456789',strokeOpacity:.6};
+  const before=structuredClone(style);
+  const html=view({style,scope:'current'});
+  const trigger=html.match(/<button[^>]*aria-label="Outline settings"[\s\S]*?<\/button>/)?.[0];
+  assert.match(trigger,/<svg[^>]*fill="#a1b2c3"[^>]*stroke="#456789"[^>]*fill-opacity="0.4"[^>]*stroke-opacity="0.6"[^>]*stroke-width="2"/);
+  assert.deepEqual(style,before);
+});
+
+test('Outline icon uses a neutral inherited preview for mixed word colors',()=>{
+  const style=fresh();style.activeWord={...style.activeWord,color:'#a1b2c3',strokeColor:'#456789'};
+  const html=view({style,scope:'all'});
+  const trigger=html.match(/<button[^>]*aria-label="Outline settings"[\s\S]*?<\/button>/)?.[0];
+  assert.match(trigger,/<svg[^>]*fill="currentColor"[^>]*stroke="currentColor"/);
 });

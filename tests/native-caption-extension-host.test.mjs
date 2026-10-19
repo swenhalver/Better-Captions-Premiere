@@ -27,6 +27,17 @@ function fixture(options = {}) {
     Object.assign(document.style.spoken, {bubble:true, bubbleFillSpaces:true, opacity:.3});
     document.style.current.bubbleColor={r:.123,g:.456,b:.789,a:.35};
   }
+  if (options.paddingAxes) {
+    Object.assign(document.style.upcoming, {bubblePaddingInline:0,bubblePaddingBlock:7.5});
+    Object.assign(document.style.current, {bubblePaddingInline:19,bubblePaddingBlock:4096});
+    // Spoken intentionally omits one axis, retaining the uniform fallback.
+    Object.assign(document.style.spoken, {bubblePaddingInline:3.125});
+  }
+  if (options.underline) {
+    document.style.upcoming.underline=true;
+    document.style.current.underline=false;
+    // Spoken omits underline to retain document/default fallback.
+  }
   const next = structuredClone(document); next.captions[1].words.push(word('New tail', 6, 7)); next.captions[1].end = 7;
   const originalText = encodeNativeTransportText(document), appendedText = encodeNativeTransportText(next);
   const marker = JSON.stringify({ version: 1, owner: 'com.swen.bettercaptions', kind: 'transparent-video', projectItemId: 'carrier-item', creationId: '12345678-1234-1234-abcd-123456789abc', width: 720, height: 1280 });
@@ -174,11 +185,56 @@ test('v1 through v5 extension retains its original format and exact style footer
 test('v5 footer flag edits, malformed booleans, trailing bytes and truncation refuse before any setter',()=>{
  const altered=fixture({fillSpaces:true}),receipt=altered.read(),changed=structuredClone(altered.next);changed.style.current.bubbleFillSpaces=false;
  assert.match(altered.extend(receipt,{documentText:encodeNativeTransportText(changed)}).error,/preserve/);assert.deepEqual(altered.writes,[]);
- for(const mutate of [bytes=>{bytes.writeUInt32LE(2,bytes.length-12);return bytes;},bytes=>bytes.subarray(0,bytes.length-4),bytes=>Buffer.concat([bytes,Buffer.from([0,0,0,0])]),bytes=>{bytes.writeUInt32LE(6,4);return bytes;}]){
+ for(const mutate of [bytes=>{bytes.writeUInt32LE(2,bytes.length-12);return bytes;},bytes=>bytes.subarray(0,bytes.length-4),bytes=>Buffer.concat([bytes,Buffer.from([0,0,0,0])]),bytes=>{bytes.writeUInt32LE(7,4);return bytes;}]){
   const h=fixture({fillSpaces:true}),bytes=mutate(Buffer.from(h.originalText.slice(7),'hex'));
   // Even matching malformed old/new footers cannot serve as an append-only
   // preservation proof. Reject before changing the host clip duration.
   h.params[4].value='BCDOC1:'+bytes.toString('hex');const fresh=h.connection();h.snapshot.locator=fresh.locator;h.snapshot.revision=fresh.revision;
   const result=h.extend(h.read(),{documentText:h.params[4].value});assert.ok(result.error);assert.deepEqual(h.writes,[]);
+ }
+});
+
+test('v6 extension preserves both padding axes and absent-axis fallback with every previous style, word and native key',()=>{
+ const h=fixture({paddingAxes:true,fillSpaces:true,underline:true}),curves=JSON.stringify(h.params.slice(0,4)),before=decodeNativePanelDocument(h.originalText,'seq-a');
+ assert.equal(before.binaryVersion,6);assert.equal(before.style.current.bubblePaddingInline,19);assert.equal(before.style.current.bubblePaddingBlock,4096);assert.equal(before.style.spoken.bubblePaddingBlock,undefined);
+ assert.equal(before.style.upcoming.underline,true);assert.equal(before.style.current.underline,false);assert.equal(before.style.spoken.underline,undefined);
+ const result=h.extend(h.read());assert.equal(result.ok,true,result.error);const after=decodeNativePanelDocument(result.connection.documentText,'seq-a');
+ assert.equal(after.binaryVersion,6);assert.deepEqual(after.style,before.style);assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);assert.deepEqual(after.captions[0],before.captions[0]);
+ assert.deepEqual(after.captions[1].words.slice(0,before.captions[1].words.length),before.captions[1].words);assert.equal(after.captions[1].manualSplit,true);assert.equal(JSON.stringify(h.params.slice(0,4)),curves);
+ assert.equal(result.connection.startTicks,tick(10));assert.equal(result.connection.inTicks,tick(3600));
+});
+
+test('v6 axis changes, invalid IEEE values and malformed footer refuse before any duration or document setter',()=>{
+ for(const field of ['bubblePaddingInline','bubblePaddingBlock']){
+  const h=fixture({paddingAxes:true}),changed=structuredClone(h.next);changed.style.current[field]=17;
+  assert.match(h.extend(h.read(),{documentText:encodeNativeTransportText(changed)}).error,/preserve/);assert.deepEqual(h.writes,[]);
+ }
+ for(const value of [-2,-.001,4096.000000001,Infinity,-Infinity,NaN]){
+  const h=fixture({paddingAxes:true}),bytes=Buffer.from(h.originalText.slice(7),'hex');bytes.writeDoubleLE(value,bytes.length-60);
+  h.params[4].value='BCDOC1:'+bytes.toString('hex');const entry=h.connection();h.snapshot.locator=entry.locator;h.snapshot.revision=entry.revision;
+  assert.match(h.extend(h.read(),{documentText:h.params[4].value}).error,/padding axis/);assert.deepEqual(h.writes,[]);
+ }
+ for(const adjust of [bytes=>bytes.subarray(0,bytes.length-1),bytes=>Buffer.concat([bytes,Buffer.from([0])])]){
+  const h=fixture({paddingAxes:true}),bytes=adjust(Buffer.from(h.originalText.slice(7),'hex'));h.params[4].value='BCDOC1:'+bytes.toString('hex');
+  const entry=h.connection();h.snapshot.locator=entry.locator;h.snapshot.revision=entry.revision;assert.ok(h.extend(h.read(),{documentText:h.params[4].value}).error);assert.deepEqual(h.writes,[]);
+ }
+});
+
+test('v6 axis walker accepts exact boundaries, fractional/subnormal positives, negative zero and absent sentinel without normalizing bytes',()=>{
+ for(const value of [-1,-0,0,Number.MIN_VALUE,7.125,4096]){
+  const h=fixture({paddingAxes:true}),bytes=Buffer.from(h.originalText.slice(7),'hex');bytes.writeDoubleLE(value,bytes.length-60);
+  h.params[4].value='BCDOC1:'+bytes.toString('hex');const entry=h.connection();h.snapshot.locator=entry.locator;h.snapshot.revision=entry.revision;
+  const result=h.extend(h.read(),{documentText:h.params[4].value});assert.equal(result.ok,true,result.error);assert.equal(result.connection.documentText,h.params[4].value);
+  assert.equal(h.writes.filter(row=>row[0]==='document').length,0);
+ }
+});
+
+test('v6 underline tri-state bytes remain immutable and invalid or missing flags refuse before setters',()=>{
+ const changed=fixture({paddingAxes:true,underline:true}),next=structuredClone(changed.next);next.style.current.underline=true;
+ assert.match(changed.extend(changed.read(),{documentText:encodeNativeTransportText(next)}).error,/preserve/);assert.deepEqual(changed.writes,[]);
+ for(const mutate of [bytes=>{bytes.writeUInt32LE(3,bytes.length-12);return bytes;},bytes=>{bytes.writeUInt32LE(0xffffffff,bytes.length-4);return bytes;},bytes=>bytes.subarray(0,bytes.length-12)]){
+  const h=fixture({paddingAxes:true,underline:true}),bytes=mutate(Buffer.from(h.originalText.slice(7),'hex'));h.params[4].value='BCDOC1:'+bytes.toString('hex');
+  const entry=h.connection();h.snapshot.locator=entry.locator;h.snapshot.revision=entry.revision;
+  assert.match(h.extend(h.read(),{documentText:h.params[4].value}).error,/underline|Truncated/);assert.deepEqual(h.writes,[]);
  }
 });
