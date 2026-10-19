@@ -17,7 +17,7 @@ void near(double a,double b){check(std::abs(a-b)<.0001,"Unexpected bounds coordi
 PF_EffectCustomUISuite1 ui{};DRAWBOT_DrawbotSuite1 drawing{};DRAWBOT_SurfaceSuite1 surface{};DRAWBOT_SupplierSuite1 supplier{};DRAWBOT_PathSuite1 path{};
 int acquired=0,released=0,objects=0,strokes=0,closed=0,registered=0;bool failPath=false,failPaint=false,failTransform=false;std::string missing;
 std::vector<DRAWBOT_PointF32> points;std::vector<DRAWBOT_RectF32> markers;
-SPErr acquire(const char* name,int32,const void** result){
+SPErr acquire(const char* name,SPInt32,const void** result){
  *result=nullptr;if(missing==name){*result=reinterpret_cast<const void*>(99);return 1;}
  if(std::strcmp(name,kPFEffectCustomUISuite)==0)*result=&ui;
  else if(std::strcmp(name,kDRAWBOT_DrawSuite)==0)*result=&drawing;
@@ -26,7 +26,7 @@ SPErr acquire(const char* name,int32,const void** result){
  else if(std::strcmp(name,kDRAWBOT_PathSuite)==0)*result=&path;
  if(!*result)return 1;++acquired;return 0;
 }
-SPErr release(const char*,int32){++released;return 0;}
+SPErr release(const char*,SPInt32){++released;return 0;}
 PF_Err reference(PF_ContextH,DRAWBOT_DrawRef* result){*result=reinterpret_cast<DRAWBOT_DrawRef>(1);return 0;}
 SPErr getSurface(DRAWBOT_DrawRef,DRAWBOT_SurfaceRef* result){*result=reinterpret_cast<DRAWBOT_SurfaceRef>(2);return 0;}
 SPErr getSupplier(DRAWBOT_DrawRef,DRAWBOT_SupplierRef* result){*result=reinterpret_cast<DRAWBOT_SupplierRef>(3);return 0;}
