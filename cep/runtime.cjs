@@ -276,7 +276,7 @@ function parseWindowsFontCatalog(text) {
   return builder.finish();
 }
 async function fontCatalog() {
-  const options = { timeout:15000, strictOutput:true, maxOutputBytes:FONT_CATALOG_BYTES };
+  const options = { timeout:process.platform === 'win32' ? 30000 : 15000, strictOutput:true, maxOutputBytes:FONT_CATALOG_BYTES };
   if (process.platform === 'win32') {
     const text = await run(platform.systemPowerShell(), ['-NoLogo','-NoProfile','-NonInteractive','-Sta','-EncodedCommand',Buffer.from(WINDOWS_FONT_SCRIPT,'utf16le').toString('base64')], { ...options,env:platform.powerShellEnv() });
     return parseWindowsFontCatalog(text);

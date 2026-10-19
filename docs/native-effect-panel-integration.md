@@ -1,10 +1,10 @@
 # Native effect and caption panel integration
 
-**0.7.13 update:** new transcripts now create an owned Transparent Video carrier
+**0.7.15 update:** new transcripts now create an owned Transparent Video carrier
 and native effect automatically. Its project-metadata marker positively binds
 the generated source identity; a non-adjustment footage clip is never adopted
-solely because it has an effect. See [creation notes](release-0.7.13.md) and
-[installed Mac acceptance](mac-verification-0.7.13.md). The details below describe
+solely because it has an effect. See [creation notes](release-0.7.15.md) and
+[installed Mac acceptance](mac-verification-0.7.15.md). The details below describe
 the existing-document adapter, which remains separate from creation.
 
 Development build 0.7.9, 2026-10-18. Installed Premiere 26.5.2 testing confirmed

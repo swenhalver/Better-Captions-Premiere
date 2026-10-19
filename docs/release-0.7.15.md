@@ -1,4 +1,4 @@
-# Better Captions 0.7.13 — native effect creation
+# Better Captions 0.7.15 — native effect creation
 
 New transcripts on the native-effect development branch create a single Premiere
 Transparent Video clip with the Better Captions native effect. The panel edits
@@ -26,7 +26,7 @@ remains unchanged from the 0.7.11 preview repair.
 ## Validation
 
 Mac live checks and exact build/test results are recorded in
-[Mac verification](mac-verification-0.7.13.md). Native Premiere graphics, whose
+[Mac verification](mac-verification-0.7.15.md). Native Premiere graphics, whose
 letters/shapes are ordinary editable Premiere objects, are being developed
 separately on Windows; they are not part of this native-effect release.
 

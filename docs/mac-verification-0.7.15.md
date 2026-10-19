@@ -1,8 +1,8 @@
-# Mac verification — 0.7.13
+# Mac verification — 0.7.15
 
 Native-effect creation passed installed acceptance on Premiere Pro 26.5.2,
 Apple Silicon, using the previously accepted Metal effect binary. Panel and
-service version 0.7.13 are installed. All seven installed panel payload files and
+service version 0.7.15 are installed. All seven installed panel payload files and
 the installed host script match the packaged sources byte for byte.
 
 Completed host checks:
@@ -34,8 +34,8 @@ Completed host checks:
   now estimates wrapped line capacity from the phrase length, font and width;
   the production box was corrected to show its complete three-line caption.
 
-Validation: Svelte check reports zero errors/warnings; 823 automated tests report
-821 passes, two Windows-only skips, zero failures. Package generation and Adobe
+Validation: Svelte check reports zero errors/warnings; 825 automated tests report
+823 passes, two Windows-only skips, zero failures. Package generation and Adobe
 installation succeeded. The UI detector reports no findings. The native binary
 remains SHA-256 `8c4ad9b0acc11fbec2ef8d3f5b13f01282fce2f6d6891875790e71c348e4dbf4`.
 
@@ -48,3 +48,11 @@ branch. The native renderer remains experimental, with the limits in
 Receipts and local screenshots: `artifacts/host-scratch/native-creation-2026-10-18/`.
 The user's production project was saved, copied and snapshotted before testing;
 test mutations take place in the separate Native Effect Scratch project.
+
+The generated CEP adapter also uses stable sequence IDs because Premiere returns
+fresh sequence wrapper objects on repeated reads. Live read-only acceptance of
+that adapter passed on the production native carrier. Native reconnection prefers
+the sole enabled native clip when all movie captions are disabled backups; an
+explicit selection or another enabled caption version retains selection priority.
+Windows font enumeration has a bounded 30-second cold-start allowance, replacing
+a 15-second timeout observed on a loaded Windows CI worker. Mac timing is unchanged.

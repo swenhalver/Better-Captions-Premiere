@@ -58,7 +58,8 @@ function read(){
  var names=[],nativeCount=0;for(var i=0;i<components.numItems;i++){var name=String(components[i].matchName);names.push(name);if(canonical(name))nativeCount++;}
  if(nativeCount!==1)fail('Ambiguous native component instances.');
  var receipt={projectPath:String(p.path),sequenceId:String(s.sequenceID),clipNodeId:String(c.nodeId),adjustmentLayer:adjustment===true,start:String(c.start.ticks),end:String(c.end.ticks),inPoint:String(c.inPoint.ticks),outPoint:String(c.outPoint.ticks),components:names,documentIndex:r.locator.documentParamIndex,documentText:text};if(carrier){receipt.carrierKind=carrier.carrierKind;receipt.carrierItemId=carrier.carrierItemId;receipt.carrierRevision=carrier.carrierRevision;}var revision=JSON.stringify(receipt);
- if(app.project!==p||String(app.project.path)!==r.locator.projectPath||app.project.activeSequence!==s||String(s.sequenceID)!==r.locator.sequenceId)fail('Native context changed during read.');
+ var liveSequence=app.project.activeSequence;
+ if(app.project!==p||String(app.project.path)!==r.locator.projectPath||!liveSequence||String(liveSequence.sequenceID)!==r.locator.sequenceId)fail('Native context changed during read.');
  return {param:param,text:text,revision:revision};
 }
 var attempted=false;

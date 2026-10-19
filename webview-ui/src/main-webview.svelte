@@ -6,7 +6,7 @@
   import type { NativeTransportAvailability } from "./webview-setup";
   import { createLiveOutput, retryableNativeRead, type LiveOutputStatus } from "./lib/live-output";
   import { startCaptionReconnect } from "./lib/reconnect";
-  import { connectionKey, reconnectLegacyCaptions, sameSequenceId, type CaptionConnections } from "./lib/clip-connections";
+  import { connectionKey, reconnectLegacyCaptions, nativeAboveDisabledBackups, sameSequenceId, type CaptionConnections } from "./lib/clip-connections";
   import { rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate } from "./lib/native-effect/panel";
   import { prepareNativeCreation, nativeOutputKind } from "./lib/native-effect/create";
   import { encodeNativeTransportText } from "./lib/native-effect/encode";
@@ -224,7 +224,7 @@
     const plan = reconnectLegacyCaptions(legacy?.captions ?? [], snapshot, info);
     const selectedNative = snapshot.selectedClipNodeIds.length === 1 ? snapshot.native.find(item => item.clipNodeId === snapshot.selectedClipNodeIds[0]) : undefined;
     const retainedNative = snapshot.native.find(item => item.clipNodeId === (nativeBinding?.snapshot.locator.clipNodeId ?? current?.nativeClipId));
-    const native = selectedNative ?? (!plan.selectedId ? retainedNative : undefined)
+    const native = selectedNative ?? (!plan.selectedId ? retainedNative : undefined) ?? nativeAboveDisabledBackups(snapshot)
       ?? (!legacy?.captions.length && snapshot.native.length === 1 && !snapshot.selectedClipNodeIds.length ? snapshot.native[0] : undefined);
     if (native) {
       if (!native.documentText || !native.revision) {

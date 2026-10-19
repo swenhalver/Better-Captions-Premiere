@@ -15,6 +15,7 @@ export interface LegacyCaptionConnection {
   inTicks: string;
   outTicks: string;
   selected: boolean;
+  disabled?: boolean;
 }
 
 export interface NativeCaptionConnection {
@@ -28,6 +29,7 @@ export interface NativeCaptionConnection {
   inTicks: string;
   outTicks: string;
   selected: boolean;
+  disabled?: boolean;
   locator: {
     projectPath: string;
     sequenceId: string;
@@ -114,7 +116,7 @@ function validateSnapshot(value: CaptionConnections, expected: SequenceIdentity)
   for (const id of value.selectedClipNodeIds) { if (!validText(id) || selected.has(id)) fail(); selected.add(id); }
   const legacyNodes = new Set<string>(), nativeLocators = new Set<string>();
   for (const entry of [...value.legacy, ...value.native]) {
-    if (!record(entry) || !validText(entry.clipNodeId) || !validText(entry.projectItemId) || !index(entry.trackIndex) || !index(entry.clipIndex) || !ticks(entry.startTicks) || !ticks(entry.endTicks) || !sourceTicks(entry.inTicks) || !sourceTicks(entry.outTicks) || !orderedTicks(entry.startTicks, entry.endTicks) || BigInt(entry.inTicks) >= BigInt(entry.outTicks) || typeof entry.selected !== 'boolean' || entry.selected !== selected.has(entry.clipNodeId)) fail();
+    if (!record(entry) || !validText(entry.clipNodeId) || !validText(entry.projectItemId) || !index(entry.trackIndex) || !index(entry.clipIndex) || !ticks(entry.startTicks) || !ticks(entry.endTicks) || !sourceTicks(entry.inTicks) || !sourceTicks(entry.outTicks) || !orderedTicks(entry.startTicks, entry.endTicks) || BigInt(entry.inTicks) >= BigInt(entry.outTicks) || typeof entry.selected !== 'boolean' || entry.disabled !== undefined && typeof entry.disabled !== 'boolean' || entry.selected !== selected.has(entry.clipNodeId)) fail();
   }
   for (const entry of value.legacy) {
     if (entry.kind !== 'generated-movie' || !time(entry.startTime) || !time(entry.endTime) || entry.endTime <= entry.startTime || legacyNodes.has(entry.clipNodeId)) fail();
@@ -194,4 +196,11 @@ export function reconnectLegacyCaptions(captions: CaptionItem[], snapshot: Capti
     changed = true; return { ...caption, clipNodeId: match.clipNodeId, projectItemId: match.projectItemId, mediaPath: match.path };
   });
   return { captions: result, changed, selectedId, unresolved: captions.filter((_, at) => unresolved.has(at)).map(caption => caption.id), ambiguous: captions.filter((_, at) => ambiguous.has(at)).map(caption => caption.id) };
+}
+
+/** An enabled native clip outranks preserved disabled movie backups, never a
+ * selected clip or another enabled caption version. Call after snapshot validation. */
+export function nativeAboveDisabledBackups(snapshot: CaptionConnections): NativeCaptionConnection | undefined {
+  if (snapshot.selectedClipNodeIds.length || snapshot.native.length !== 1 || snapshot.native[0].disabled === true || !snapshot.legacy.length || !snapshot.legacy.every(clip => clip.disabled === true)) return undefined;
+  return snapshot.native[0];
 }

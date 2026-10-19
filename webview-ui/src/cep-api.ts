@@ -20,11 +20,11 @@ export interface NativeCaptionLocator { projectPath:string;sequenceId:string;cli
 export interface NativeCaptionSnapshot { locator:NativeCaptionLocator;revision:string; }
 export interface CaptionConnectionTiming { startTicks:string;endTicks:string;inTicks:string;outTicks:string; }
 export interface NativeCaptionConnection extends CaptionConnectionTiming {
-  kind:'native-effect';clipNodeId:string;projectItemId:string;trackIndex:number;clipIndex:number;selected:boolean;
+  kind:'native-effect';disabled?:boolean;clipNodeId:string;projectItemId:string;trackIndex:number;clipIndex:number;selected:boolean;
   locator:NativeCaptionLocator;matchName:string;connectionRevision:string;documentText?:string;revision?:string;
 }
 export interface LegacyCaptionConnection extends CaptionConnectionTiming {
-  kind:'generated-movie';clipNodeId:string;projectItemId:string;path:string;trackIndex:number;clipIndex:number;startTime:number;endTime:number;selected:boolean;
+  kind:'generated-movie';disabled?:boolean;clipNodeId:string;projectItemId:string;path:string;trackIndex:number;clipIndex:number;startTime:number;endTime:number;selected:boolean;
 }
 export interface CaptionConnectionsReceipt {
   ok:true;version:1;readOnly:true;projectPath:string;sequenceId:string;nativeSequenceId:string;playhead:number;playheadTicks:string;

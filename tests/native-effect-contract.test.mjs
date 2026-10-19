@@ -212,7 +212,8 @@ test('generated CEP operations guard exact target/revision and write once with e
   const effect = { matchName: 'AE.' + NATIVE_EFFECT_MATCH_NAME, properties: { numItems: 1, 0: param } };
   const clip = { isAdjustmentLayer: () => true, nodeId: 'clip-1', start: {ticks:'0'}, end:{ticks:'100'}, inPoint:{ticks:'0'}, outPoint:{ticks:'100'}, components:{numItems:1,0:effect} };
   const sequence = { sequenceID:'seq-1', videoTracks:{numTracks:1,0:{clips:{numItems:1,0:clip}}} };
-  const app = { project:{path:locator.projectPath,activeSequence:sequence} };
+  // Premiere returns a fresh sequence wrapper; compare its stable ID, not object identity.
+  const app = { project:{path:locator.projectPath,get activeSequence(){return {...sequence};}} };
   const run = source => JSON.parse(runInNewContext(source, { app }));
   const read = run(buildCepNativeReadScript(locator)); assert.equal(read.ok, true); assert.equal(writes, 0);
   const next = document(); next.captions[0].words[0].text = 'new text';

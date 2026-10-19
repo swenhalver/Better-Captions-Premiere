@@ -1401,7 +1401,7 @@ var BetterCaptionsHost = (function () {
         var locator = { projectPath: projectPath, sequenceId: sequenceId, clipNodeId: clipNodeId, trackIndex: trackIndex, clipIndex: clipIndex, componentIndex: componentIndex, documentParamIndex: documentIndex };
         var selected = typeof clip.isSelected === 'function' && clip.isSelected() === true;
         var result = { kind: 'native-effect', clipNodeId: clipNodeId, projectItemId: connectionId(clip.projectItem && clip.projectItem.nodeId), trackIndex: trackIndex, clipIndex: clipIndex,
-            startTicks: timing.startTicks, endTicks: timing.endTicks, inTicks: timing.inTicks, outTicks: timing.outTicks, selected: selected, locator: locator, matchName: names[componentIndex] };
+            startTicks: timing.startTicks, endTicks: timing.endTicks, inTicks: timing.inTicks, outTicks: timing.outTicks, selected: selected, disabled: clip.disabled === true, locator: locator, matchName: names[componentIndex] };
         var connectionRevision = { locator: locator, timing: timing, components: names, documentIndex: documentIndex, selected: selected };
         if (carrier) {
             result.carrierKind = carrier.carrierKind; result.carrierItemId = carrier.carrierItemId; result.carrierRevision = carrier.carrierRevision;
@@ -1668,7 +1668,7 @@ var BetterCaptionsHost = (function () {
                     if (matched || generatedConnectionPath(path, p.generatedRoot)) {
                         var timing = connectionTiming(clip);
                         legacy.push({ kind: 'generated-movie', clipNodeId: node, projectItemId: itemId, path: path, trackIndex: t, clipIndex: c,
-                            startTime: Number(timing.startTicks) / TICKS, endTime: Number(timing.endTicks) / TICKS, startTicks: timing.startTicks, endTicks: timing.endTicks, inTicks: timing.inTicks, outTicks: timing.outTicks, selected: isSelected });
+                            startTime: Number(timing.startTicks) / TICKS, endTime: Number(timing.endTicks) / TICKS, startTicks: timing.startTicks, endTicks: timing.endTicks, inTicks: timing.inTicks, outTicks: timing.outTicks, selected: isSelected, disabled: clip.disabled === true });
                     }
                     var components = clip.components;
                     if (!components) continue;

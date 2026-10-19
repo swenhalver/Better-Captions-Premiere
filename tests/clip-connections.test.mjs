@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { connectionKey, sameSequenceId, reconnectLegacyCaptions } from '../webview-ui/src/lib/clip-connections.ts';
+import { connectionKey, sameSequenceId, reconnectLegacyCaptions, nativeAboveDisabledBackups } from '../webview-ui/src/lib/clip-connections.ts';
 import { MAX_NATIVE_CARRIER_BYTES } from '../webview-ui/src/lib/native-effect/encode.ts';
 
 const id = 'F18A14EA-2BE5-4393-A113-C1B43BFCAB1E';
@@ -201,4 +201,12 @@ test('malformed headers, entries, timing, selection proofs and duplicate identit
   for (const change of changes) { const reply = snapshot([legacy()], [native()]); change(reply); assert.throws(() => reconnect(input, reply), /caption connections|path|local/i); }
   assert.throws(() => reconnect([caption(), caption()], snapshot([legacy()])), /duplicated/);
   assert.equal(input[0].clipNodeId, 'old-node');
+});
+
+test('a sole enabled native clip reconnects above disabled movie backups without overriding explicit selection',()=>{
+ const value=snapshot([legacy({disabled:true})],[native({disabled:false})]);assert.equal(nativeAboveDisabledBackups(value)?.clipNodeId,'native-node');
+ for(const changed of [snapshot([legacy()],[native()]),snapshot([legacy({disabled:false})],[native()]),snapshot([legacy({disabled:true})],[native({disabled:true})]),snapshot([legacy({disabled:true})],[native(),native({clipNodeId:'second'})]),snapshot([legacy({disabled:true,selected:true})],[native()],['legacy-node'])])assert.equal(nativeAboveDisabledBackups(changed),undefined);
+});
+test('connection visibility must be an actual boolean when supplied',()=>{
+ for(const disabled of ['true',0,null])assert.throws(()=>reconnect([caption()],snapshot([legacy({disabled})])),/malformed/);
 });
