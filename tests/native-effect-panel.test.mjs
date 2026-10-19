@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { defaultNativeStyle, NATIVE_EFFECT_MATCH_NAME } from '../webview-ui/src/lib/native-effect/contract.ts';
 import { encodeNativeDocument, encodeNativeTransportText } from '../webview-ui/src/lib/native-effect/encode.ts';
-import { nativePanelSequenceId, decodeNativePanelDocument, rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate, NATIVE_PANEL_CAPABILITIES } from '../webview-ui/src/lib/native-effect/panel.ts';
+import { nativePanelSequenceId, decodeNativePanelDocument, rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate, deriveNativePanelPhrases, NATIVE_PANEL_CAPABILITIES } from '../webview-ui/src/lib/native-effect/panel.ts';
 import { registerFontCatalog } from '../webview-ui/src/lib/font-catalog.ts';
 import { moveWord, moveWordEdge } from '../webview-ui/src/lib/transcript/timing.ts';
 
@@ -127,7 +127,7 @@ test('native captions populate the editor without fabricated legacy movie identi
   assert.equal(capabilities.geometry, 'premiere-effect-controls');
   assert.equal(capabilities.animation, 'premiere-effect-controls');
   assert.ok(warnings.some(warning => warning.includes('synthetic italic')));
-  assert.ok(warnings.some(warning => warning.includes('px')));
+  assert.ok(warnings.some(warning => warning.includes('pixels')));
 });
 
 test('no-op adoption and a style-only edit retain exact hidden alpha, floats and source times', () => {
@@ -181,11 +181,8 @@ test('unsupported formatting, presets and geometry are refused rather than lost'
   const { session, binding: connected } = binding(), original = clone(connected.document);
   for (const patch of [
     state => state.style.activeWord.letterSpacing = 3,
-    state => state.style.activeWord.strokeEnabled = false,
-    state => state.style.activeWord.shadowEnabled = false,
     state => state.style.textAlign = 'left',
     state => state.style.backgroundEnabled = true,
-    state => state.style.wordSpacing = 100,
     state => state.style.maxChars = 30,
     state => state.animation.preset = 'pop',
     state => state.captions[0].position = { x: .2, y: .2 },
@@ -396,4 +393,54 @@ test('upper/lower display modes round trip without altering source words, times 
   const reset=clone(restored.session);reset.style.textTransform='none';for(const key of ['activeWord','upcomingWord','spokenWord'])reset.style[key].textTransform='none';
   const originalCase=prepareNativePanelUpdate(restored.binding,reset);assert.equal(originalCase.style.letterCase,undefined);assert.equal(originalCase.style.titleCase,false);assert.deepEqual(originalCase.captions,prepared.captions);
  }
+});
+
+function confirmStyleEdit(connected,edited,prepared){
+ const documentText=encodeNativeTransportText(prepared),revision=JSON.parse(connected.snapshot.revision);revision.documentText=documentText;
+ return confirmNativePanelUpdate(connected,prepared,edited,{documentText,revision:JSON.stringify(revision)});
+}
+test('native pixel word spacing is editable without changing transcript or other native fields and immediately affects Smart groups',()=>{
+ const {session,binding:connected}=binding();assert.equal(session.style.wordSpacing,connected.document.style.wordSpacing);
+ const before=clone(connected.document),edited=clone(session);edited.style.wordSpacing=20.25;const next=prepareNativePanelUpdate(connected,edited);before.style.wordSpacing=20.25;assert.deepEqual(next,before);
+ const smart={...connected,clip:{...connected.clip,smartLineFit:true,lineFitWidth:100,lineFitFontScale:1}};
+ assert.equal(deriveNativePanelPhrases(smart,session,()=>10)[0].renderSegments.length,1);edited.style.wordSpacing=40;assert.equal(deriveNativePanelPhrases(smart,edited,()=>10)[0].renderSegments.length,2);
+ for(const wordSpacing of [-1,4097,NaN,undefined,'12']){const bad=clone(session);bad.style.wordSpacing=wordSpacing;assert.throws(()=>prepareNativePanelUpdate(connected,bad),/word spacing/);}
+ assert.equal(NATIVE_PANEL_CAPABILITIES.wordSpacing,'editable-native-pixels');assert.ok(!NATIVE_PANEL_CAPABILITIES.unsupportedGlobalStyleFields.includes('wordSpacing'));
+});
+test('outline toggle maps off to native width zero and retains the remembered session width for re-enabling',()=>{
+ const {session,binding:connected}=binding(),off=clone(session);off.style.activeWord.strokeEnabled=false;
+ const disabled=prepareNativePanelUpdate(connected,off),expected=clone(connected.document);expected.style.current.outlineWidth=0;assert.deepEqual(disabled,expected);assert.equal(off.style.activeWord.strokeWidth,2);
+ const confirmed=confirmStyleEdit(connected,off,disabled),on=clone(off);on.style.activeWord.strokeEnabled=true;
+ assert.deepEqual(prepareNativePanelUpdate(confirmed,on),connected.document);
+ const remembered=clone(off);remembered.style.activeWord.strokeWidth=7;const stillOff=prepareNativePanelUpdate(confirmed,remembered);assert.equal(stillOff.style.current.outlineWidth,0);
+ const confirmedRemembered=confirmStyleEdit(confirmed,remembered,stillOff),enabled=clone(remembered);enabled.style.activeWord.strokeEnabled=true;assert.equal(prepareNativePanelUpdate(confirmedRemembered,enabled).style.current.outlineWidth,7);
+ assert.ok(NATIVE_PANEL_CAPABILITIES.supportedWordStyleFields.includes('strokeEnabled'));
+});
+test('enabling an imported zero-width outline uses a visible default without touching its tint or opacity',()=>{
+ const doc=document();doc.style.current.outlineWidth=0;doc.style.current.outlineColor={r:.11,g:.22,b:.33,a:.44};const {session,binding:connected}=rehydrateNativePanel(entry(doc),sequence()),edited=clone(session);edited.style.activeWord.strokeEnabled=true;
+ const next=prepareNativePanelUpdate(connected,edited);assert.equal(next.style.current.outlineWidth,2);assert.deepEqual(next.style.current.outlineColor,doc.style.current.outlineColor);assert.deepEqual(next.style.spoken,doc.style.spoken);
+});
+test('shadow toggle maps alpha to zero while preserving native extents and restores remembered opacity without changing neighbors',()=>{
+ const {session,binding:connected}=binding(),off=clone(session);off.style.activeWord.shadowEnabled=false;
+ const disabled=prepareNativePanelUpdate(connected,off),expected=clone(connected.document);expected.style.current.shadowColor.a=0;assert.deepEqual(disabled,expected);
+ const confirmed=confirmStyleEdit(connected,off,disabled),on=clone(off);on.style.activeWord.shadowEnabled=true;assert.deepEqual(prepareNativePanelUpdate(confirmed,on),connected.document);
+ const remembered=clone(off);remembered.style.activeWord.shadowBlur=8;remembered.style.activeWord.shadowOpacity=.75;const stillOff=prepareNativePanelUpdate(confirmed,remembered);assert.equal(stillOff.style.current.shadowColor.a,0);assert.equal(stillOff.style.current.shadowBlur,8);
+ const rebound=confirmStyleEdit(confirmed,remembered,stillOff),enabled=clone(remembered);enabled.style.activeWord.shadowEnabled=true;const restored=prepareNativePanelUpdate(rebound,enabled);assert.equal(restored.style.current.shadowColor.a,.75);assert.equal(restored.style.current.shadowBlur,8);
+ assert.ok(NATIVE_PANEL_CAPABILITIES.supportedWordStyleFields.includes('shadowEnabled'));
+});
+test('enabling a native shadow with zero alpha/extents supplies visible defaults while unrelated edits remain byte-identical',()=>{
+ const doc=document();Object.assign(doc.style.current,{shadowBlur:0,shadowX:0,shadowY:0});doc.style.current.shadowColor={r:.123456,g:.234567,b:.345678,a:0};
+ const source=entry(doc),{session,binding:connected}=rehydrateNativePanel(source,sequence());assert.equal(encodeNativeTransportText(prepareNativePanelUpdate(connected,session)),source.documentText);
+ const edited=clone(session);edited.style.activeWord.shadowEnabled=true;const next=prepareNativePanelUpdate(connected,edited);assert.equal(next.style.current.shadowColor.a,.5);assert.equal(next.style.current.shadowBlur,4);assert.deepEqual({...next.style.current.shadowColor,a:0},doc.style.current.shadowColor);
+});
+
+test('all-word outline/shadow controls accept remembered disabled sliders and restore their effective native values',()=>{
+ const {session,binding:connected}=binding(),on=clone(session);Object.assign(on.style,{strokeEnabled:true,strokeWidth:2,shadowEnabled:true,shadowOpacity:.5,shadowBlur:4});
+ for(const key of ['upcomingWord','activeWord','spokenWord'])Object.assign(on.style[key],{strokeEnabled:true,strokeWidth:2,shadowEnabled:true,shadowOpacity:.5,shadowBlur:4});
+ const enabled=prepareNativePanelUpdate(connected,on),enabledBinding=confirmStyleEdit(connected,on,enabled),off=clone(on);off.style.strokeEnabled=false;off.style.shadowEnabled=false;
+ for(const key of ['upcomingWord','activeWord','spokenWord']){off.style[key].strokeEnabled=false;off.style[key].shadowEnabled=false;}
+ const disabled=prepareNativePanelUpdate(enabledBinding,off);for(const key of ['upcoming','current','spoken']){assert.equal(disabled.style[key].outlineWidth,0);assert.equal(disabled.style[key].shadowColor.a,0);assert.equal(disabled.style[key].shadowBlur,4);}
+ const disabledBinding=confirmStyleEdit(enabledBinding,off,disabled),restore=clone(off);restore.style.strokeEnabled=true;restore.style.shadowEnabled=true;
+ for(const key of ['upcomingWord','activeWord','spokenWord']){restore.style[key].strokeEnabled=true;restore.style[key].shadowEnabled=true;}
+ assert.deepEqual(prepareNativePanelUpdate(disabledBinding,restore),enabled);
 });

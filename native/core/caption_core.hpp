@@ -13,6 +13,7 @@ constexpr std::size_t kMaxGroupsPerPage = 100;
 // Round finite host samples consistently; source/editor integer validation stays strict.
 std::size_t sampledGroupsPerPage(double);
 bool sampledSmartLineFit(double);
+int sampledTextAlignment(double); // 1 left, 2 center, 3 right
 struct Color { double r=1,g=1,b=1,a=1; };
 struct Word { std::string text; double start=0,end=0; bool endOfSentence=false; };
 struct WordStyle {
@@ -41,7 +42,7 @@ Document decode(const std::vector<std::uint8_t>&);
 std::string displayText(const std::string&, bool titleCase, int letterCase=0); // ASCII case conversion; UTF-8 preserved
 
 enum class WordState { Upcoming,Current,Spoken };
-struct LayoutBox { double x=0,y=0,width=1536,height=300; };
+struct LayoutBox { double x=0,y=0,width=1536,height=300; int alignment=2; };
 struct Metrics { double width=0,ascent=0,descent=0; };
 using TransformText=std::function<std::string(const std::string&,const Style&)>;
 using MeasureText=std::function<Metrics(const std::string&,const WordStyle&)>;

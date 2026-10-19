@@ -1,4 +1,4 @@
-import type { CaptionItem, CaptionSegment, TextTransform } from '../types.ts';
+import { MAX_CAPTION_CHARS, type CaptionItem, type CaptionSegment, type TextTransform } from '../types.ts';
 import type { ResolvedAppearance } from '../appearance.ts';
 import { installedFont } from '../font-catalog.ts';
 import type { NativeLineFitState } from '../../cep-api.ts';
@@ -39,10 +39,24 @@ export function applyNativeFitState(appearance: ResolvedAppearance, globalFontSc
     bubble: override.bubbleMode === 1 ? appearance.bubble : override.bubbleMode === 2 };
 }
 
+/** Approximate character capacity using the transcript's measured glyph mix.
+ * Actual Smart groups still use whole-word pixel fitting, not this estimate. */
+export function smartFitCharacterCapacity(captions: CaptionItem[], options: SmartFitOptions, measure: SmartFitMeasure): number | null {
+  const {advance, usableWidth}=smartFitMetrics(options,measure);
+  let pixels=0,characters=0;
+  for(const caption of captions)caption.words.forEach((word,index)=>{
+    const spaced=index>0&&!/^[.,!?;:%)\]}]/.test(word.text);
+    pixels+=advance(word.text)+(spaced?options.wordSpacing:0);
+    characters+=Math.max(...options.appearances.map(appearance=>Array.from(smartFitDisplayText(word.text,appearance.textTransform)).length))+(spaced?1:0);
+  });
+  if(pixels<=0||characters<=0)return null;
+  return Math.max(1,Math.min(MAX_CAPTION_CHARS,Math.floor(usableWidth*characters/pixels)));
+}
+
 /** Greedy whole-word groups, fixed for all active-word states and independent
  * of the playhead. Smart mode deliberately ignores the stored character cap.
  * Native rendering remains authoritative for actual font-engine measurement. */
-export function smartFitCaptionPhrases(captions: CaptionItem[], options: SmartFitOptions, measure: SmartFitMeasure): CaptionItem[] {
+function smartFitMetrics(options: SmartFitOptions, measure: SmartFitMeasure) {
   const { width, wordSpacing, appearances } = options, pause = options.pause ?? .6;
   if (!Number.isFinite(width) || width <= 0 || width > 8192 || !Number.isFinite(wordSpacing) || wordSpacing < 0 || wordSpacing > 4096 || !Number.isFinite(pause) || pause < 0 || appearances.length !== 3 || typeof measure !== 'function') throw new Error('Invalid native smart line fit configuration.');
   const usableWidth = width * .95;
@@ -57,6 +71,12 @@ export function smartFitCaptionPhrases(captions: CaptionItem[], options: SmartFi
     }));
     cache.set(text, value); return value;
   };
+  return {advance,usableWidth};
+}
+
+export function smartFitCaptionPhrases(captions: CaptionItem[], options: SmartFitOptions, measure: SmartFitMeasure): CaptionItem[] {
+  const {advance,usableWidth}=smartFitMetrics(options,measure);
+  const {wordSpacing}=options,pause=options.pause??.6;
   return captions.map(caption => {
     const renderSegments: CaptionSegment[] = [];
     let first = 0, count = 0, occupied = 0;

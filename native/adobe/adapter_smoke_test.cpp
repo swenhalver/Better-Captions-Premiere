@@ -54,6 +54,7 @@ int main(int argc,char** argv){try{
  values[1].u.td.x_value=320*65536;values[1].u.td.y_value=270*65536;
  values[2].u.fs_d.value=500;values[3].u.fs_d.value=160;values[4].u.fs_d.value=56;values[5].u.fs_d.value=36;
  values[GroupsPerPage].u.fs_d.value=1;
+ values[TextAlignment].u.fs_d.value=2;
  values[6].u.cd.value={255,255,255,255};in.width=width;in.height=height;in.downsample_x={1,1};in.downsample_y={1,1};in.time_scale=100;in.current_time=125;
  PF_LayerDef output{};output.data=pixels.data();output.width=width;output.height=height;output.rowbytes=width*4;
  check(main(PF_Cmd_RENDER,&in,&out,params.data(),&output,nullptr)==0,"render failed");
@@ -129,5 +130,7 @@ int main(int argc,char** argv){try{
  fixture.style.current.color={0,1,0,1};values[LineTransition].u.fs_d.value=2;const auto readableFade=typographyFrame();
  std::size_t greenCurrent=0;for(const auto& pixel:readableFade)if(pixel.green>200&&pixel.red<30)++greenCurrent;
  check(greenCurrent>20,"Compiled Fade did not keep the currently spoken word legible");
+ values[RollUpEnabled].u.fs_d.value=0;in.current_time=150;values[TextAlignment].u.fs_d.value=2;const auto centerAligned=typographyFrame();
+ for(int alignment:{1,3}){values[TextAlignment].u.fs_d.value=alignment;check(differs(centerAligned,typographyFrame()),"Compiled text-alignment scalar did not change actual glyph placement");}
  dlclose(binary);std::cout<<"Compiled adapter smoke passed: ARGB/determinism/reflow/half-resolution and pixel-equal persisted adjustment-origin Razor frames; not host acceptance.\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

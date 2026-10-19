@@ -14,9 +14,9 @@
     onSeek: (time: number) => void; onSelect: (id: string) => void;
     onMaxCharsChange: (maxChars: number) => void; onUpdate: (captions: CaptionItem[]) => void;
     onEditingChange?: (active:boolean)=>void;
-    onShowInPremiere?: (time: number) => void; isDemo?: boolean; disabled?: boolean; groupingDisabled?: boolean; onRegroup?: () => void; smartLineFit?:boolean; onSmartLineFitChange?:(enabled:boolean)=>void;
+    onShowInPremiere?: (time: number) => void; isDemo?: boolean; disabled?: boolean; groupingDisabled?: boolean; onRegroup?: () => void; smartCharacterCapacity?:number|null; smartLineFit?:boolean; onSmartLineFitChange?:(enabled:boolean)=>void;
   }
-  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, disabled = false, groupingDisabled = false, onRegroup, onEditingChange=()=>{}, smartLineFit=false, onSmartLineFitChange }: Props = $props();
+  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, disabled = false, groupingDisabled = false, onRegroup, onEditingChange=()=>{}, smartCharacterCapacity=null, smartLineFit=false, onSmartLineFitChange }: Props = $props();
   let activeId = $derived(captions.find((caption) => currentTime >= caption.startTime && currentTime < caption.endTime)?.id ?? null);
   let selectedContainer = $derived(captions.find((caption) => caption.id === selectedId) ?? captions[0]);
   let selectedRowKey = $state<string | null>(null);
@@ -286,10 +286,10 @@
   {#if captions.length}
     {#if !groupingDisabled}
     <details class="transcript-editor__grouping">
-      <summary>Caption grouping <span>{smartLineFit ? "Smart line fit" : `${maxChars} characters`} · {sentenceCount} groups</span></summary>
+      <summary>Caption grouping <span>{smartLineFit ? smartCharacterCapacity===null?"Smart line fit":`Smart · ≈${smartCharacterCapacity} chars` : `${maxChars} characters`} · {sentenceCount} groups</span></summary>
       <div class="transcript-editor__grouping-body">
         {#if onSmartLineFitChange}<label class="caption-check transcript-editor__smart-fit" title="Measure the text to fit one line, with a 5% safety margin for letter widths and highlighting"><input type="checkbox" checked={smartLineFit} disabled={disabled} onchange={event=>onSmartLineFitChange?.(event.currentTarget.checked)}/><span>Smart line fit</span></label>{/if}
-        <div class="transcript-editor__grouping-controls"><label class="caption-field"><span>Characters per caption</span><input type="number" min="1" max={MAX_CAPTION_CHARS} step="1" value={maxChars} onchange={changeCharacterLimit} disabled={disabled||smartLineFit} /></label><button class="caption-button" onclick={regroup} disabled={disabled||smartLineFit} title="Apply the character limit to the edited transcript">Regroup</button></div>
+        <div class="transcript-editor__grouping-controls"><label class="caption-field"><span>{smartLineFit?"Characters per line (estimated)":"Characters per caption"}</span><input type="number" min="1" max={MAX_CAPTION_CHARS} step="1" value={smartLineFit ? smartCharacterCapacity ?? "" : maxChars} placeholder={smartLineFit?"—":undefined} readonly={smartLineFit} title={smartLineFit?"Estimated capacity for this width and font. Actual phrases use measured whole words.":undefined} onchange={changeCharacterLimit} disabled={disabled} /></label><button class="caption-button" onclick={regroup} disabled={disabled||smartLineFit} title="Apply the character limit to the edited transcript">Regroup</button></div>
         <p class="caption-help">{smartLineFit ? "Fits the selected width using font measurements and a 5% safety margin. Updates as width or styling changes." : "Includes spaces and punctuation. A word longer than the limit stays whole."}</p>
         <p class="caption-help">{hasLinked ? `${sentenceCount} caption groups across ${captions.length} timeline ${captions.length === 1 ? 'clip' : 'clips'}. Keyframes stay with their clips.` : "Regroup splits or joins captions, respecting sentences, pauses and placement."}</p>
       </div>

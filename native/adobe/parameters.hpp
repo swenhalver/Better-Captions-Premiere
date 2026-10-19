@@ -12,6 +12,7 @@ enum Param {
  RollUpEnabled, RollUpLines, RollUpDuration, RollUpBoundary, RollUpPosition, RollUpThickness, RollUpFade, RollUpCurve,
  RollUpDirection, RollUpSpeed, RollUpWait,
  LineTransition,
+ TextAlignment,
  Count
 };
 enum DiskId {
@@ -22,11 +23,12 @@ enum DiskId {
  CurrentGroupId=100, CurrentEndId=101, SpokenGroupId=102, SpokenEndId=103, UpcomingGroupId=104, UpcomingEndId=105,
  GroupsPerPageId=32, SmartLineFitId=33,
  RollUpEnabledId=34, RollUpLinesId=35, RollUpDurationId=36, RollUpBoundaryId=37, RollUpPositionId=38, RollUpThicknessId=39, RollUpFadeId=40, RollUpCurveId=41,
- RollUpDirectionId=42, RollUpSpeedId=43, RollUpWaitId=44, LineTransitionId=45
+ RollUpDirectionId=42, RollUpSpeedId=43, RollUpWaitId=44, LineTransitionId=45, TextAlignmentId=46
 };
 static_assert(Transcript==7 && TranscriptId==7,"Existing carrier position and disk ID are permanent");
 static_assert(UpcomingEnd==37&&GroupsPerPage==38&&GroupsPerPageId==32,"Page grouping must append after all existing native controls");
 static_assert(SmartLineFit==39&&SmartLineFitId==33,"Smart fit must append without moving saved native parameter identities");
 static_assert(RollUpEnabled==40&&RollUpCurve==47&&RollUpWait==50&&RollUpWaitId==44,"Roll-up controls must append without moving saved controls");
 static_assert(LineTransition==51&&LineTransitionId==45,"Line transition must append after every existing native control");
+static_assert(TextAlignment==52&&TextAlignmentId==46,"Alignment must append without changing saved native controls");
 }

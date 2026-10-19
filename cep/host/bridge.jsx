@@ -1815,7 +1815,7 @@ var BetterCaptionsHost = (function () {
     var nativeRollUpLabels = ['Roll-up enabled', 'Visible lines', 'Scroll duration', 'Soft fade boundary', 'Boundary position', 'Transition thickness', 'Fade amount', 'Transition curve', 'Scroll direction', 'Scroll speed', 'Wait for line to finish', 'Line transition'];
     var nativeRollUpDefaults = [0, 2, 0.18, 1, 0, 0.35, 1, 2, 1, 1, 1, 1];
     function nativeRollUpIndex(name) { for (var i = 0; i < nativeRollUpNames.length; i++) if (nativeRollUpNames[i] === name) return i; return -1; }
-    function nativeKnownControl(name) { return name === 'position' || name === 'width' || name === 'height' || name === 'groups' || name === 'smartFit' || nativeRollUpIndex(name) >= 0; }
+    function nativeKnownControl(name) { return name === 'position' || name === 'width' || name === 'height' || name === 'groups' || name === 'smartFit' || name === 'alignment' || nativeRollUpIndex(name) >= 0; }
     function nativeControlValue(value, name) {
         if (name === 'position') {
             var point = motionVector(value, 'native Position');
@@ -1832,6 +1832,10 @@ var BetterCaptionsHost = (function () {
             else if (rollIndex === 9) { minimum = 0.1; maximum = 10; }
             if (typeof value !== 'number' || !isFinite(value) || value < minimum || value > maximum) throw new Error('Invalid native ' + nativeRollUpLabels[rollIndex] + ' value.');
             return rollIndex === 1 || rollIndex === 7 || rollIndex === 8 || rollIndex === 11 ? Math.round(value) : value;
+        }
+        if (name === 'alignment') {
+            if (typeof value !== 'number' || !isFinite(value) || value < 1 || value > 3) throw new Error('Text alignment must be between one and three.');
+            return Math.round(value);
         }
         if (name === 'smartFit') return nativeSmartFitValue(value);
         if (name === 'groups') {
@@ -1860,7 +1864,7 @@ var BetterCaptionsHost = (function () {
         var inside = nativeTickCompare(at, timing.startTicks) >= 0 && nativeTickCompare(at, timing.endTicks) < 0;
         var sourceTicks = inside ? nativeTickMath(nativeTickMath(at, timing.startTicks, true), timing.inTicks, false) : null;
         if (sourceTicks !== null && nativeTickCompare(sourceTicks, timing.outTicks) >= 0) throw new Error('The native caption source timing changed.');
-        var names = ['position', 'width', 'height', 'groups', 'smartFit'].concat(nativeRollUpNames), labels = ['Position', 'Width', 'Height', 'Groups per page', 'Smart line fit'].concat(nativeRollUpLabels), params = {}, descriptors = {}, properties = clip.components[target.componentIndex].properties;
+        var names = ['position', 'width', 'height', 'groups', 'smartFit', 'alignment'].concat(nativeRollUpNames), labels = ['Position', 'Width', 'Height', 'Groups per page', 'Smart line fit', 'Text alignment'].concat(nativeRollUpLabels), params = {}, descriptors = {}, properties = clip.components[target.componentIndex].properties;
         for (var n = 0; n < names.length; n++) {
             var name = names[n], param = null;
             for (var index = 0; index < properties.numItems; index++) if (String(properties[index].displayName) === labels[n]) {
@@ -1869,7 +1873,7 @@ var BetterCaptionsHost = (function () {
             }
             // Old native builds have no page-size parameter. Keep their geometry
             // usable, but never invent a writable group count.
-            if (!param && (name === 'groups' || name === 'smartFit' || nativeRollUpIndex(name) >= 0)) continue;
+            if (!param && (name === 'groups' || name === 'smartFit' || name === 'alignment' || nativeRollUpIndex(name) >= 0)) continue;
             if (!param || typeof param.isTimeVarying !== 'function' || typeof param.areKeyframesSupported !== 'function') throw new Error('Premiere did not expose the native caption ' + labels[n] + ' control.');
             params[name] = param;
             var animated = param.isTimeVarying() === true, keys = [], nativeKeys = animated ? param.getKeys() : null;
@@ -1880,13 +1884,14 @@ var BetterCaptionsHost = (function () {
             var sampleAt = sourceTicks === null ? timing.inTicks : sourceTicks;
             var value = nativeControlValue(animated ? param.getValueAtTime(ticksTime(sampleAt)) : param.getValue(), name), hasKey = false;
             for (var h = 0; h < keys.length; h++) if (keys[h].ticks === sourceTicks) hasKey = true;
-            var defaultValue = 150; if (name === 'position') defaultValue = [0.5, 0.9]; if (name === 'width') defaultValue = 1536; if (name === 'groups') defaultValue = 1; if (name === 'smartFit') defaultValue = 0;
+            var defaultValue = 150; if (name === 'position') defaultValue = [0.5, 0.9]; if (name === 'width') defaultValue = 1536; if (name === 'groups') defaultValue = 1; if (name === 'smartFit') defaultValue = 0; if (name === 'alignment') defaultValue = 2;
             var rollIndex = nativeRollUpIndex(name); if (rollIndex >= 0) defaultValue = nativeRollUpDefaults[rollIndex];
             descriptors[name] = { value: value, defaultValue: defaultValue, animated: animated, keyframesSupported: param.areKeyframesSupported() === true, hasKey: hasKey, keys: keys };
         }
         var receipt = { ok: true, clipNodeId: target.clipNodeId, timelineTicks: at, sourceTicks: sourceTicks, startTicks: timing.startTicks, endTicks: timing.endTicks, inTicks: timing.inTicks, outTicks: timing.outTicks, clock: 'clip-source', insideClip: inside, position: descriptors.position, width: descriptors.width, height: descriptors.height };
         if (descriptors.groups) receipt.groups = descriptors.groups;
         if (descriptors.smartFit) receipt.smartFit = descriptors.smartFit;
+        if (descriptors.alignment) receipt.alignment = descriptors.alignment;
         for (var rp = 0; rp < nativeRollUpNames.length; rp++) if (descriptors[nativeRollUpNames[rp]]) receipt[nativeRollUpNames[rp]] = descriptors[nativeRollUpNames[rp]];
         receipt.revision = stringify({ documentRevision: snapshot.revision, timelineTicks: at, controls: descriptors });
         var sampledSequence = sequence(p.sequenceId, p.projectPath);
@@ -1898,7 +1903,7 @@ var BetterCaptionsHost = (function () {
         catch (e) { return reply({ error: e.toString() }); }
     }
     function nativeControlCurves(receipt) {
-        var result = {}, names = ['position', 'width', 'height', 'groups', 'smartFit'].concat(nativeRollUpNames);
+        var result = {}, names = ['position', 'width', 'height', 'groups', 'smartFit', 'alignment'].concat(nativeRollUpNames);
         for (var i = 0; i < names.length; i++) {
             var descriptor = receipt[names[i]];
             if (!descriptor) continue;
@@ -1964,6 +1969,7 @@ var BetterCaptionsHost = (function () {
             if (!receipt.insideClip) throw new Error('Move the playhead inside the native caption clip before editing.');
             if (typeof before.track.isLocked !== 'function' || before.track.isLocked()) throw new Error('Unlock the native caption track before editing.');
             if (!descriptor || !param) throw new Error('Update the native caption effect to use this control.');
+            if (name === 'alignment' && request.operation === 'set' && (typeof request.value !== 'number' || request.value !== Math.floor(request.value))) throw new Error('Text alignment must use a whole-number mode.');
             var rollIndex = nativeRollUpIndex(name);
             if ((name === 'smartFit' || rollIndex === 0 || rollIndex === 3 || rollIndex === 10) && request.operation === 'set' && request.value !== 0 && request.value !== 1) throw new Error('Native caption toggles must use numeric zero or one.');
             if ((rollIndex === 1 || rollIndex === 7 || rollIndex === 8 || rollIndex === 11) && request.operation === 'set' && (typeof request.value !== 'number' || request.value !== Math.floor(request.value))) throw new Error('Native line counts and transition curves must use whole numbers.');

@@ -69,6 +69,12 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  assert(frame.words[0].style.opacity==0.5&&frame.words[1].style.color.r==1&&frame.words[1].style.color.g==0);
  auto narrow=layoutFrame(d,0.4,{0,0,200,1000},measure);assert(narrow.words.size()==3&&narrow.words[1].baseline>narrow.words[0].baseline);assert(narrow.words[1].style.fontSize==frame.words[1].style.fontSize&&narrow.words[1].width==frame.words[1].width);
  auto shortBox=layoutFrame(d,0.4,{0,0,1200,10},measure);assert(shortBox.overflow&&shortBox.words[0].x==frame.words[0].x&&shortBox.words[0].width==frame.words[0].width);
+ const auto explicitCenter=layoutFrame(d,.4,{0,0,1200,300,2},measure),leftAligned=layoutFrame(d,.4,{0,0,1200,300,1},measure),rightAligned=layoutFrame(d,.4,{0,0,1200,300,3},measure);
+ for(std::size_t i=0;i<frame.words.size();++i)assert(explicitCenter.words[i].x==frame.words[i].x&&explicitCenter.words[i].baseline==frame.words[i].baseline);
+ assert(leftAligned.words[0].x==0&&rightAligned.words.back().x+rightAligned.words.back().width==1200);
+ for(int alignment:{1,3}){const auto wrapped=layoutFrame(d,.4,{10,0,200,1000,alignment},measure);assert(wrapped.words.size()==3);for(const auto& word:wrapped.words){if(alignment==1)assert(word.x==10);else assert(word.x+word.width==210);}}
+ assert(sampledTextAlignment(1)==1&&sampledTextAlignment(1.49)==1&&sampledTextAlignment(1.5)==2&&sampledTextAlignment(2.5)==3&&sampledTextAlignment(100)==3&&sampledTextAlignment(-100)==1);
+ rejects([&]{sampledTextAlignment(std::numeric_limits<double>::infinity());});rejects([&]{layoutFrame(d,.4,{0,0,1200,300,0},measure);});
  assert(layoutFrame(d,1.2,{0,0,1200,300},measure).words.empty());assert(layoutFrame(d,2,{0,0,1200,300},measure).words.size()==1);
  assert(displayText("don't STOP naïve café",true)=="Don't Stop Naïve Café");
  assert(displayText("Mixed-case",false,1)=="MIXED-CASE"&&displayText("Mixed-case",false,2)=="mixed-case");
@@ -111,6 +117,7 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  assert(threeGroups.words.size()==6&&threeGroups.words[0].state==WordState::Spoken&&threeGroups.words[2].state==WordState::Current&&threeGroups.words[3].state==WordState::Upcoming);
  assert(threeGroups.words[0].style.opacity==.4&&threeGroups.words[2].style.color.g==1);
  assert(threeGroups.words[0].baseline==threeGroups.words[1].baseline&&threeGroups.words[2].baseline>threeGroups.words[1].baseline&&threeGroups.words[4].baseline>threeGroups.words[3].baseline);
+ for(int alignment:{1,3}){const auto alignedPage=layoutFrame(pages,1.2,{0,0,1200,1000,alignment},measure,11,.6,{},3);assert(alignedPage.words.size()==6);for(std::size_t line=0;line<3;++line){const auto& first=alignedPage.words[line*2];const auto& last=alignedPage.words[line*2+1];if(alignment==1)assert(first.x==0);else assert(last.x+last.width==1200);}}
  assert(layoutFrame(pages,2.95,{0,0,1200,1000},measure,11,.6,{},3).words.empty()); // Inter-page gap.
  const auto lastPage=layoutFrame(pages,3.1,{0,0,1200,1000},measure,11,.6,{},3);
  assert(lastPage.words.size()==2&&lastPage.words[0].wordIndex==6&&lastPage.words[0].baseline==threeGroups.words[0].baseline);
@@ -142,6 +149,8 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  assert(smartGroups.size()==2&&smartGroups[0].wordCount==3&&smartGroups[1].wordCount==1);
  const auto smartFrame=layoutFrame(smart,.1,{0,0,40,500},variableMeasure,1,.6,{},1,true);
  assert(smartFrame.words.size()==3&&!smartFrame.overflow); // maxChars=1 is preserved, not applied in smart mode.
+ const auto smartLeft=layoutFrame(smart,.1,{0,0,40,500,1},variableMeasure,1,.6,{},1,true),smartRight=layoutFrame(smart,.1,{0,0,40,500,3},variableMeasure,1,.6,{},1,true);
+ assert(smartLeft.words.size()==smartFrame.words.size()&&smartRight.words.size()==smartFrame.words.size()&&smartLeft.words[0].x==0&&smartRight.words.back().x+smartRight.words.back().width==40);
  assert(layoutFrame(smart,.1,{0,0,40,500},variableMeasure,1).words.size()==1);
  auto skinny=smart;for(auto& word:skinny.containers[0].words)word.text="iii";
  auto wide=smart;for(auto& word:wide.containers[0].words)word.text="WWW";
@@ -192,6 +201,7 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  auto leftRoll=roll;leftRoll.direction=3;const auto leftBefore=rollFrame(1.5,leftRoll),leftDuring=rollFrame(2.09,leftRoll);
  assert(leftBefore.words.size()==2&&leftDuring.words.size()==3&&leftDuring.words[0].x<leftBefore.words[0].x);
  auto rightRoll=leftRoll;rightRoll.direction=4;assert(rollFrame(2.09,rightRoll).words[0].x>leftBefore.words[0].x);
+ for(int direction:{1,2,3,4})for(int alignment:{1,3}){auto alignedRoll=roll;alignedRoll.direction=direction;const auto aligned=layoutFrame(rolling,1.5,{0,0,200,100,alignment},measure,56,.6,{},1,true,alignedRoll);assert(aligned.words.size()==2);for(const auto& word:aligned.words){if(alignment==1)assert(word.x==0);else assert(word.x+word.width==200);}}
  const auto clippedRoll=layoutFrame(rolling,.5,{0,0,200,5},measure,56,.6,{},1,false,roll);assert(clippedRoll.overflow&&clippedRoll.viewport.height==5);
  assert(rollFrame(4,roll).words.empty());
  auto manualRoll=rolling;manualRoll.containers.push_back({"manual-roll",true,{{"New.",5,6,true}}});

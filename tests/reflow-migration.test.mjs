@@ -46,7 +46,7 @@ function harness(t, options = {}) {
   const exports = {};
   vm.runInNewContext(transpile(source + extension), {
     exports, document, window: {}, HTMLElement: class {},
-    $state: Object.assign(value => value, { raw: value => value }), $derived: value => value, $effect() {},
+    $state: Object.assign(value => value, { raw: value => value }), $derived: Object.assign(value => value, {by: callback => callback()}), $effect() {},
     require(name) {
       if (name === 'svelte') return { onMount() {}, tick: async () => {} };
       if (name === './webview-setup') return { initWebview: () => ({ api }) };

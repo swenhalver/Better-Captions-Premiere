@@ -17,10 +17,10 @@ function fixture(){
    setValue(v){writes.push([name,'set',v]);if(!this.ignore)this.value=v;},addKey(t){writes.push([name,'add',t.ticks]);this.keys.push({ticks:t.ticks,value:this.getValueAtTime(t),interpolation:'default'});},
    setValueAtKey(t,v){writes.push([name,'key',t.ticks,v]);if(!this.ignore)this.keys.find(k=>k.ticks===t.ticks).value=v;},};
  }
- const position=parameter('Position',[.5,.9]),width=parameter('Width',1536),height=parameter('Height',150),groups=parameter('Groups per page',1),smartFit=parameter('Smart line fit',0),fontSize=parameter('Global font size (64 = 1x)',64),doc=parameter('Caption document (experimental)','BCDOC1:424341500200000000000000');
+ const position=parameter('Position',[.5,.9]),width=parameter('Width',1536),height=parameter('Height',150),groups=parameter('Groups per page',1),smartFit=parameter('Smart line fit',0),alignment=parameter('Text alignment',2),fontSize=parameter('Global font size (64 = 1x)',64),doc=parameter('Caption document (experimental)','BCDOC1:424341500200000000000000');
  const rollParams=Object.fromEntries(rollControls.map(([key,label,value])=>[key,parameter(label,value)]));
  const clip={nodeId:'clip',projectItem:{nodeId:'item',getMediaPath:()=>''},start:{ticks:ticks(10)},end:{ticks:ticks(15)},inPoint:{ticks:ticks(30)},outPoint:{ticks:ticks(35)},isAdjustmentLayer:()=>true,isSelected:()=>true,getSpeed:()=>1,isSpeedReversed:()=>false,
-  components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([position,width,height,doc,groups,fontSize,smartFit,...Object.values(rollParams)])}])};
+  components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([position,width,height,doc,groups,fontSize,smartFit,...Object.values(rollParams),alignment])}])};
  const track={clips:collection([clip]),isLocked:()=>locked};
  const seq={sequenceID:'seq-a',videoTracks:collection([track],'numTracks'),audioTracks:collection([],'numTracks'),getPlayerPosition:()=>({ticks:at}),setPlayerPosition(t){seeks.push(t);if(!this.ignoreSeek)at=t;this.onSeek?.();}};
  const project={path:'/project/edit.prproj',activeSequence:seq};
@@ -32,7 +32,7 @@ function fixture(){
  const read=(data={})=>call('readNativeCaptionControls',{snapshot,...data});
  const edit=(receipt,patch={})=>call('editNativeCaptionControl',{snapshot,request:{revision:receipt.revision,parameter:'width',operation:'set',value:600,atTicks:receipt.timelineTicks,...patch}});
  const seek=(receipt,patch={})=>call('seekNativeCaptionKeyframe',{snapshot,request:{revision:receipt.revision,parameter:'width',direction:'next',atTicks:receipt.timelineTicks,...patch}});
- return {parameter,read,edit,seek,seeks,snapshot,position,width,height,groups,smartFit,fontSize,rollParams,connections:()=>call('readCaptionConnections',{includeDocuments:true,knownLinks:[],generatedRoot:'/project/Better Captions/seq-a'}),doc,clip,seq,project,writes,set at(v){at=v;},set locked(v){locked=v;}};
+ return {parameter,read,edit,seek,seeks,snapshot,position,width,height,groups,smartFit,alignment,fontSize,rollParams,connections:()=>call('readCaptionConnections',{includeDocuments:true,knownLinks:[],generatedRoot:'/project/Better Captions/seq-a'}),doc,clip,seq,project,writes,set at(v){at=v;},set locked(v){locked=v;}};
 }
 
 test('native control bridge remains ExtendScript ES3 compatible',()=>{acorn.parse(source,{ecmaVersion:3});});
@@ -279,4 +279,26 @@ test('creative line transition modes reset to Scroll and retain the default wait
  const f=fixture(),document=f.doc.value;let r=f.read();assert.equal(r.rollUpTransition.value,1);assert.equal(r.rollUpWait.value,1);
  for(const value of [2,3,4]){r=f.edit(r,{parameter:'rollUpTransition',value});assert.equal(r.readbackVerified,true);assert.equal(r.rollUpTransition.value,value);assert.equal(r.rollUpWait.value,1);assert.equal(f.doc.value,document);}
  const after=f.edit(r,{parameter:'rollUpTransition',operation:'reset',value:undefined});assert.equal(after.rollUpTransition.value,1);assert.equal(after.rollUpWait.value,1);assert.deepEqual(f.writes,[['Line transition','set',2],['Line transition','set',3],['Line transition','set',4],['Line transition','set',1]]);
+});
+
+
+test('native text alignment reads Center, switches Left/Right and resets Center without changing transcript or layout controls',()=>{
+ const f=fixture(),document=f.doc.value,r=f.read();assert.equal(r.alignment.value,2);assert.equal(r.alignment.defaultValue,2);
+ const left=f.edit(r,{parameter:'alignment',value:1}),right=f.edit(left,{parameter:'alignment',value:3}),center=f.edit(right,{parameter:'alignment',operation:'reset',value:undefined});
+ assert.equal(left.readbackVerified,true);assert.equal(left.alignment.value,1);assert.equal(right.alignment.value,3);assert.equal(center.alignment.value,2);
+ for(const key of ['position','width','height','groups','smartFit',...rollControls.map(row=>row[0])])assert.deepEqual(center[key],r[key],key);
+ assert.equal(f.doc.value,document);assert.deepEqual(f.writes,[['Text alignment','set',1],['Text alignment','set',3],['Text alignment','set',2]]);
+});
+
+test('animated alignment uses the native source clock and preserves other keys and interpolation',()=>{
+ const f=fixture(),p=f.alignment;p.animated=true;p.keys=[{ticks:ticks(30),value:1,interpolation:'hold'},{ticks:ticks(32),value:2,interpolation:'bezier'},{ticks:ticks(34),value:3,interpolation:'hold'}];
+ const expected=structuredClone(p.keys),r=f.read();assert.equal(p.lastSample,ticks(32));const after=f.edit(r,{parameter:'alignment',value:1});expected[1].value=1;
+ assert.equal(after.readbackVerified,true);assert.equal(after.alignment.animated,true);assert.deepEqual(p.keys,expected);assert.deepEqual(f.writes,[['Text alignment','key',ticks(32),1]]);
+ const next=f.seek(after,{parameter:'alignment'});assert.equal(next.timelineTicks,ticks(14));assert.equal(next.alignment.value,3);assert.deepEqual(p.keys,expected);
+});
+
+test('alignment validates integer modes, quantizes native samples, and stays optional for older effect binaries',()=>{
+ for(const value of [0,4,1.5,true,'1',Infinity]){const f=fixture();assert.ok(f.edit(f.read(),{parameter:'alignment',value}).error);assert.deepEqual(f.writes,[]);}
+ const sampled=fixture();sampled.alignment.value=1.7;assert.equal(sampled.read().alignment.value,2);
+ const old=fixture(),properties=old.clip.components[0].properties;properties.splice(properties.indexOf(old.alignment),1);const r=old.read();assert.equal(r.ok,true);assert.equal(r.alignment,undefined);assert.match(old.edit(r,{parameter:'alignment',value:1}).error,/Update the native caption effect/);assert.deepEqual(old.writes,[]);
 });

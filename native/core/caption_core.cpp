@@ -133,6 +133,7 @@ std::size_t sampledGroupsPerPage(double value) {
  return static_cast<std::size_t>(std::floor(std::max(1.0,std::min(double(kMaxGroupsPerPage),value))+.5));
 }
 bool sampledSmartLineFit(double value) { require(finite(value),"invalid smart line fit");return value>=.5; }
+int sampledTextAlignment(double value) { require(finite(value),"invalid text alignment");return static_cast<int>(std::floor(std::max(1.0,std::min(3.0,value))+.5)); }
 RollUpSettings sampledRollUpSettings(double enabled,double lines,double duration,double boundary,double position,double thickness,double fade,double curve,double direction,double speed,double wait,double transition) {
  for(double value:{enabled,lines,duration,boundary,position,thickness,fade,curve,direction,speed,wait,transition})require(finite(value),"invalid roll-up sample");
  auto clamp=[](double value,double low,double high){return std::max(low,std::min(high,value));};
@@ -141,6 +142,9 @@ RollUpSettings sampledRollUpSettings(double enabled,double lines,double duration
  settings.transitionCurve=static_cast<int>(std::floor(clamp(curve,1,4)+.5));settings.direction=static_cast<int>(std::floor(clamp(direction,1,4)+.5));settings.speed=clamp(speed,.1,10);settings.waitForLine=wait>=.5;settings.transition=static_cast<int>(std::floor(clamp(transition,1,4)+.5));return settings;
 }
 namespace {
+double lineInset(const LayoutBox& box,double width) {
+ if(box.alignment==1)return 0;if(box.alignment==3)return box.width-width;return (box.width-width)/2;
+}
 double rollCurve(double value,int curve) {
  const auto x=std::max(0.0,std::min(1.0,value));
  if(curve==2)return x*x*(3-2*x);if(curve==3)return x*x;if(curve==4)return 1-(1-x)*(1-x);return x;
@@ -218,7 +222,7 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
      const auto state=time<word.end?WordState::Current:WordState::Spoken;
      auto style=state==WordState::Current?d.style.current:d.style.spoken;const auto metrics=measure(slot.text,style);
      const double pad=style.bubble?style.padding:0,width=metrics.width+2*pad;
-     const double x=left+(box.width-line.width)/2+slot.left+(slot.reserved.width-width)/2;
+     const double x=left+lineInset(box,line.width)+slot.left+(slot.reserved.width-width)/2;
      DrawWord run{slot.text,container.id,slot.index,state,style,x,top+maxAscent,width,metrics.ascent+metrics.descent+2*pad};
      if(settled)settled->emplace(slot.index,run);
      run.style.opacity*=alpha;
@@ -288,6 +292,7 @@ std::vector<Phrase> regroupToWidth(const Document& d,double width,const MeasureT
 Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measureInput,std::size_t maxChars,double pause,const TransformText& transform,std::size_t groupsPerPage,bool smartLineFit,const RollUpSettings& rollUp) {
  require(finite(time),"invalid time");require(finite(box.x)&&finite(box.y)&&finite(box.width)&&finite(box.height)&&box.width>0&&box.height>0,"invalid layout box");require(bool(measureInput),"missing text measurer");
  require(std::abs(box.x)<=1e7&&std::abs(box.y)<=1e7&&box.width<=1e7&&box.height<=1e7,"layout geometry exceeds bounds");
+ require(box.alignment>=1&&box.alignment<=3,"invalid text alignment");
  require(groupsPerPage>=1&&groupsPerPage<=kMaxGroupsPerPage,"invalid groups per page");
  require(maxChars>=1&&maxChars<=500,"invalid character count");
  validateRollUp(rollUp);
@@ -308,7 +313,7 @@ Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const Measu
   if(time<phrases[begin].start||time>=pageEnd)continue;
   const auto it=std::find_if(d.containers.begin(),d.containers.end(),[&](const CaptionContainer& c){return c.id==phrases[begin].containerId;});
   std::vector<DrawWord> line;double lineWidth=0,lineAscent=0,lineDescent=0,y=box.y;
-  auto flush=[&](){if(line.empty())return;double x=box.x+(box.width-lineWidth)/2;bool firstRun=true;for(auto& run:line){if(!firstRun&&!punctuation(run.text))x+=d.style.wordSpacing;run.x=x;run.baseline=y+lineAscent;x+=run.width;result.words.push_back(std::move(run));firstRun=false;}double h=lineAscent+lineDescent;if(y+h>box.y+box.height)result.overflow=true;y+=h*d.style.lineHeight;line.clear();lineWidth=lineAscent=lineDescent=0;};
+  auto flush=[&](){if(line.empty())return;double x=box.x+lineInset(box,lineWidth);bool firstRun=true;for(auto& run:line){if(!firstRun&&!punctuation(run.text))x+=d.style.wordSpacing;run.x=x;run.baseline=y+lineAscent;x+=run.width;result.words.push_back(std::move(run));firstRun=false;}double h=lineAscent+lineDescent;if(y+h>box.y+box.height)result.overflow=true;y+=h*d.style.lineHeight;line.clear();lineWidth=lineAscent=lineDescent=0;};
   for(std::size_t phraseIndex=begin;phraseIndex<last;++phraseIndex){const auto& p=phrases[phraseIndex];
    for(std::size_t i=p.firstWord;i<p.firstWord+p.wordCount;++i){const auto& w=it->words[i];WordState state=time<w.start?WordState::Upcoming:time<w.end?WordState::Current:WordState::Spoken;
    WordStyle s=state==WordState::Current?d.style.current:state==WordState::Spoken?d.style.spoken:d.style.upcoming;

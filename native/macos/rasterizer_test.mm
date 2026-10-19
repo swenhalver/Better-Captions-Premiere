@@ -64,6 +64,9 @@ int main(){
  Document single;single.containers.push_back({"orientation",false,{{"ROW",0,1,false}}});
  for(auto* s:{&single.style.current,&single.style.upcoming,&single.style.spoken})s->fontSize=32;
  auto topImage=macos::rasterize(single,.5,{11,7,250,55},320,240);auto topBounds=visible(topImage);
+ check(topImage.pixels==macos::rasterize(single,.5,{11,7,250,55,2},320,240).pixels,"Explicit native center alignment changed the existing default pixels");
+ const auto alignLeft=macos::rasterize(single,.5,{11,7,250,55,1},320,240),alignRight=macos::rasterize(single,.5,{11,7,250,55,3},320,240);
+ check(visible(alignLeft).left<topBounds.left&&visible(alignRight).left>topBounds.left,"Native left/right alignment did not shift actual glyph pixels within the same box");
  check(count(topImage)>0&&topBounds.top>=7&&topBounds.bottom<62,"Top-row order/clip orientation incorrect");
  auto bottomImage=macos::rasterize(single,.5,{11,177,250,55},320,240);auto bottomBounds=visible(bottomImage);
  check(count(bottomImage)>0&&bottomBounds.top>=177&&bottomBounds.bottom<232,"Bottom-row order/clip orientation incorrect");

@@ -57,7 +57,7 @@
 </section>
 
 <style>
-  .native-geometry { padding-block:var(--caption-space-s);border-block-start:1px solid var(--color-panel-border); }
+  .native-geometry { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,20rem),1fr));gap:var(--caption-space-xs) var(--caption-space-s); }
   .native-geometry__row { display:grid;grid-template-columns:1.25rem minmax(4rem,.7fr) minmax(5.5rem,1fr) auto 1.8rem;align-items:center;gap:var(--caption-space-xs);min-block-size:2.1rem;border-block-end:1px solid var(--color-panel-border);font-size:var(--caption-type-s); }
   .native-geometry__animation { display:grid;place-items:center;color:var(--color-panel-secondary);& svg {inline-size:1.1rem;block-size:1.1rem;} }
   .native-geometry__animation--enabled { color:var(--color-accent); }
@@ -66,6 +66,6 @@
   .native-geometry__navigation {display:flex;align-items:center;}
   .native-geometry__key {display:grid;place-items:center;inline-size:1.2rem;block-size:1.8rem;padding:0;border:0;background:transparent;color:var(--color-accent);cursor:pointer;& svg {inline-size:1rem;block-size:1rem;}&:disabled {color:var(--color-panel-secondary);opacity:.4;cursor:default;}&:focus-visible {outline:1px solid var(--color-accent);}}
   .native-geometry__reset { display:grid;place-items:center;inline-size:1.8rem;block-size:1.8rem;border:0;background:transparent;color:var(--color-panel-secondary);cursor:pointer;& svg {inline-size:1.2rem;block-size:1.2rem;}&:hover:enabled {color:var(--color-panel-text);}&:focus-visible {outline:1px solid var(--color-accent);outline-offset:1px;}&:disabled {opacity:.45;cursor:default;} }
-  .native-geometry__error,.native-geometry__hint { margin-block:var(--caption-space-xs);font-size:var(--caption-type-xs);color:var(--color-panel-secondary); }
+  .native-geometry__error,.native-geometry__hint { grid-column:1/-1;margin-block:var(--caption-space-xs);font-size:var(--caption-type-xs);color:var(--color-panel-secondary); }
   .native-geometry__error { color:var(--color-error); }
 </style>

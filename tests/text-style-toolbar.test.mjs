@@ -22,6 +22,10 @@ const picker = compile(readFileSync(pickerUrl, 'utf8'), { generate: 'server', fi
 assert.deepEqual(picker.warnings, [], 'Compile the installed font picker without accessibility warnings');
 const imports = base => (_match, quote, specifier) => `from ${quote}${specifier.endsWith('.svelte') ? specifier.replace(/\.svelte$/, '.mjs') : new URL(specifier.endsWith('.ts') ? specifier : `${specifier}.ts`, base).href}${quote}`;
 writeFileSync(join(folder, 'FontPicker.mjs'), picker.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(pickerUrl)));
+const alignmentUrl=new URL('../webview-ui/src/components/AlignmentButtons.svelte',import.meta.url);
+const alignment=compile(readFileSync(alignmentUrl,'utf8'),{generate:'server',filename:'AlignmentButtons.svelte'});
+assert.deepEqual(alignment.warnings,[]);
+writeFileSync(join(folder,'AlignmentButtons.mjs'),alignment.js.code);
 const numberUrl = new URL('../webview-ui/src/components/ScrubbableNumber.svelte', import.meta.url);
 const number = compile(readFileSync(numberUrl, 'utf8'), { generate: 'server', filename: 'ScrubbableNumber.svelte' });
 assert.deepEqual(number.warnings, [], 'Compile the actual numeric control without accessibility warnings');
@@ -247,15 +251,30 @@ test('the installed font control is a searchable combobox and Italic stays enabl
   assert.doesNotMatch(italic, /disabled/); assert.match(italic, /synthetic slant/);
 });
 
-test('the real toolbar starts compact with each advanced control closed', () => {
+test('advanced styling uses five real tabs with Spacing selected by default', () => {
   const html = view({});
-  for (const name of ['All words', 'Past', 'Current', 'Next', 'Spacing', 'Outline', 'Shadow', 'Bubble', 'Layout']) assert.match(html, new RegExp(`>${name}<`));
-  assert.equal((html.match(/class="text-style__more-button[^\"]*"[^>]*aria-expanded="false"/g) ?? []).length, 5);
-  assert.doesNotMatch(html, /Letter spacing, px|Word spacing, %|Whole caption background|X offset, px/);
-  assert.match(html, /aria-label="Font family"/);
-  assert.match(html, /aria-label="Bold"/);
-  assert.match(html, /aria-label="Italic"/);
-  assert.match(html, /aria-label="Font weight"/);
-  assert.match(html, /aria-label="Text case"/);
-  assert.match(html, /aria-label="Text opacity, %"/);
+  assert.match(html,/role="tablist"[^>]*aria-label="Text settings"/);
+  assert.equal((html.match(/role="tab"/g)??[]).length,5);
+  assert.equal((html.match(/aria-selected="true"/g)??[]).length,1);
+  assert.match(html,/role="tabpanel"/);assert.match(html,/Word spacing, %/);
+  assert.doesNotMatch(html,/text-style__more-button/);
+  for (const label of ['Font family','Bold','Italic','Font weight','Text case','Text opacity, %'])assert.match(html,new RegExp(`aria-label="${label}"`));
+});
+test('native Spacing and Layout tabs are enabled and native word spacing is editable in pixels',()=>{
+  const html=view({nativeMode:true,style:{...fresh(),wordSpacing:12}});
+  for(const label of ['Spacing','Outline','Layout']){
+    const tab=html.match(new RegExp(`<button[^>]*role="tab"[^>]*>${label}</button>`))[0];assert.doesNotMatch(tab,/disabled/);
+  }
+  assert.match(html,/Word spacing, px/);assert.doesNotMatch(html,/Letter spacing, px|Word spacing, %/);
+  const value=html.match(/<button[^>]*aria-label="Word spacing, px"[^>]*>/)?.[0];
+  assert.ok(value);assert.doesNotMatch(value,/disabled/);
+});
+
+
+test('left center and right alignment icons live in normal All words controls only',()=>{
+ const html=view({style:{...fresh(),textAlign:'right'}});
+ for(const name of ['Align left','Align center','Align right'])assert.match(html,new RegExp(`aria-label="${name}"`));
+ assert.match(html,/<button[^>]*aria-label="Align right"[^>]*aria-pressed="true"/);
+ assert.doesNotMatch(html,/<select[^>]*value="right"/);
+ for(const scope of ['spoken','current','upcoming'])assert.doesNotMatch(view({scope}),/aria-label="Align (?:left|center|right)"/);
 });

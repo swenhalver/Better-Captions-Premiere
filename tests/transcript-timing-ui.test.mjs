@@ -549,10 +549,13 @@ test('a completed timing drag preserves concurrent placement and word-style meta
 });
 
 test('native smart line fit remains an accessible option and retains the fixed limit while enabled',()=>{
- const props={...transcriptProps(),smartLineFit:true,onSmartLineFitChange(){}};
+ const props={...transcriptProps(),smartLineFit:true,smartCharacterCapacity:24,onSmartLineFitChange(){}};
  const html=render(TranscriptPreview,{props}).body;
  assert.match(html,/Smart line fit/);assert.match(html,/<input[^>]*type="checkbox"[^>]*checked/);
- assert.match(html,/<input[^>]*type="number"[^>]*value="50"[^>]*disabled/);
+ assert.match(html,/<input[^>]*type="number"[^>]*value="24"[^>]*readonly/);
+ assert.match(html,/Characters per line \(estimated\)/);
+ const manual=render(TranscriptPreview,{props:{...props,smartLineFit:false}}).body;
+ assert.match(manual,/<input[^>]*type="number"[^>]*value="50"/);
  assert.match(html,/5% safety margin/);
  const fixed=render(TranscriptPreview,{props:{...props,smartLineFit:false}}).body;
  assert.match(fixed,/50 characters/);assert.doesNotMatch(fixed,/<input[^>]*type="number"[^>]*value="50"[^>]*disabled/);

@@ -66,6 +66,7 @@ PF_Err parameters(PF_InData* in_data, PF_OutData* out_data) {
  PF_ADD_FLOAT_SLIDERX("Scroll speed",.1,10,.1,3,1,PF_Precision_HUNDREDTHS,0,0,RollUpSpeedId);
  PF_ADD_FLOAT_SLIDERX("Wait for line to finish",0,1,0,1,1,PF_Precision_INTEGER,0,0,RollUpWaitId);
  PF_ADD_FLOAT_SLIDERX("Line transition",1,4,1,4,1,PF_Precision_INTEGER,0,0,LineTransitionId);
+ PF_ADD_FLOAT_SLIDERX("Text alignment",1,3,1,3,2,PF_Precision_INTEGER,0,0,TextAlignmentId);
  out_data->num_params=Count;
 #if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
  return better_captions::adobe::ui_probe::registerUI(in_data);
@@ -106,6 +107,7 @@ PF_Err render(PF_InData* in_data, PF_ParamDef* params[], PF_LayerDef* output) {
  const double x=double(params[Position]->u.td.x_value)/65536.0;
  const double y=double(params[Position]->u.td.y_value)/65536.0;
  LayoutBox box{x-width/2,y-height/2,width,height};
+ box.alignment=sampledTextAlignment(params[TextAlignment]?params[TextAlignment]->u.fs_d.value:2.0);
  const bool missingDocument=!params[Transcript]->u.arb_d.value;
  auto document=missingDocument?demo():decode(adobe::bytes(in_data,params[Transcript]->u.arb_d.value));
  // Only the exact built-in fixture bypasses persisted-origin mapping. Matching

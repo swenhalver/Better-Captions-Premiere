@@ -3,11 +3,11 @@
   import type { AnimationConfig, StyleConfig } from '../lib/types';
   import { addStylePreset, capturePresetLook, changeStylePreset, validatePresetLibrary, type PresetLibrary, type PresetLook } from '../lib/style-presets';
   interface Props {
-    style: StyleConfig; animation: AnimationConfig; disabled?: boolean; isDemo?: boolean;
+    style: StyleConfig; animation: AnimationConfig; disabled?: boolean; isDemo?: boolean; nativeMode?:boolean;
     load: () => Promise<PresetLibrary>; save: (library: PresetLibrary) => Promise<PresetLibrary>;
     onApply: (look: PresetLook) => Promise<void>;
   }
-  let { style, animation, disabled = false, isDemo = false, load, save, onApply }: Props = $props();
+  let { style, animation, disabled = false, isDemo = false, nativeMode=false, load, save, onApply }: Props = $props();
   let library = $state<PresetLibrary | null>(null);
   let selectedId = $state('');
   let mode = $state<'save' | 'manage' | null>(null);
@@ -37,6 +37,7 @@
     await tick(); nameInput?.focus();
   }
   function cancel() { mode = null; confirm = null; error = ''; }
+  function currentLook(){const {wordSpacing:_nativePixels,...other}=style;return capturePresetLook(nativeMode?other:style,animation);}
   async function commit(action: 'save' | 'rename' | 'replace' | 'delete') {
     if (busy || disabled || !library || reloadNeeded) return;
     busy = true; error = ''; status = '';
@@ -45,8 +46,8 @@
       // Record IDs are not credentials; avoid secure-context-only APIs in plugin: webviews.
       const id = action === 'save' ? `preset-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}` : selectedId;
       const oldName = selected?.name;
-      const next = action === 'save' ? addStylePreset(library, name, capturePresetLook(style, animation), id) :
-        changeStylePreset(library, id, action === 'delete' ? 'delete' : action === 'rename' ? { name } : { look: capturePresetLook(style, animation) });
+      const next = action === 'save' ? addStylePreset(library, name, currentLook(), id) :
+        changeStylePreset(library, id, action === 'delete' ? 'delete' : action === 'rename' ? { name } : { look: currentLook() });
       writing = true;
       library = validatePresetLibrary(await save(next));
       selectedId = action === 'delete' ? library.presets[0]?.id ?? '' : id;

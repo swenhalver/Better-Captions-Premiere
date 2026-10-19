@@ -252,6 +252,7 @@ inline Snapshot snapshot(State& s,const PrGPUFilterInstance& i,const PrGPUFilter
  const auto geometry=previewGeometry(r.inDownsampleFactorX,r.inDownsampleFactorY,point.mPoint.x,point.mPoint.y,
   number(param(s,i,Width,r.inClipTime)),number(param(s,i,Height,r.inClipTime)),r.inRenderWidth,r.inRenderHeight);
  const double sx=geometry.sx,sy=geometry.sy;result.box=geometry.box;
+ if(count>=TextAlignment)result.box.alignment=sampledTextAlignment(number(param(s,i,TextAlignment,r.inClipTime)));
  const double chars=number(param(s,i,MaxChars,r.inClipTime));require(chars>=1&&chars<=500&&std::floor(chars)==chars,"Invalid grouping count");result.maxChars=static_cast<std::size_t>(chars);
  if(count>=GroupsPerPage)result.groupsPerPage=sampledGroupsPerPage(number(param(s,i,GroupsPerPage,r.inClipTime)));
  if(count>=SmartLineFit)result.smartLineFit=sampledSmartLineFit(number(param(s,i,SmartLineFit,r.inClipTime)));

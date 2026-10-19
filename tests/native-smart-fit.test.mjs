@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { smartFitCaptionPhrases, smartFitDisplayText, createCanvasWordMeasure } from '../webview-ui/src/lib/native-effect/smart-fit.ts';
-import { deriveNativePanelPhrases, rehydrateNativePanel, prepareNativePanelUpdate } from '../webview-ui/src/lib/native-effect/panel.ts';
+import { smartFitCharacterCapacity, smartFitCaptionPhrases, smartFitDisplayText, createCanvasWordMeasure } from '../webview-ui/src/lib/native-effect/smart-fit.ts';
+import { nativeSmartFitCharacterCapacity, deriveNativePanelPhrases, rehydrateNativePanel, prepareNativePanelUpdate } from '../webview-ui/src/lib/native-effect/panel.ts';
 import { DEFAULT_STYLE } from '../webview-ui/src/lib/types.ts';
 import { resolveAppearance } from '../webview-ui/src/lib/appearance.ts';
 import { defaultNativeStyle, NATIVE_EFFECT_MATCH_NAME } from '../webview-ui/src/lib/native-effect/contract.ts';
@@ -79,4 +79,25 @@ test('absent state metadata uses neutral overrides; malformed or partial metadat
   binding.clip.lineFitStates.current={...neutral,...patch};assert.throws(()=>deriveNativePanelPhrases(binding,session,()=>10),/state overrides/);assert.throws(()=>deriveNativePanelPhrases(binding,session,null),/state overrides/);
  }
  for(const metadata of [null,{},[],{current:neutral},{current:undefined,upcoming:neutral,spoken:neutral},{current:null,upcoming:neutral,spoken:neutral},{current:neutral,upcoming:neutral,spoken:neutral,extra:neutral}]){binding.clip.lineFitStates=metadata;assert.throws(()=>deriveNativePanelPhrases(binding,session,()=>10),/state overrides/);}
+});
+
+
+test('Smart character number follows width, actual letter widths and largest highlighted appearance',()=>{
+ const states=appearances(),options={width:200,wordSpacing:10,appearances:states};
+ const measure=(text,s)=>Array.from(text).reduce((sum,c)=>sum+(c==='i'?2:12),0)*s.fontSize/10;
+ const narrow=smartFitCharacterCapacity([caption('iiii iiii')],options,measure),wide=smartFitCharacterCapacity([caption('WWWW WWWW')],options,measure);
+ assert.ok(narrow>wide);
+ assert.ok(smartFitCharacterCapacity([caption('WWWW WWWW')],{...options,width:100},measure)<wide);
+ states[1].fontSize=20;assert.ok(smartFitCharacterCapacity([caption('WWWW WWWW')],options,measure)<wide);
+ states[1].bubble=true;states[1].padding=20;assert.ok(smartFitCharacterCapacity([caption('WWWW WWWW')],options,measure)<wide);
+ assert.equal(smartFitCharacterCapacity([],options,measure),null);
+});
+test('displayed Smart capacity tracks native overrides while retaining manual limit and carrier bytes',()=>{
+ const {binding,session,entry}=bound(),before=structuredClone(session),measure=(text,s)=>text.length*s.fontSize;
+ const first=nativeSmartFitCharacterCapacity(binding,session,measure);
+ binding.clip.lineFitWidth*=2;assert.ok(nativeSmartFitCharacterCapacity(binding,session,measure)>first);
+ binding.clip.lineFitFontScale=2;assert.equal(nativeSmartFitCharacterCapacity(binding,session,measure),first);
+ assert.equal(session.style.maxChars,before.style.maxChars);assert.equal(encodeNativeTransportText(prepareNativePanelUpdate(binding,session)),entry.documentText);
+ assert.equal(nativeSmartFitCharacterCapacity(binding,session,null),null);
+ binding.clip.smartLineFit=false;assert.equal(nativeSmartFitCharacterCapacity(binding,session,measure),null);
 });

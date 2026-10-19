@@ -1,5 +1,5 @@
 import { nativeCaptionPhrases } from './phrases.ts';
-import { createCanvasWordMeasure, smartFitCaptionPhrases, applyNativeFitState, type SmartFitMeasure } from './smart-fit.ts';
+import { createCanvasWordMeasure, smartFitCharacterCapacity, smartFitCaptionPhrases, applyNativeFitState, type SmartFitMeasure } from './smart-fit.ts';
 import type { NativeLineFitStates } from '../../cep-api.ts';
 import { validateCharacterLimit } from '../transcript/parser.ts';
 import { validTransparentCarrier } from './carrier.ts';
@@ -22,13 +22,14 @@ export interface NativePanelBinding {
 const clone = <T,>(value: T): T => structuredClone(value);
 const pairs = [['upcomingWord', 'upcoming'], ['activeWord', 'current'], ['spokenWord', 'spoken']] as const;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-const unsupportedGlobal = ['backgroundEnabled', 'backgroundColor', 'backgroundOpacity', 'backgroundPadding', 'backgroundRadius', 'positionX', 'positionY', 'textAlign', 'maxWidth', 'wordSpacing'] as const;
-const unsupportedWord = ['letterSpacing', 'strokeEnabled', 'shadowEnabled'] as const;
+const unsupportedGlobal = ['backgroundEnabled', 'backgroundColor', 'backgroundOpacity', 'backgroundPadding', 'backgroundRadius', 'positionX', 'positionY', 'textAlign', 'maxWidth'] as const;
+const unsupportedWord = ['letterSpacing'] as const;
 export const NATIVE_PANEL_CAPABILITIES = {
   storage: 'embedded-native-document', geometry: 'premiere-effect-controls', animation: 'premiere-effect-controls',
   unsupportedGlobalStyleFields: unsupportedGlobal, unsupportedWordStyleFields: unsupportedWord,
-  supportedWordStyleFields: ['fontFamily', 'fontWeight', 'fontWeightOffset', 'italic', 'fontSize', 'sizeScale', 'color', 'opacity', 'bubble', 'bubbleColor', 'bubbleOpacity', 'padding', 'radius', 'strokeColor', 'strokeWidth', 'strokeOpacity', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'],
-  case: 'shared-as-typed-upper-lower-or-ascii-titlecase', wordSpacing: 'native-pixels-not-panel-percent',
+  supportedGlobalStyleFields: ['wordSpacing', 'lineHeight'],
+  supportedWordStyleFields: ['fontFamily', 'fontWeight', 'fontWeightOffset', 'italic', 'fontSize', 'sizeScale', 'color', 'opacity', 'bubble', 'bubbleColor', 'bubbleOpacity', 'padding', 'radius', 'strokeEnabled', 'strokeColor', 'strokeWidth', 'strokeOpacity', 'shadowEnabled', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'],
+  case: 'shared-as-typed-upper-lower-or-ascii-titlecase', wordSpacing: 'editable-native-pixels', effectToggles: 'outline-width-and-shadow-alpha',
 } as const;
 
 /** Only GUID braces/case are equivalent. Arbitrary identifiers remain exact. */
@@ -112,13 +113,25 @@ export function deriveNativePanelPhrases(binding: NativePanelBinding, session: S
   const clip = binding.clip;
   if (clip.smartLineFit !== undefined && typeof clip.smartLineFit !== 'boolean') throw new Error('Invalid native smart line fit mode.');
   if (!clip.smartLineFit) return nativeCaptionPhrases(session.captions, session.style.maxChars);
+  const options=nativeFitOptions(binding,session);
+  if (!measure) return nativeCaptionPhrases(session.captions, session.style.maxChars);
+  return smartFitCaptionPhrases(session.captions, options, measure);
+}
+
+function nativeFitOptions(binding:NativePanelBinding,session:SessionState){
+  const clip=binding.clip;
   const width = clip.lineFitWidth, scale = clip.lineFitFontScale;
   if (typeof width !== 'number' || !Number.isFinite(width) || width < 1 || width > 8192 || typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0 || scale > 16) throw new Error('Native smart line fit geometry is unavailable. Refresh Better Captions.');
   const overrides = clip.lineFitStates;
   if (overrides !== undefined && (typeof overrides !== 'object' || overrides === null || Array.isArray(overrides) || Object.keys(overrides).length !== 3 || !['upcoming','current','spoken'].every(key => Object.hasOwn(overrides,key) && overrides[key as keyof NativeLineFitStates] !== undefined))) throw new Error('Invalid native smart line fit state overrides.');
   const appearances = pairs.map(([key,nativeKey]) => applyNativeFitState(resolveAppearance(session.style,key),scale,overrides?.[nativeKey]));
-  if (!measure) return nativeCaptionPhrases(session.captions, session.style.maxChars);
-  return smartFitCaptionPhrases(session.captions, { width, wordSpacing: binding.document.style.wordSpacing, appearances }, measure);
+  return {width,wordSpacing:session.style.wordSpacing??binding.document.style.wordSpacing,appearances};
+}
+
+export function nativeSmartFitCharacterCapacity(binding:NativePanelBinding,session:SessionState,measure:SmartFitMeasure|null=createCanvasWordMeasure()):number|null{
+  if(!binding.clip.smartLineFit)return null;
+  const options=nativeFitOptions(binding,session);
+  return measure?smartFitCharacterCapacity(session.captions,options,measure):null;
 }
 
 export function rehydrateNativePanel(entry: NativePanelEntry, sequence: SequenceInfo, measure?: SmartFitMeasure | null) {
@@ -133,7 +146,7 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
     shadowEnabled: document.style.upcoming.shadowColor.a > 0 && (document.style.upcoming.shadowBlur > 0 || document.style.upcoming.shadowX !== 0 || document.style.upcoming.shadowY !== 0),
     shadowColor: hexColor(document.style.upcoming.shadowColor), shadowOpacity: document.style.upcoming.shadowColor.a, shadowBlur: document.style.upcoming.shadowBlur,
     shadowOffsetX: document.style.upcoming.shadowX, shadowOffsetY: document.style.upcoming.shadowY, backgroundEnabled: false, textAlign: 'center',
-    lineHeight: document.style.lineHeight, wordSpacing: undefined, textTransform: document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none'),
+    lineHeight: document.style.lineHeight, wordSpacing: document.style.wordSpacing, textTransform: document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none'),
     upcomingWord: panelWord(document.style.upcoming, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')), activeWord: panelWord(document.style.current, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')), spokenWord: panelWord(document.style.spoken, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')) };
   const captions: CaptionItem[] = nativeCaptionPhrases(document.captions.map(caption => ({ id: caption.id, text: caption.words.map(word => word.text).join(' '),
     startTime: caption.start + timelineOffsetSeconds, endTime: caption.end + timelineOffsetSeconds, manualSplit: caption.manualSplit,
@@ -147,7 +160,7 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
   const warnings = [
     'Native Position, Width, Height and animated overrides remain in Premiere Effect Controls. Panel edits do not rewrite their keyframes.',
     'Native typography supports available font weights, relative B and real or synthetic italic. Letter spacing, alignment and whole-caption backgrounds remain unsupported.',
-    `Native word spacing is ${document.style.wordSpacing} px; the panel percentage control is unavailable. Outline/shadow enable switches have no separate persisted native flag.`,
+    `Native word spacing is edited in pixels. Outline and shadow toggles map to native outline width and shadow opacity; remembered disabled values stay in this editing session.`,
   ];
   if (entry.smartLineFit) warnings.push(measurement ? 'Smart line fit phrase rows use browser font measurement; the native renderer remains authoritative.' : 'Smart line fit measurement is unavailable in this editor; phrase rows use the saved character limit while native rendering retains Smart line fit.');
   warnings.push('Native text case supports shared As typed, Uppercase, Lowercase or ASCII Title Case; the source transcript is preserved.');
@@ -158,8 +171,6 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
 function unsupported(field: string): never { throw new Error(`Native captions cannot apply ${field}. Edit supported document styles or use Premiere Effect Controls; the native document was preserved.`); }
 function updateWord(previous: NativeWordStyle, before: ReturnType<typeof resolveAppearance>, after: ReturnType<typeof resolveAppearance>, beforeRaw: Partial<WordAppearance>|undefined, afterRaw: Partial<WordAppearance>|undefined): NativeWordStyle {
   const result = clone(previous);
-  if (!after.strokeEnabled && after.strokeWidth !== before.strokeWidth) unsupported('outline width while the outline is disabled');
-  if (!after.shadowEnabled && ['shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'].some(key => before[key as keyof typeof before] !== after[key as keyof typeof after])) unsupported('shadow extents or opacity while the shadow is disabled');
   if (before.fontFamily !== after.fontFamily) result.fontFamily = after.fontFamily;
   if(before.fontWeight!==after.fontWeight||beforeRaw?.fontWeight!==afterRaw?.fontWeight||beforeRaw?.fontWeightOffset!==afterRaw?.fontWeightOffset){result.fontWeight=after.fontWeight;result.fontWeightOffset=afterRaw?.fontWeightOffset??null;}
   if(before.italic!==after.italic||beforeRaw?.italic!==afterRaw?.italic)result.italic=after.italic;
@@ -171,7 +182,7 @@ function updateWord(previous: NativeWordStyle, before: ReturnType<typeof resolve
   if (before.bubbleOpacity !== after.bubbleOpacity) result.bubbleColor.a = after.bubbleOpacity;
   if (before.padding !== after.padding) result.padding = after.padding;
   if (before.radius !== after.radius) result.radius = after.radius;
-  if (before.strokeWidth !== after.strokeWidth) result.outlineWidth = after.strokeWidth;
+  if (before.strokeEnabled !== after.strokeEnabled || before.strokeWidth !== after.strokeWidth) result.outlineWidth = after.strokeEnabled ? (after.strokeWidth > 0 ? after.strokeWidth : 2) : 0;
   if (before.strokeColor !== after.strokeColor) result.outlineColor = editColor(result.outlineColor, after.strokeColor);
   if (before.strokeOpacity !== after.strokeOpacity) result.outlineColor.a = after.strokeOpacity;
   if (before.shadowColor !== after.shadowColor) result.shadowColor = editColor(result.shadowColor, after.shadowColor);
@@ -179,6 +190,12 @@ function updateWord(previous: NativeWordStyle, before: ReturnType<typeof resolve
   if (before.shadowBlur !== after.shadowBlur) result.shadowBlur = after.shadowBlur;
   if (before.shadowOffsetX !== after.shadowOffsetX) result.shadowX = after.shadowOffsetX;
   if (before.shadowOffsetY !== after.shadowOffsetY) result.shadowY = after.shadowOffsetY;
+  const shadowChanged = before.shadowEnabled !== after.shadowEnabled || ['shadowOpacity','shadowBlur','shadowOffsetX','shadowOffsetY'].some(key => before[key as keyof typeof before] !== after[key as keyof typeof after]);
+  if (shadowChanged && !after.shadowEnabled) result.shadowColor.a = 0;
+  if (before.shadowEnabled !== after.shadowEnabled && after.shadowEnabled) {
+    result.shadowColor.a = after.shadowOpacity > 0 ? after.shadowOpacity : .5;
+    if (result.shadowBlur === 0 && result.shadowX === 0 && result.shadowY === 0) result.shadowBlur = 4;
+  }
   return result;
 }
 
@@ -200,6 +217,11 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
   if(edited.style.fontWeight!==before.style.fontWeight||pairs.some(([key])=>edited.style[key]?.fontWeightOffset!==before.style[key]?.fontWeightOffset&&(edited.style[key]?.fontWeightOffset===0||edited.style[key]?.fontWeightOffset===100)))document.style.baseFontWeight=edited.style.fontWeight;
   for (const [key, nativeKey] of pairs) document.style[nativeKey] = updateWord(document.style[nativeKey], resolveAppearance(before.style, key), resolveAppearance(edited.style, key),before.style[key],edited.style[key]);
   if (edited.style.lineHeight !== before.style.lineHeight) document.style.lineHeight = edited.style.lineHeight;
+  if (edited.style.wordSpacing !== before.style.wordSpacing) {
+    const spacing = edited.style.wordSpacing;
+    if (typeof spacing !== 'number' || !Number.isFinite(spacing) || spacing < 0 || spacing > 4096) throw new Error('Native word spacing must be between 0 and 4096 pixels.');
+    document.style.wordSpacing = spacing;
+  }
   document.style.titleCase = styles[0].textTransform === 'titlecase';
   if (styles[0].textTransform === 'uppercase' || styles[0].textTransform === 'lowercase') document.style.letterCase = styles[0].textTransform; else delete document.style.letterCase;
   const upcoming = document.style.upcoming;
@@ -210,6 +232,9 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
     textTransform: document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none') };
   for (const key of Object.keys(projectedBase) as (keyof typeof projectedBase)[]) {
     if (same(edited.style[key], before.style[key])) continue;
+    // Disabled sliders retain useful values in the session, while the codec
+    // represents their off state with zero outline width / shadow alpha.
+    if (key === 'strokeWidth' && !edited.style.strokeEnabled && !projectedBase.strokeEnabled || key === 'shadowOpacity' && !edited.style.shadowEnabled && !projectedBase.shadowEnabled) continue;
     const wanted = edited.style[key], rendered = projectedBase[key];
     if (typeof wanted === 'number' && typeof rendered === 'number' ? Math.abs(wanted - rendered) > 1e-7 : wanted !== rendered) unsupported(`a base ${key} override hidden by the word-state styles`);
   }
