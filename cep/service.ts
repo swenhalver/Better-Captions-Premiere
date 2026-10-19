@@ -7,6 +7,7 @@ export const SERVICE_ACTIONS = [
   'preflightCaptionClips', 'prepareCaptionTrack', 'applyCaptionClips', 'readTimeline', 'showInPremiere',
   'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'patchCaptionKeyValues',
   'readCaptionConnections', 'writeNativeCaptionDocument',
+  'generateNativeGraphics',
 ] as const;
 const READ_ACTIONS = new Set(['getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 const ARG_COUNTS: Record<string, number[]> = {
@@ -15,6 +16,7 @@ const ARG_COUNTS: Record<string, number[]> = {
   preflightCaptionClips: [2, 3], prepareCaptionTrack: [2, 3, 4], applyCaptionClips: [2, 3, 4], readTimeline: [1], showInPremiere: [1],
   selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1], readCaptionAreaDescriptor: [1], patchCaptionKeyValues: [2],
   readCaptionConnections:[2],writeNativeCaptionDocument:[2],
+  generateNativeGraphics:[2],
 };
 interface Request { version: number; id: string; createdAt: number; expiresAt?: number; sequenceId: string; projectPath: string; action: string; args: any[]; }
 interface ServiceOptions { api?: any; fs?: any; path?: any; os?: any; crypto?: any; process?: any; platform?: any; root?: string; intervalMs?: number; maxRequestsPerPoll?: number; }
@@ -37,6 +39,10 @@ export function validateServiceRequest(value: unknown, filename: string, now = D
   if(request.action==='readCaptionConnections'){
     const [links,options]=request.args;
     if(!Array.isArray(links)||links.length>10000||!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).length!==1||typeof options.includeDocuments!=='boolean')throw new Error('Invalid caption discovery arguments.');
+  }
+  if(request.action==='generateNativeGraphics'){
+    const [source,options]=request.args;
+    if(!source||typeof source!=='object'||Array.isArray(source)||!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).length!==1||!['save-only','import-new-sequence'].includes(options.mode))throw new Error('Invalid explicit native graphics generation arguments.');
   }
   if (READ_ACTIONS.has(request.action)) {
     const expiresAt = request.expiresAt ?? request.createdAt + 10000;
@@ -73,6 +79,7 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
     case 'readCaptionSelection': return api.readCaptionSelection(a, id);
     case 'readCaptionConnections': return api.readCaptionConnections(id,a,b);
     case 'writeNativeCaptionDocument': return api.writeNativeCaptionDocument(a,b,id);
+    case 'generateNativeGraphics': return api.generateNativeGraphics(a,b,id);
     default: throw new Error('Unsupported caption service action.');
   }
 }

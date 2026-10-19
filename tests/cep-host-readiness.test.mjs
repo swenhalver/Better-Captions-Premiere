@@ -8,7 +8,7 @@ import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url),ts=require('../webview-ui/node_modules/typescript'),acorn=require('../webview-ui/node_modules/acorn');
 const source=fs.readFileSync(new URL('../webview-ui/src/cep-api.ts',import.meta.url),'utf8');
 const code=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
-const methods=['context','seek','selectCaptionClip','readCaptionSelection','readCaptionConnections','writeNativeCaptionDocument','readCaptionGeometry','readCaptionMotion','readCaptionAreaDescriptor','patchCaptionKeyValues','preflight','prepareCaptionTrack','apply','readTimeline','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation'];
+const methods=['context','seek','selectCaptionClip','readCaptionSelection','readCaptionConnections','writeNativeCaptionDocument','readCaptionGeometry','readCaptionMotion','readCaptionAreaDescriptor','patchCaptionKeyValues','preflight','prepareCaptionTrack','apply','readTimeline','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation','importNativeGraphics'];
 const fixtureRoot=path.resolve(import.meta.dirname,'fixtures','host-readiness');
 function fixture(options={}){
  const context={ok:true,id:'seq-a',projectPath:path.join(fixtureRoot,'project','edit.prproj'),width:720,height:1280,fps:24},directory=path.join(fixtureRoot,'data','seq-a'),jobs=new Map(),commands=[],loads=[],nativeCalls=[];

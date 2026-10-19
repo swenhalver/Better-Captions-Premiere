@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const platform = require('./platform.cjs');
 const jobs = new Map();
 const readJobs = new Set();
+const nativeGraphicsArtifacts = new Map();
 const PNG_SIGNATURE = Buffer.from('89504e470d0a1a0a', 'hex');
 
 /** The executable and every argument are separate: no command shell is involved. */
@@ -73,6 +74,42 @@ function disposeReadJob(file) {
 }
 
 function save(dir, data) { return writeJSON(path.join(dir, 'captions.better-captions.json'), data); }
+function newNativeGraphicsId() { return crypto.randomBytes(16).toString('hex'); }
+/** Only application-generated content is written, in a new owned directory. */
+function saveNativeGraphics(context, generationId, output) {
+  if (!/^[a-f0-9]{32}$/.test(generationId)) throw new Error('Invalid native graphics generation identity.');
+  const root = directory(context);
+  if (root !== context.dir || fs.lstatSync(root).isSymbolicLink() || fs.realpathSync(root) !== root) throw new Error('Native graphics need the captured sequence asset directory.');
+  if (!output || typeof output.xml !== 'string' || typeof output.srt !== 'string' || output.manifest?.generationId !== generationId) throw new Error('Invalid generated native graphics artifacts.');
+  const files = [['graphics.xml', output.xml], ['manifest.json', JSON.stringify(output.manifest, null, 2) + '\n'], ['source-plan.srt', output.srt]];
+  if (files.some(([, content]) => !content || Buffer.byteLength(content, 'utf8') > 16 * 1024 * 1024)) throw new Error('Native graphics artifacts are empty or exceed their size limit.');
+  const folder = path.join(root, 'native-graphics-' + generationId);
+  fs.mkdirSync(folder, { recursive: false, mode: 0o700 });
+  const artifacts = { directory: folder, xml: path.join(folder, 'graphics.xml'), manifest: path.join(folder, 'manifest.json'), srt: path.join(folder, 'source-plan.srt') };
+  try {
+    for (const [name, content] of files) fs.writeFileSync(path.join(folder, name), content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    nativeGraphicsArtifacts.set(folder, { generationId, root, xml: output.xml });
+    return artifacts;
+  } catch (error) { throw new Error('Native graphics output is incomplete and preserved at ' + folder + ': ' + error.message); }
+}
+function nativeGraphicsImportPayload(context, generationId, artifacts, sequenceName) {
+  const owned = artifacts && nativeGraphicsArtifacts.get(artifacts.directory);
+  if (!owned || owned.generationId !== generationId || owned.root !== context.dir || sequenceName !== 'Better Captions graphics ' + generationId) throw new Error('Only this generated native graphics output can be imported.');
+  const folder = artifacts.directory, file = path.join(folder, 'graphics.xml');
+  for (const dir of [context.dir, folder]) if (!fs.lstatSync(dir).isDirectory() || fs.lstatSync(dir).isSymbolicLink() || fs.realpathSync(dir) !== dir) throw new Error('Native graphics artifact ownership changed.');
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 * 1024 || fs.realpathSync(file) !== file || fs.readFileSync(file, 'utf8') !== owned.xml) throw new Error('The generated native graphics XML changed before import.');
+  return { version: 1, sequenceId: context.id, projectPath: context.projectPath, generatedRoot: context.dir, generationId, sequenceName, xmlPath: file, xmlText: owned.xml, width: context.width, height: context.height, fps: context.fps };
+}
+function saveNativeGraphicsResult(artifacts, result) {
+  if (!artifacts || !nativeGraphicsArtifacts.has(artifacts.directory)) throw new Error('Invalid native graphics receipt directory.');
+  try {
+    if (fs.realpathSync(artifacts.directory) !== artifacts.directory || fs.lstatSync(artifacts.directory).isSymbolicLink()) throw new Error('Invalid native graphics receipt directory.');
+    const file = path.join(artifacts.directory, 'import-result.json');
+    fs.writeFileSync(file, JSON.stringify(result, null, 2) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    return file;
+  } finally { nativeGraphicsArtifacts.delete(artifacts.directory); }
+}
 function load(dir) {
   const file = path.join(dir, 'captions.better-captions.json');
   if (!fs.existsSync(file)) return null;
@@ -187,12 +224,15 @@ function fontValues(text, maximum) {
     return { min, max, range: !!match };
   });
 }
+function isValidFontFamilyName(name) {
+  return typeof name === 'string' && !!name.trim() && name.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(name);
+}
 function fontCatalogBuilder() {
   const families = new Map();
   function add(names, weights, italic, ranges = []) {
     if (!Array.isArray(names) || !names.length || names.length > 256 || typeof italic !== 'boolean') throw new Error('The installed font family metadata is malformed.');
     for (let name of names) {
-      if (typeof name !== 'string' || !name.trim() || name.length > 4096 || /[\u0000-\u001f\u007f]/.test(name)) throw new Error('The installed font family name is invalid.');
+      if (!isValidFontFamilyName(name)) throw new Error('The installed font family name is invalid.');
       name = name.trim(); const id = name.normalize('NFC').toLocaleLowerCase();
       let entry = families.get(id);
       if (!entry) {
@@ -269,14 +309,20 @@ function parseWindowsFontCatalog(text) {
   try { rows = JSON.parse(fontText(text)); } catch (error) { throw new Error('Windows did not return a valid installed font catalog: ' + error.message); }
   if (!Array.isArray(rows) || !rows.length || rows.length > FONT_CATALOG_ROWS) throw new Error('Windows returned an empty or oversized installed font catalog.');
   const builder = fontCatalogBuilder();
+  let skippedFaces = 0;
   for (const row of rows) {
-    if (!row || typeof row !== 'object' || Array.isArray(row) || !Number.isInteger(row.weight)) throw new Error('Windows returned malformed installed font metadata.');
+    if (!row || typeof row !== 'object' || Array.isArray(row) || !Number.isInteger(row.weight) || !Array.isArray(row.families) || !row.families.length || row.families.length > 256 || typeof row.italic !== 'boolean') throw new Error('Windows returned malformed installed font metadata.');
+    if (row.weight < 1 || row.weight > 1000) throw new Error('The installed font weight is invalid.');
+    // A malformed alias invalidates the whole physical face. Do not rename it,
+    // expose partial aliases, or let its weights change a valid family's entry.
+    if (row.families.some(name => !isValidFontFamilyName(name))) { skippedFaces++; continue; }
     builder.add(row.families,[row.weight],row.italic);
   }
+  if (skippedFaces) console.warn(`[Better Captions] Skipped ${skippedFaces} installed Windows font face${skippedFaces === 1 ? '' : 's'} with invalid family identifiers.`);
   return builder.finish();
 }
 async function fontCatalog() {
-  const options = { timeout:15000, strictOutput:true, maxOutputBytes:FONT_CATALOG_BYTES };
+  const options = { timeout:process.platform === 'win32' ? 30000 : 15000, strictOutput:true, maxOutputBytes:FONT_CATALOG_BYTES };
   if (process.platform === 'win32') {
     const text = await run(platform.systemPowerShell(), ['-NoLogo','-NoProfile','-NonInteractive','-Sta','-EncodedCommand',Buffer.from(WINDOWS_FONT_SCRIPT,'utf16le').toString('base64')], { ...options,env:platform.powerShellEnv() });
     return parseWindowsFontCatalog(text);
@@ -285,4 +331,4 @@ async function fontCatalog() {
 }
 async function fonts() { return (await fontCatalog()).map(entry=>entry.family); }
 
-module.exports = { run, directory, save, load, writeJSON, readJob, disposeReadJob, jobDir, saveFrames, encode, fonts, fontCatalog, parseFontConfigCatalog, parseWindowsFontCatalog, cssWeightFromFontconfig, FONTCONFIG_FORMAT, WINDOWS_FONT_SCRIPT, frameRateArgument, fs, path, platform };
+module.exports = { run, directory, save, load, newNativeGraphicsId, saveNativeGraphics, nativeGraphicsImportPayload, saveNativeGraphicsResult, writeJSON, readJob, disposeReadJob, jobDir, saveFrames, encode, fonts, fontCatalog, parseFontConfigCatalog, parseWindowsFontCatalog, cssWeightFromFontconfig, FONTCONFIG_FORMAT, WINDOWS_FONT_SCRIPT, frameRateArgument, fs, path, platform };

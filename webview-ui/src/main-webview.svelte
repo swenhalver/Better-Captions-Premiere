@@ -9,6 +9,7 @@
   import { connectionKey, reconnectLegacyCaptions, sameSequenceId, type CaptionConnections } from "./lib/clip-connections";
   import { rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate } from "./lib/native-effect/panel";
   import { encodeNativeTransportText } from "./lib/native-effect/encode";
+  import type { NativeGraphicsGenerationResult } from "./lib/native-graphics/generate";
   import { sessionManager } from "./lib/session/manager.svelte";
   import { validateStylePatch, validateCaptionPatch, validateAreaRead, validateAreaEdit, type AgentHandler } from "./lib/agent-bridge";
   import { retime, validateCaptions } from "./lib/transcript/edit";
@@ -51,6 +52,8 @@
   let isSyncing = $state(false);
   let timelineBusy = $state(false);
   let exportBusy = $state(false);
+  // This request and its outcome outlive the sequence-keyed ExportButton.
+  let nativeGraphics = $state({ exporting: false, result: null as NativeGraphicsGenerationResult | null, failure: null as string | null, attempted: false, projectReviewed: false });
   let areaBusy = $state(false);
   let agentAreaBusy = $state(false);
   let areaControlRevision = $state("");
@@ -77,7 +80,7 @@
   let lastDocumentRead = 0;
   let reconnectGeneration = 0;
   const legacySessions = new Map<string, SessionState>();
-  const editsLocked = $derived(timelineBusy && !(automaticOutput && outputPhase !== 'committing'));
+  const editsLocked = $derived(nativeGraphics.exporting || timelineBusy && !(automaticOutput && outputPhase !== 'committing'));
   const legacyBaselines = new Map<string, { signature?: string; changed?: boolean; error?: string }>();
   let locationScope = $state<"global" | "caption">("global");
   let appliedSignatures = $state<Record<string, string>>({});
@@ -143,7 +146,7 @@
     } catch (problem) {
       if (!submitted || retryableNativeRead(problem)) throw problem;
       throw Object.assign(new Error('The caption change could not be confirmed. Further automatic changes are paused to protect this layer.'), { code: 'BC_OUTPUT_UNCONFIRMED', recoverable: false, outputApplied: true, cause: problem });
-    } finally { timelineBusy = exportBusy || areaBusy || agentAreaBusy; }
+    } finally { timelineBusy = exportBusy || nativeGraphics.exporting || areaBusy || agentAreaBusy; }
   }
   function watchRevisionChanged() { motionWatcher?.notifyRevision(++watcherRevision); }
   function markOutputEdited(_id: string) {
@@ -152,11 +155,37 @@
   }
   function setTimelineBusy(busy: boolean) {
     exportBusy = busy;
-    timelineBusy = exportBusy || areaBusy || agentAreaBusy;
+    timelineBusy = exportBusy || nativeGraphics.exporting || areaBusy || agentAreaBusy;
     if (busy && !automaticReflow) motionWatcher?.reset();
   }
-  function setAreaBusy(busy: boolean) { areaBusy = busy; timelineBusy = exportBusy || areaBusy || agentAreaBusy; }
-  function setAgentAreaBusy(busy: boolean) { agentAreaBusy = busy; timelineBusy = exportBusy || areaBusy || agentAreaBusy; }
+  function setAreaBusy(busy: boolean) { areaBusy = busy; timelineBusy = exportBusy || nativeGraphics.exporting || areaBusy || agentAreaBusy; }
+  function setAgentAreaBusy(busy: boolean) { agentAreaBusy = busy; timelineBusy = exportBusy || nativeGraphics.exporting || areaBusy || agentAreaBusy; }
+  function setNativeGraphicsBusy(busy: boolean) {
+    nativeGraphics.exporting = busy;
+    timelineBusy = exportBusy || nativeGraphics.exporting || areaBusy || agentAreaBusy;
+    if (busy) motionWatcher?.reset();
+  }
+  function reviewNativeGraphics(reviewed: boolean) { if (!nativeGraphics.exporting) nativeGraphics.projectReviewed = reviewed; }
+  async function createNativeGraphics(sequenceId: string) {
+    const session = sessionManager.current;
+    if (!session || session.sequenceId !== sequenceId || session.nativeClipId || !session.captions.length || session.isLoading || api.isDemo || typeof api.generateNativeGraphics !== 'function' || timelineBusy || isRefreshing || isSyncing) return;
+    if ((nativeGraphics.failure || nativeGraphics.result?.status === 'import-unconfirmed') && !nativeGraphics.projectReviewed) return;
+    const source = plain({ sequenceId, captions: session.captions, style: session.style, animation: session.animation,
+      ...(session.transcriptJson === undefined ? {} : { transcriptJson: session.transcriptJson }) });
+    nativeGraphics.attempted = true; nativeGraphics.projectReviewed = false;
+    setNativeGraphicsBusy(true);
+    try {
+      const result = await api.generateNativeGraphics(source, { mode: 'import-new-sequence' }, sequenceId);
+      if (!result?.ok || !['saved', 'imported', 'import-unconfirmed'].includes(result.status) || typeof result.artifacts?.xml !== 'string') {
+        throw new Error('Premiere returned an incomplete native graphics result.');
+      }
+      nativeGraphics.result = result; nativeGraphics.failure = null;
+    } catch (problem) {
+      nativeGraphics.result = null;
+      const detail = message(problem).replace(/^\s*Error:\s*/, '').replace(/\s+/g, ' ').trim();
+      nativeGraphics.failure = (detail.length > 180 ? detail.slice(0, 177).trimEnd() + '…' : detail) || 'Native graphics could not be created.';
+    } finally { setNativeGraphicsBusy(false); }
+  }
   function selectFirst() {
     const session = sessionManager.current;
     if (!session) { selectedId = null; return; }
@@ -619,7 +648,7 @@
       selectedId, nativeSelection: nativeSelection ? { ...nativeSelection } : null,
       liveOutput: { ...liveStatus, ...liveOutput?.diagnostics(), nativeAvailable },
       connection: { status: connectionStatus, kind: session?.nativeClipId ? 'native-effect' : 'generated-movie', clipNodeId: session?.nativeClipId, reconnect: reconnect?.diagnostics() ?? null },
-      busy: { timeline: timelineBusy, export: exportBusy, area: areaBusy, refreshing: isRefreshing, syncing: isSyncing, loading: !!session?.isLoading },
+      busy: { timeline: timelineBusy, export: exportBusy || nativeGraphics.exporting, area: areaBusy, refreshing: isRefreshing, syncing: isSyncing, loading: !!session?.isLoading },
       hasSavedWatchSignature: !!caption?.motionProfile?.watchSignature,
     };
   }
@@ -853,7 +882,7 @@
           <TextStyleToolbar style={session.style} {fonts} {fontCatalog} {fontsLoading} {fontsError} onRefreshFonts={() => { void refreshFonts(); }} scope={wordState} nativeMode={!!session.nativeClipId} onScopeChange={changeWordState} onUpdate={handleStyle} />
           {#if session.nativeClipId}<p class="caption-help">Position, box size and animation are in this layer’s Effect Controls.</p>{/if}
           {#if selected && !session.nativeClipId}
-            <TextAreaControls caption={selected} sequenceId={session.sequenceId} frameRate={session.frameRate} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} refreshRevision={areaControlRevision} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={exportBusy||agentAreaBusy||isRefreshing||isSyncing||session.isLoading} isDemo={api.isDemo} read={api.readCaptionArea} edit={api.editCaptionArea} getCurrentTime={async()=>{if(api.isDemo)return session.currentTime;const info=await api.getActiveSequenceInfo();if(!info||info.id!==session.sequenceId)throw new Error("The active sequence changed. Refresh Position & size before editing.");return info.playhead??session.currentTime;}} onSeek={async(time)=>{const result=!api.isDemo?await api.showInPremiere(time,session.sequenceId):null;if(sessionManager.current?.sequenceId!==session.sequenceId)throw new Error("The active sequence changed while seeking.");sessionManager.setCurrentTime(typeof result?.time==='number'?result.time:time);}} onSelect={selectSelectedCaption} onBusy={setAreaBusy} onChanged={areaChanged}/>
+            <TextAreaControls caption={selected} sequenceId={session.sequenceId} frameRate={session.frameRate} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} refreshRevision={areaControlRevision} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={exportBusy||nativeGraphics.exporting||agentAreaBusy||isRefreshing||isSyncing||session.isLoading} isDemo={api.isDemo} read={api.readCaptionArea} edit={api.editCaptionArea} getCurrentTime={async()=>{if(api.isDemo)return session.currentTime;const info=await api.getActiveSequenceInfo();if(!info||info.id!==session.sequenceId)throw new Error("The active sequence changed. Refresh Position & size before editing.");return info.playhead??session.currentTime;}} onSeek={async(time)=>{const result=!api.isDemo?await api.showInPremiere(time,session.sequenceId):null;if(sessionManager.current?.sequenceId!==session.sequenceId)throw new Error("The active sequence changed while seeking.");sessionManager.setCurrentTime(typeof result?.time==='number'?result.time:time);}} onSelect={selectSelectedCaption} onBusy={setAreaBusy} onChanged={areaChanged}/>
           {/if}
           {#if !session.nativeClipId}
           <AnimationPanel animation={session.animation} onUpdate={handleAnimation} />
@@ -882,7 +911,7 @@
       {#if liveStatus.phase === "error" && liveStatus.message}<p class="caption-message caption-message--error" role="alert">{liveStatus.message}</p>{/if}
       {#if reflowStatus.phase === "error" && reflowStatus.message}<p class="caption-message caption-message--error" role="alert">{reflowStatus.message}</p>{/if}
       {#if !session.nativeClipId}{#key session.sequenceId}
-        <ExportButton bind:this={exportButton} captions={session.captions} style={session.style} animation={session.animation} frameWidth={session.frameWidth} frameHeight={session.frameHeight} frameRate={session.frameRate} duration={session.duration} sequenceName={session.sequenceName} sequenceId={session.sequenceId} currentTime={session.currentTime} {selectedId} tracks={sequenceInfo?.tracks ?? []} hostApi={api} onUpdated={recordApplied} onApplied={recordMonitorApplied} onBusy={setTimelineBusy} onPhase={(phase) => outputPhase = phase} liveStatus={liveStatus} disabled={areaBusy || isRefreshing || isSyncing || session.isLoading} />
+        <ExportButton bind:this={exportButton} captions={session.captions} style={session.style} animation={session.animation} frameWidth={session.frameWidth} frameHeight={session.frameHeight} frameRate={session.frameRate} duration={session.duration} sequenceName={session.sequenceName} sequenceId={session.sequenceId} currentTime={session.currentTime} {selectedId} tracks={sequenceInfo?.tracks ?? []} hostApi={api} {nativeGraphics} onCreateNativeGraphics={createNativeGraphics} onNativeProjectReviewed={reviewNativeGraphics} onUpdated={recordApplied} onApplied={recordMonitorApplied} onBusy={setTimelineBusy} onPhase={(phase) => outputPhase = phase} liveStatus={liveStatus} disabled={nativeGraphics.exporting || areaBusy || isRefreshing || isSyncing || session.isLoading} />
       {/key}{/if}
     </footer>
   {:else}<div class="caption-app__empty"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="3" y="6" width="26" height="20" rx="2"/><path d="M8 13h10M8 19h16"/></svg><h2>Start with a sequence</h2><p>Open a sequence in Premiere. Better Captions connects automatically.</p><button class="caption-button" onclick={() => { void refreshSequence(); }} disabled={isRefreshing}>{isRefreshing ? "Looking for sequence…" : "Refresh sequence"}</button></div>{/if}

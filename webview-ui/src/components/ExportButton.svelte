@@ -5,6 +5,7 @@
   import { bundleCaptionContainers, needsLegacyConsolidation, consolidationDraft } from '../lib/export/containers';
   import { restoreDeletedCaptionLinks } from '../lib/export/deleted-links';
   import { retryableNativeRead } from '../lib/live-output';
+  import type { NativeGraphicsGenerationResult } from '../lib/native-graphics/generate';
 
   interface Props {
     captions: CaptionItem[]; style: StyleConfig; animation: AnimationConfig;
@@ -16,9 +17,20 @@
     onBusy?: (busy: boolean) => void; disabled?: boolean;
     onPhase?: (phase: 'idle' | 'preparing' | 'rendering' | 'committing') => void;
     liveStatus?: { phase: string; message: string };
+    transcriptJson?: unknown;
+    nativeGraphics?: { exporting: boolean; result: NativeGraphicsGenerationResult | null; failure: string | null; attempted: boolean; projectReviewed: boolean };
+    onCreateNativeGraphics?: (sequenceId: string) => Promise<void>;
+    onNativeProjectReviewed?: (reviewed: boolean) => void;
   }
-  let { captions, style, animation, frameWidth, frameHeight, frameRate, duration, sequenceName, sequenceId, tracks = [], hostApi, onUpdated, onApplied, currentTime, selectedId, onBusy, onPhase, liveStatus, disabled = false }: Props = $props();
+  let { captions, style, animation, frameWidth, frameHeight, frameRate, duration, sequenceName, sequenceId, tracks = [], hostApi, onUpdated, onApplied, currentTime, selectedId, onBusy, onPhase, liveStatus, disabled = false,
+    nativeGraphics = { exporting: false, result: null, failure: null, attempted: false, projectReviewed: false }, onCreateNativeGraphics, onNativeProjectReviewed }: Props = $props();
   let isExporting = $state(false), selectedTrack = $state(-1);
+  let nativeExporting = $derived(nativeGraphics.exporting);
+  let nativeResult = $derived(nativeGraphics.result);
+  let nativeFailure = $derived(nativeGraphics.failure);
+  let nativeAttempted = $derived(nativeGraphics.attempted);
+  let nativeNeedsReview = $derived(Boolean(nativeFailure) || nativeResult?.status === 'import-unconfirmed');
+  let nativeNotes = $derived(nativeWarningSummaries(nativeResult?.warnings));
   let trackSequenceId = $state<string | null>(null);
   let progress = $state<ExportProgress | null>(null), error = $state<string | null>(null), status = $state<string | null>(null);
   let controller: AbortController | null = null;
@@ -158,6 +170,37 @@
     } finally { isExporting = false; progress = null; controller = null; setPhase('idle'); onBusy?.(false); }
   }
   function cancel() { controller?.abort(); }
+
+  function compactNativeMessage(message: string) {
+    const text = message.replace(/^\s*Error:\s*/, '').replace(/\s+/g, ' ').trim();
+    return text.length > 180 ? text.slice(0, 177).trimEnd() + '…' : text;
+  }
+
+  function nativeWarningSummaries(warnings: unknown) {
+    if (!Array.isArray(warnings)) return { items: [], remaining: 0, receiptUnsaved: false };
+    const notes = new Set<string>();
+    let receiptUnsaved = false;
+    // Runtime warnings follow the baseline disclosure; show those first.
+    for (const warning of warnings.slice(-32).reverse()) {
+      if (typeof warning !== 'string') continue;
+      if (warning.includes('import-result.json')) receiptUnsaved = true;
+      if (/^(Import graphics\.xml|Titles start at the center\.|Past\/current\/next|Native edits are independent\.|Import confirmed the new sequence identity|Do not automatically retry|The import outcome is uncertain\.)/.test(warning)) continue;
+      const weight = /^Weight (\d+) is requested as (Bold|Regular)/.exec(warning);
+      const note = warning.startsWith('Only phrase text,') ? 'Premiere may substitute missing fonts.'
+        : warning.startsWith('Font-size normalization') ? 'Font size is calibrated for Premiere 26.5.2 at 1080p. Check other frame sizes and hosts.'
+        : weight ? `Font weight ${weight[1]} uses ${weight[2]}.`
+        : warning.includes('import-result.json') ? 'The import receipt could not be saved. Keep the saved XML path before closing this panel.'
+        : compactNativeMessage(warning);
+      if (note) notes.add(note);
+    }
+    const items = [...notes];
+    return { items: items.slice(0, 4), remaining: Math.max(0, items.length - 4), receiptUnsaved };
+  }
+
+  async function createNativeGraphics() {
+    if (disabled || isExporting || nativeExporting || !captions.length || hostApi.isDemo || typeof hostApi.generateNativeGraphics !== 'function' || nativeNeedsReview && !nativeGraphics.projectReviewed) return;
+    await onCreateNativeGraphics?.(sequenceId);
+  }
 </script>
 
 <div class="caption-export">
@@ -172,11 +215,38 @@
     </select>
   </label>
   {/if}
-  {#if captions.length && liveStatus?.phase !== 'error'}<p class="caption-export__live" role="status" aria-live="polite">{hostApi.isDemo ? 'Live captions · available in Premiere' : isExporting ? `${phase === 'committing' ? 'Updating video…' : 'Rendering…'}${progress ? ` ${progress.percent}%` : ''}` : liveStatus?.message || 'Live captions'}</p>{/if}
+  {#if captions.length && liveStatus?.phase !== 'error'}<p class="caption-export__live" role="status" aria-live="polite">{hostApi.isDemo ? 'Live captions · available in Premiere' : nativeExporting ? 'Creating native graphics…' : isExporting ? `${phase === 'committing' ? 'Updating video…' : 'Rendering…'}${progress ? ` ${progress.percent}%` : ''}` : liveStatus?.message || 'Live captions'}</p>{/if}
   {#if isExporting && progress}
     <progress class="caption-export__progress" value={progress.current} max={progress.total} aria-label="Caption rendering progress"></progress>
     <button class="caption-button" onclick={cancel}>Cancel before applying</button>
   {/if}
+  <details class="caption-export__native">
+    <summary>Native graphics <span>Experimental</span></summary>
+    <p>Creates a separate sequence with editable phrases, font, size and fill. Native edits are independent of live caption updates.</p>
+    <p>Saved placement, box dimensions and wrapping are not transferred. Word styles, stroke, shadow, bubbles and animation stay in the source settings.</p>
+    <p>Import checks only sequence identity and settings. Inspect text, timing and styling in Premiere before use.</p>
+    {#if hostApi.isDemo}<p>Available in Premiere.</p>{:else if typeof hostApi.generateNativeGraphics !== 'function'}<p>Update the Better Captions service to enable native graphics.</p>{:else if !captions.length}<p>Transcribe or load captions first.</p>{/if}
+    {#if nativeFailure}
+      <p class="caption-export__warning" role="alert">The last creation could not be confirmed. A sequence may already exist in the Project panel. {nativeFailure}</p>
+    {/if}
+    {#if nativeResult}
+      <p class:caption-export__warning={nativeResult.status === 'import-unconfirmed'} role="status" aria-live="polite">{nativeResult.status === 'imported' ? `Created “${nativeResult.nativeSequence?.name ?? 'Native graphics'}”. Sequence identity and settings confirmed; inspect the graphics visually before use.` : nativeResult.status === 'import-unconfirmed' ? 'The import is unconfirmed. A sequence may already exist in the Project panel. The XML and source settings are saved.' : 'The XML and source settings are saved. Import the XML through Premiere’s File menu.'}</p>
+      {#if nativeNotes.items.length}
+        <ul class="caption-export__notes" aria-label="Native graphics warnings">
+          {#each nativeNotes.items as note}<li>{note}</li>{/each}
+          {#if nativeNotes.remaining}<li>{nativeNotes.remaining} more warnings were returned. Inspect this sequence before use.</li>{/if}
+        </ul>
+      {/if}
+      {#if nativeResult.status !== 'imported' || nativeNotes.receiptUnsaved}
+        <label class="caption-field">Saved XML<input readonly value={nativeResult.artifacts.xml} title={nativeResult.artifacts.xml} onclick={(event) => event.currentTarget.select()} /></label>
+      {/if}
+    {/if}
+    {#if nativeNeedsReview}
+      <p class="caption-export__warning">Check the Project panel first. Creating another sequence may duplicate the previous attempt.</p>
+      <label class="caption-export__review"><input type="checkbox" checked={nativeGraphics.projectReviewed} onchange={(event) => onNativeProjectReviewed?.(event.currentTarget.checked)} disabled={disabled || isExporting || nativeExporting} />I checked the Project panel.</label>
+    {/if}
+    <button class="caption-button" onclick={createNativeGraphics} disabled={disabled || isExporting || nativeExporting || !captions.length || hostApi.isDemo || typeof hostApi.generateNativeGraphics !== 'function' || !onCreateNativeGraphics || nativeNeedsReview && !nativeGraphics.projectReviewed}>{nativeExporting ? 'Creating native graphics…' : nativeAttempted ? 'Create another sequence' : 'Create native graphics'}</button>
+  </details>
   {#if error}<p class="caption-message caption-message--error" role="alert">{error}</p>{/if}
 </div>
 
@@ -185,4 +255,14 @@
   .caption-export__live { color: var(--color-panel-secondary); font-size: var(--caption-type-xs); margin: 0; }
   .caption-export__track { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--caption-space-m); }
   .caption-export__progress { inline-size: 100%; block-size: .35rem; accent-color: var(--color-accent); }
+  .caption-export__native { border-block-start: 1px solid var(--color-panel-border); padding-block-start: var(--caption-space-s); }
+  .caption-export__native summary { cursor: pointer; font-size: var(--caption-type-s); }
+  .caption-export__native summary span { color: var(--color-panel-secondary); font-size: var(--caption-type-xs); margin-inline-start: var(--caption-space-s); }
+  .caption-export__native p { color: var(--color-panel-secondary); font-size: var(--caption-type-xs); margin-block: var(--caption-space-s); overflow-wrap: anywhere; }
+  .caption-export__native .caption-export__warning { color: var(--color-warning); }
+  .caption-export__notes { color: var(--color-panel-secondary); font-size: var(--caption-type-xs); padding-inline-start: var(--caption-space-l); margin-block: var(--caption-space-s); overflow-wrap: anywhere; }
+  .caption-export__notes li + li { margin-block-start: var(--caption-space-xs); }
+  .caption-export__review { display: flex; align-items: center; gap: var(--caption-space-s); font-size: var(--caption-type-xs); margin-block: var(--caption-space-s); }
+  .caption-export__review input { flex: none; inline-size: auto; min-block-size: 0; margin: 0; }
+  .caption-export__native .caption-button { inline-size: 100%; }
 </style>

@@ -275,16 +275,27 @@ test('presentation values cannot cross captions, sequences or hidden-panel lifet
 test('playhead frames are bounded to the selected caption', () => {
   assert.equal(captionFrame(context(), 2), 0); assert.equal(captionFrame(context(), 100), 95);
 });
-test('area, agent and export busy owners cannot unlock each other', () => {
+test('area, agent, export and native graphics busy owners cannot unlock each other', () => {
   const main = readFileSync(new URL('../webview-ui/src/main-webview.svelte', import.meta.url), 'utf8');
-  const functions = main.match(/  function setTimelineBusy\(busy: boolean\) \{[\s\S]*?\n  function setAgentAreaBusy\(busy: boolean\) \{[^\n]+\}/)?.[0];
+  const functions = main.match(/  function setTimelineBusy\(busy: boolean\) \{[\s\S]*?(?=\n  function reviewNativeGraphics)/)?.[0];
   assert.ok(functions, 'Exercise the production busy aggregation functions');
-  const compiled = ts.transpileModule(`let exportBusy=false,areaBusy=false,agentAreaBusy=false,timelineBusy=false,automaticReflow=false;const motionWatcher={reset(){}};${functions}\nexport const apply=setTimelineBusy,area=setAreaBusy,agent=setAgentAreaBusy,busy=()=>timelineBusy;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const compiled = ts.transpileModule(`let exportBusy=false,areaBusy=false,agentAreaBusy=false,timelineBusy=false,automaticReflow=false;
+    const nativeGraphics={exporting:false,result:null,failure:null,attempted:false,projectReviewed:false},motionWatcher={reset(){}};
+    ${functions}\nexport const apply=setTimelineBusy,area=setAreaBusy,agent=setAgentAreaBusy,native=setNativeGraphicsBusy,busy=()=>timelineBusy;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const api = {}; vm.runInNewContext(compiled, { exports: api });
-  api.apply(true); api.area(true); api.apply(false); assert.equal(api.busy(), true); api.area(false); assert.equal(api.busy(), false);
-  api.area(true); api.apply(true); api.area(false); assert.equal(api.busy(), true); api.apply(false); assert.equal(api.busy(), false);
-  api.agent(true); api.area(false); api.apply(false); assert.equal(api.busy(), true); api.agent(false); assert.equal(api.busy(), false);
-  api.agent(true); api.apply(true); api.agent(false); assert.equal(api.busy(), true); api.apply(false); assert.equal(api.busy(), false);
+  const owners = ['apply', 'area', 'agent', 'native'];
+  for (const pending of owners) {
+    api[pending](true);
+    for (const finished of owners.filter(owner => owner !== pending)) {
+      api[finished](false); assert.equal(api.busy(), true, `${finished} teardown cannot release pending ${pending} work`);
+    }
+    api[pending](false); assert.equal(api.busy(), false);
+  }
+  for (const first of owners) for (const second of owners.filter(owner => owner !== first)) {
+    api[first](true); api[second](true); api[first](false);
+    assert.equal(api.busy(), true, `${first} completion must preserve ${second} ownership`);
+    api[second](false); assert.equal(api.busy(), false);
+  }
 });
 function selectionHarness(nativeSelect = async () => ({ ok: true, time: 10.2 })) {
   const main = readFileSync(new URL('../webview-ui/src/main-webview.svelte', import.meta.url), 'utf8');

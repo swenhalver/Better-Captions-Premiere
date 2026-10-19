@@ -1450,5 +1450,69 @@ var BetterCaptionsHost = (function () {
             return reply({ error: e.toString() });
         }
     }
-    return { readCaptionConnections: readCaptionConnections, writeNativeCaptionDocument: writeNativeCaptionDocument, readCaptionConsolidation: readCaptionConsolidation, stageCaptionConsolidation: stageCaptionConsolidation, verifyCaptionConsolidation: verifyCaptionConsolidation, rollbackCaptionConsolidation: rollbackCaptionConsolidation, context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, readCaptionAreaDescriptor: readCaptionAreaDescriptor, patchCaptionKeyValues: patchCaptionKeyValues, preflight: preflight, prepareCaptionTrack: prepareCaptionTrack, apply: apply, readTimeline: readTimeline };
+    function graphicsSequences(project) {
+        var count = project.sequences && project.sequences.numSequences, out = [], seen = {};
+        if (typeof count !== 'number' || count < 1 || count > 20000 || Math.floor(count) !== count) throw new Error('Premiere cannot provide a bounded sequence inventory.');
+        for (var i = 0; i < count; i++) {
+            var s = project.sequences[i], id = String(s.sequenceID), identity = canonicalSequenceId(id) || id;
+            if (!id || id.length > 160 || /[\u0000-\u001f\u007f]/.test(id) || seen['$' + identity]) throw new Error('Premiere returned an ambiguous sequence identity.');
+            seen['$' + identity] = true; out.push({ id: id, identity: identity, sequence: s });
+        }
+        return out;
+    }
+    function graphicsSettings(s, p) {
+        return s.frameSizeHorizontal === p.width && s.frameSizeVertical === p.height && isFinite(Number(s.timebase)) && Number(s.timebase) > 0 && Math.abs(TICKS / Number(s.timebase) - p.fps) < 0.000001;
+    }
+    /** Public FCP XML file import creates a separate sequence; no clip writes.
+     * Adobe confirmation: https://community.adobe.com/questions-729/help-needed-with-extension-development-for-premiere-pro-import-of-xml-files-on-button-click-1404004
+     */
+    function importNativeGraphics(file) {
+        var p = null, started = false, result = null;
+        try {
+            p = readPayload(file);
+            result = { ok: true, version: 1, generationId: p.generationId, sequenceId: p.sequenceId, projectPath: p.projectPath, status: 'saved', importAttempted: false, warnings: [] };
+            if (p.version !== 1 || typeof p.sequenceId !== 'string' || !p.sequenceId || !localMediaPath(p.projectPath) || !localMediaPath(p.generatedRoot) || !localMediaPath(p.xmlPath) || !/^[a-f0-9]{32}$/.test(p.generationId) || p.sequenceName !== 'Better Captions graphics ' + p.generationId || typeof p.xmlText !== 'string' || !p.xmlText || p.xmlText.length > 16 * 1024 * 1024 || typeof p.width !== 'number' || typeof p.height !== 'number' || typeof p.fps !== 'number' || !isFinite(p.fps)) throw new Error('Invalid generated native graphics import.');
+            var projectPath = p.projectPath.split('\\').join('/'), slug = p.sequenceId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+            var expectedRoot = projectPath.slice(0, projectPath.lastIndexOf('/')) + '/Better Captions/' + slug;
+            var expectedFile = expectedRoot + '/native-graphics-' + p.generationId + '/graphics.xml';
+            if (!slug || comparableMediaPath(p.generatedRoot) !== comparableMediaPath(expectedRoot) || comparableMediaPath(p.xmlPath) !== comparableMediaPath(expectedFile)) throw new Error('Native graphics XML must belong to this captured sequence generation.');
+            var expectedXmlId = 'bc-graphics-' + p.generationId;
+            if (p.xmlText.indexOf('<xmeml version="5">') < 0 || p.xmlText.indexOf('<sequence id="' + expectedXmlId + '">') < 0 || p.xmlText.indexOf('<name>' + p.sequenceName + '</name>') < 0 || (p.xmlText.match(/<sequence\b/g) || []).length !== 1 || /<!|<file\b|<pathurl\b/i.test(p.xmlText)) throw new Error('Only the generated standalone graphics sequence XML can be imported.');
+            var xml = new File(p.xmlPath); xml.encoding = 'UTF-8';
+            if (!xml.exists || xml.alias || xml.length > 16 * 1024 * 1024 || !xml.open('r')) throw new Error('The generated native graphics XML is unavailable.');
+            var xmlText = xml.read(); xml.close();
+            if (xmlText !== p.xmlText) throw new Error('The generated native graphics XML changed before import.');
+            var source = sequence(p.sequenceId, p.projectPath), project = app.project;
+            if (!graphicsSettings(source, p)) throw new Error('The source sequence settings changed. Refresh before generating native graphics.');
+            if (typeof project.importFiles !== 'function') { result.warnings.push('This Premiere host does not expose public file import. The generated XML is saved for manual import as a new sequence.'); return reply(result); }
+            var before = graphicsSequences(project), known = {}, i;
+            for (i = 0; i < before.length; i++) {
+                if (before[i].sequence.name === p.sequenceName) throw new Error('This generation already has a sequence. Inspect it instead of importing it again.');
+                known['$' + before[i].identity] = true;
+            }
+            // Recheck captured identity immediately before the sole native write.
+            if (!graphicsSettings(sequence(p.sequenceId, p.projectPath), p)) throw new Error('The source sequence settings changed before import.');
+            started = true; result.importAttempted = true;
+            if (!project.importFiles([p.xmlPath], true, project.rootItem, false)) throw new Error('Premiere did not confirm completion of the XML import.');
+            if (!app.project || app.project.path !== p.projectPath) throw new Error('The active project changed while importing native graphics.');
+            var after = graphicsSequences(app.project), found = [], present = {}, sourcePresent = false;
+            for (i = 0; i < after.length; i++) {
+                present['$' + after[i].identity] = true;
+                if (!known['$' + after[i].identity]) found.push(after[i]);
+                if (sameSequenceId(after[i].id, p.sequenceId) && graphicsSettings(after[i].sequence, p)) sourcePresent = true;
+            }
+            for (i = 0; i < before.length; i++) if (!present['$' + before[i].identity]) throw new Error('An existing sequence identity changed during import.');
+            if (!sourcePresent || found.length !== 1 || found[0].sequence.name !== p.sequenceName || !graphicsSettings(found[0].sequence, p)) throw new Error('Premiere did not identify exactly one new sequence with this generation name and frame settings.');
+            result.status = 'imported'; result.nativeSequence = { id: found[0].id, name: found[0].sequence.name };
+            result.warnings.push('Import confirmed the new sequence identity and frame settings only. Inspect native text, timing and styling before use.');
+            return reply(result);
+        } catch (e) {
+            if (!result) return reply({ error: e.toString() });
+            result.status = started ? 'import-unconfirmed' : 'saved'; result.importAttempted = started;
+            result.warnings.push(String(e).slice(0, 1500));
+            if (started) result.warnings.push('Do not automatically retry this import. Inspect the project for this generation first; the saved XML and source manifest remain available.');
+            return reply(result);
+        }
+    }
+    return { importNativeGraphics: importNativeGraphics, readCaptionConnections: readCaptionConnections, writeNativeCaptionDocument: writeNativeCaptionDocument, readCaptionConsolidation: readCaptionConsolidation, stageCaptionConsolidation: stageCaptionConsolidation, verifyCaptionConsolidation: verifyCaptionConsolidation, rollbackCaptionConsolidation: rollbackCaptionConsolidation, context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, readCaptionAreaDescriptor: readCaptionAreaDescriptor, patchCaptionKeyValues: patchCaptionKeyValues, preflight: preflight, prepareCaptionTrack: prepareCaptionTrack, apply: apply, readTimeline: readTimeline };
 })();

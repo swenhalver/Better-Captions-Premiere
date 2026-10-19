@@ -20,6 +20,17 @@ function options(t, api) { const temporary = fs.realpathSync(fs.mkdtempSync(path
 function writeRequest(root, data) { const file = path.join(root, 'requests', data.id + '.json'); fs.writeFileSync(file, JSON.stringify(data)); return file; }
 const info = async id => ({ id, projectPath: '/project/test.prproj' });
 
+test('native graphics generation is an explicit mutation with captured identity and fixed arguments',async()=>{
+ const source={sequenceId:'seq-a',captions:[],style:{}},options={mode:'import-new-sequence'},calls=[];
+ const api={getActiveSequenceInfo:info,generateNativeGraphics:(...args)=>{calls.push(args);return {status:'import-unconfirmed',automaticRetryAllowed:false};}};
+ const data=request('generateNativeGraphics',[source,options]);service.validateServiceRequest(data,data.id+'.json');
+ const result=await service.dispatchServiceRequest(api,data);assert.equal(result.status,'import-unconfirmed');assert.equal(result.automaticRetryAllowed,false);assert.deepEqual(calls,[[source,options,'seq-a']]);
+ await assert.rejects(service.dispatchServiceRequest(api,{...data,projectPath:'/other.prproj'}),/changed/);assert.equal(calls.length,1);
+ for(const args of [[source],[source,options,'other-sequence'],[source,{}],[source,{mode:'auto'}],[source,{mode:'save-only',xmlPath:'/foreign.xml'}]]){
+  const bad=request('generateNativeGraphics',args);assert.throws(()=>service.validateServiceRequest(bad,bad.id+'.json'),/arguments/);
+ }
+});
+
 test('service rejects arbitrary execution actions, stale timestamps and malformed argument counts', () => {
   for (const action of ['eval', 'exec', 'run', 'shell', 'transcribeSequence', 'saveSession']) {
     const data = request(action); assert.throws(() => service.validateServiceRequest(data, data.id + '.json'), /Unsupported/);

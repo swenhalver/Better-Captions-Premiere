@@ -15,7 +15,7 @@ const require = createRequire(new URL('../webview-ui/package.json', import.meta.
 const ts = require('typescript');
 const sourceRoot = fileURLToPath(new URL('../webview-ui/src/', import.meta.url));
 const clone = value => JSON.parse(JSON.stringify(value));
-const deferred = () => { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; };
+const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const script = file => readFileSync(file, 'utf8').match(/<script lang="ts">([\s\S]*?)<\/script>/)[1];
 const routedPaths = {
   session: 'lib/session/manager.svelte.ts', watcher: 'lib/program-monitor.ts',
@@ -49,7 +49,7 @@ function transpile(source) {
 }
 
 function fixture(t, options = {}) {
-  let time = 0, nextTimer = 0, main, component, mounted, cleanup, availability, liveOptions, playheadCallback;
+  let time = 0, nextTimer = 0, main, component, mounted, cleanup, availability, liveOptions, playheadCallback, componentEffects = [];
   const timers = new Map(), modules = new Map(), storage = new Map(), effects = [], calls = { apply: [], commits: [], saves: [], renders: [], seeks: [], transcript: 0, supersedes: 0 };
   const info = { id: 'sequence', name: 'Caption verification', projectPath: '/project/test.prproj', frameWidth: 1920, frameHeight: 1080, frameRate: 24, duration: 8, playhead: .25, tracks: [{ index: 2, name: 'Captions', clips: 1, locked: false }] };
   const profile = { signature: 'motion-rendered', watchSignature: 'geometry-rendered', samples: [{ time: .25, scaleX: 1, scaleY: 1 }, { time: 7.75, scaleX: 1, scaleY: 1 }] };
@@ -125,13 +125,15 @@ function fixture(t, options = {}) {
     return { sequenceId: info.id, sequenceName: info.name, transcriptJson: null, captions, style: clone(types.DEFAULT_STYLE), animation: clone(types.DEFAULT_ANIMATION), hasTranscript: true, isLoading: false, currentTime: .25, duration: info.duration, frameRate: info.frameRate, frameWidth: info.frameWidth, frameHeight: info.frameHeight };
   }
   main = execute(script(resolve(sourceRoot, 'main-webview.svelte')) + `
-    export { refreshSequence, transcribe, restoreTranscription, updateStyle, changeCharacterLimit, updateCaptions, outputSignature, selectionPauseReason, motionPauseReason, motionContext, ensureLegacyBaseline, getState, recordApplied, recordMonitorApplied, flushSave, setTimelineBusy, inspectConnections };
+    export { refreshSequence, transcribe, restoreTranscription, updateStyle, changeCharacterLimit, updateCaptions, outputSignature, selectionPauseReason, motionPauseReason, motionContext, ensureLegacyBaseline, getState, recordApplied, recordMonitorApplied, flushSave, setTimelineBusy, setAreaBusy, setAgentAreaBusy, inspectConnections, createNativeGraphics, reviewNativeGraphics };
+    export function nativeGraphicsForTest() { return nativeGraphics; }
     export function setExport(value) { exportButton = value; }
     export function setPhase(value) { outputPhase = value; }
     export function selectForTest(id) { selectedId = id; const s=sessionManager.current,c=s?.captions.find(c=>c.id===id); nativeSelection=c?.clipNodeId?{sequenceId:s.sequenceId,captionId:id,clipNodeId:c.clipNodeId}:null; }
   `, resolve(sourceRoot, 'main-webview.svelte'));
   const manager = load(resolve(sourceRoot, 'lib/session/manager.svelte.ts')).sessionManager;
   function props() { const s = manager.current; return { ...s, sequenceId: s?.sequenceId, sequenceName: s?.sequenceName, hostApi: api, tracks: info.tracks,
+    nativeGraphics: main.nativeGraphicsForTest(), onCreateNativeGraphics: main.createNativeGraphics, onNativeProjectReviewed: main.reviewNativeGraphics, disabled: main.nativeGraphicsForTest().exporting,
     onBusy: main.setTimelineBusy, onPhase: main.setPhase, onUpdated: main.recordApplied, onApplied: main.recordMonitorApplied, selectedId: main.getState()?.runtime.selectedId }; }
   const simulatedExport = { async apply(value) { calls.apply.push(clone(value)); main.recordMonitorApplied(manager.current.captions, manager.current.sequenceId, value); }, supersede() { calls.supersedes++; } };
   main.setExport(simulatedExport);
@@ -148,10 +150,18 @@ function fixture(t, options = {}) {
     throw new Error('Controller timers failed to settle.');
   }
   function realExport() {
+    // Recreate the keyed instance and remove its effects, as Svelte does when
+    // the active sequence changes. Parent state and pending promises survive.
+    for (const effect of componentEffects) effects.splice(effects.indexOf(effect), 1);
+    const firstEffect = effects.length;
     component = execute(script(resolve(sourceRoot, 'components/ExportButton.svelte')) + `
-      export function setProps(value) { captions=value.captions;style=value.style;animation=value.animation;currentTime=value.currentTime;sequenceId=value.sequenceId;selectedId=value.selectedId; }
+      export function setProps(value) { captions=value.captions;style=value.style;animation=value.animation;currentTime=value.currentTime;sequenceId=value.sequenceId;selectedId=value.selectedId;nativeGraphics=value.nativeGraphics;disabled=value.disabled; }
+      export { createNativeGraphics };
+      export function nativeViewForTest() { return { exporting: nativeExporting, result: nativeResult, failure: nativeFailure, attempted: nativeAttempted, projectReviewed: nativeGraphics.projectReviewed, needsReview: nativeNeedsReview }; }
     `, resolve(sourceRoot, 'components/ExportButton.svelte'), { $props: props });
+    componentEffects = effects.slice(firstEffect);
     main.setExport(component); sync();
+    return component;
   }
   t.after(() => cleanup?.());
   return { main, manager, storage, calls, info, api, caption, saved, parser, realExport, sync, advance, settle,
@@ -482,4 +492,82 @@ test('native adoption and supported style edits never overwrite the sequence’s
   assert.equal(JSON.parse(cacheBefore)[connectionKey(h.info)].style.fontSize, 79);
   assert.equal(h.calls.saves.length, savesBefore, 'Native edits also bypass the legacy caption sidecar');
   assert.equal(h.calls.apply.length, 0); assert.equal(h.calls.renders.length, 0);
+});
+
+function graphicsReceipt(status, sequenceId = 'sequence') {
+  return { ok: true, version: 1, generationId: 'a'.repeat(32), source: { projectPath: '/project/test.prproj', sequenceId },
+    status, importAttempted: status !== 'saved', automaticRetryAllowed: false,
+    artifacts: { directory: '/generated/native', xml: '/generated/native/graphics.xml', manifest: '/generated/native/source.json', srt: '/generated/native/captions.srt' },
+    ...(status === 'imported' ? { nativeSequence: { id: 'native-sequence', name: 'Better Captions graphics ' + 'a'.repeat(32) } } : {}),
+    verification: status === 'imported' ? 'new-sequence-identity-and-settings' : 'artifacts-only', warnings: [] };
+}
+
+test('an in-flight native creation survives a keyed export remount and keeps its busy ownership until settlement', async t => {
+  const h = fixture(t); await h.start();
+  const pending = deferred(), imports = [];
+  h.api.generateNativeGraphics = (...args) => { imports.push(clone(args)); return pending.promise; };
+  const first = h.realExport(), creation = first.createNativeGraphics(); await h.settle();
+  assert.equal(imports.length, 1); assert.equal(imports[0][0].sequenceId, 'sequence');
+  assert.equal(h.main.getState().runtime.busy.timeline, true);
+
+  // A host/session change destroys the old ExportButton even while its request
+  // is outstanding. Recreate it with another sequence's caption props.
+  const original = clone(h.manager.current);
+  h.manager.restore({ ...clone(original), sequenceId: 'other-sequence', sequenceName: 'Other sequence' });
+  const next = h.realExport();
+  assert.equal(next.nativeViewForTest().exporting, true); assert.equal(next.nativeViewForTest().attempted, true);
+  h.main.setTimelineBusy(false); h.main.setAreaBusy(false); h.main.setAgentAreaBusy(false); h.sync();
+  assert.equal(h.main.getState().runtime.busy.timeline, true, 'Other operation teardown cannot release native busy ownership');
+  assert.equal(h.main.getState().runtime.busy.export, true);
+  await next.createNativeGraphics(); await h.main.createNativeGraphics('other-sequence');
+  assert.equal(imports.length, 1, 'Neither the new component nor a direct action can duplicate the pending request');
+  await assert.rejects(next.apply(), /Wait for the current transcript or timeline operation/);
+
+  h.main.setAreaBusy(true);
+  pending.resolve(graphicsReceipt('import-unconfirmed')); await creation; await h.settle();
+  const received = next.nativeViewForTest();
+  assert.equal(received.exporting, false); assert.equal(received.result.status, 'import-unconfirmed');
+  assert.equal(received.result.source.sequenceId, 'sequence'); assert.equal(received.needsReview, true);
+  assert.equal(h.main.getState().runtime.busy.timeline, true, 'Native settlement preserves other busy ownership');
+  h.main.setAreaBusy(false); h.sync(); assert.equal(h.main.getState().runtime.busy.timeline, false);
+
+  h.manager.restore(original); const returned = h.realExport();
+  assert.equal(returned.nativeViewForTest().result, received.result, 'Returning to the original sequence retains the exact outcome');
+  await returned.createNativeGraphics(); await h.advance(5000);
+  assert.equal(imports.length, 1, 'An unconfirmed result remains gated after remount and timer activity');
+  h.main.reviewNativeGraphics(true);
+  const reviewed = h.realExport(); assert.equal(reviewed.nativeViewForTest().projectReviewed, true);
+  h.api.generateNativeGraphics = (...args) => { imports.push(clone(args)); return Promise.resolve(graphicsReceipt('imported')); };
+  await reviewed.createNativeGraphics(); await h.settle();
+  assert.equal(imports.length, 2); assert.equal(reviewed.nativeViewForTest().result.status, 'imported');
+  assert.equal(reviewed.nativeViewForTest().projectReviewed, false); assert.equal(reviewed.nativeViewForTest().needsReview, false);
+});
+
+test('unknown native outcomes persist across export remounts and need explicit review before another generation', async t => {
+  for (const outcome of ['rejected', 'malformed']) {
+    const h = fixture(t); await h.start();
+    const pending = deferred(); let imports = 0;
+    h.api.generateNativeGraphics = () => { imports++; return pending.promise; };
+    const first = h.realExport(), creation = first.createNativeGraphics(); await h.settle();
+    h.manager.restore({ ...clone(h.manager.current), sequenceId: 'another-sequence' });
+    const next = h.realExport();
+    if (outcome === 'rejected') pending.reject(new Error('The native response was lost.'));
+    else pending.resolve({ ok: true, status: 'imported' });
+    await creation; await h.settle();
+    const failed = next.nativeViewForTest();
+    assert.equal(failed.exporting, false); assert.equal(failed.attempted, true); assert.equal(failed.result, null);
+    assert.ok(failed.failure); assert.equal(failed.needsReview, true); assert.equal(failed.projectReviewed, false);
+    assert.equal(h.main.getState().runtime.busy.timeline, false);
+    const remounted = h.realExport();
+    assert.equal(remounted.nativeViewForTest().failure, failed.failure);
+    await remounted.createNativeGraphics(); await h.main.createNativeGraphics('another-sequence');
+    assert.equal(imports, 1, 'Losing the response never restores an unguarded first-create action');
+    h.main.reviewNativeGraphics(true); h.sync();
+    h.api.generateNativeGraphics = (_source, _options, sequenceId) => { imports++; return Promise.resolve(graphicsReceipt('saved', sequenceId)); };
+    await first.createNativeGraphics();
+    assert.equal(imports, 1, 'An event from the old sequence cannot generate captions for the new sequence');
+    await remounted.createNativeGraphics(); await h.settle();
+    assert.equal(imports, 2); assert.equal(remounted.nativeViewForTest().failure, null);
+    assert.equal(remounted.nativeViewForTest().result.source.sequenceId, 'another-sequence');
+  }
 });

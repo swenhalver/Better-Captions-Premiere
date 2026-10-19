@@ -50,6 +50,9 @@ export function buildNativeGraphicsXml(input: NativeGraphicsPlanInput, options: 
   // Adobe API contract. Other sizes/platforms require native verification.
   const xmlFontSize = Number((style.fontSize * 480 / sourcePlan.sequence.frameHeight).toFixed(6));
   if (xmlFontSize <= 0 || xmlFontSize > 1000) throw new Error('This font/sequence size exceeds the FCP Text generator size range.');
+  // Premiere 26.5.2 on Windows imports Arial style 0 as Regular and 2 as Bold;
+  // style 1 imports as Italic. Apple's Text example calls 1 Plain, so the zero
+  // below is a measured Premiere importer calibration, not a portable FCP rule.
   const nativeBold = style.fontWeight >= 600;
   const alignment = { left: 1, center: 2, right: 3 }[style.textAlign as 'left' | 'center' | 'right'];
   const channels = [1, 3, 5].map(index => parseInt(style.textColor.slice(index, index + 2), 16));
@@ -75,7 +78,7 @@ export function buildNativeGraphicsXml(input: NativeGraphicsPlanInput, options: 
           ${parameter('str', 'Text', escapeXml(clip.text))}
           ${parameter('fontname', 'Font', escapeXml(style.fontFamily))}
           ${parameter('fontsize', 'Size', String(xmlFontSize))}
-          ${parameter('fontstyle', 'Style', nativeBold ? '2' : '1')}
+          ${parameter('fontstyle', 'Style', nativeBold ? '2' : '0')}
           ${parameter('fontalign', 'Alignment', String(alignment))}
           ${parameter('fontcolor', 'Font Color', `<alpha>255</alpha><red>${channels[0]}</red><green>${channels[1]}</green><blue>${channels[2]}</blue>`)}
           ${parameter('origin', 'Origin', '<horiz>0</horiz><vert>0</vert>')}
@@ -103,7 +106,7 @@ ${items}
   const warnings = [
     'Import graphics.xml into Premiere as a new sequence. Verify its native text, timing and font before use; generating XML is not host readback.',
     'Only phrase text, frame timing, font family, regular/bold, size, alignment and solid text color are requested. Missing fonts may be substituted by Premiere.',
-    'Font-size normalization is calibrated from Premiere 26.5.2 at 1080p; verify other frame sizes and hosts.',
+    'Font-size normalization and Regular/Bold mapping are calibrated from Premiere 26.5.2 on Windows at 1080p; verify other frame sizes and hosts.',
     'Titles start at the center. Saved position, text-box dimensions, wrapping and geometry keys remain in sourcePlan only. Set placement and native keys in Effect Controls.',
     'Past/current/next word states, relative Bold, italic, stroke, shadow, bubbles, animation and dynamic reflow remain in sourcePlan only. They are not silently baked into movies.',
     'Native edits are independent. Export again to a NEW sequence; automatic reconnection, text updates and replacement of existing clips are not implemented.',

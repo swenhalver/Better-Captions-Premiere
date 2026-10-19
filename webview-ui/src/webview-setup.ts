@@ -4,6 +4,7 @@ import type { AgentHandler } from './lib/agent-bridge';
 
 const CHANNEL = 'better-captions';
 const HOST_METHODS = [
+  'generateNativeGraphics',
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession', 'loadStylePresets', 'saveStylePresets',
   'transcribeSequence', 'getFonts', 'getFontCatalog', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',

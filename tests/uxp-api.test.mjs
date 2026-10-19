@@ -28,7 +28,7 @@ function harness(t, options = {}) {
     const entries=new Map(),value={nativePath:path,getEntries:async()=>[...entries].map(([name,file])=>({...file,name})),getEntry:async name=>{if(path==='/private/service'&&name==='service.json')serviceReads++;if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
     folders.set(path,value);return value;
   }
-  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:now(),busy:false,actions:['getFonts','getFontCatalog','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues','prepareCaptionTrack','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation']});
+  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:now(),busy:false,actions:['getFonts','getFontCatalog','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues','prepareCaptionTrack','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation','generateNativeGraphics']});
   function setService(status) {
     const entries=folder('/private/service').entries;
     if(status===null)entries.delete('service.json');else entries.set('service.json',{data:status});
@@ -132,6 +132,44 @@ test('style preset storage works without a project or renderer and serializes st
   assert.equal(h.writes.length, 1); assert.equal(h.writes[0].path, '/plugin-data');
   assert.equal(h.writes[0].name, 'style-presets.json');
   assert.equal(h.projectReads, 0); assert.equal(h.serviceReads, 0); assert.equal(h.requests.length, 0);
+});
+
+test('native graphics freezes its explicit source and mode while queued and never retries an uncertain import',async t=>{
+ let entered,release;const started=new Promise(resolve=>{entered=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+ const receipt={ok:true,status:'import-unconfirmed',automaticRetryAllowed:false};
+ const h=harness(t,{transcribe:async()=>{entered();await gate;return 'done';},serviceResult:request=>{assert.equal(request.action,'generateNativeGraphics');return receipt;}});
+ await h.api.getActiveSequenceInfo();const busy=h.api.transcribeSequence('one');await started;
+ const source={sequenceId:'one',captions:[{text:'Keep original words'}],style:{fontSize:72}},mode={mode:'import-new-sequence'};
+ const generating=h.api.generateNativeGraphics(source,mode,'one');source.captions[0].text='Changed later';mode.mode='save-only';
+ release();await busy;assert.deepEqual(await generating,receipt);assert.equal(h.requests.length,1);assert.equal(h.requests[0].sequenceId,'one');assert.equal(h.requests[0].projectPath,'/projects/edit.prproj');
+ assert.equal(h.requests[0].args[0].captions[0].text,'Keep original words');assert.equal(h.requests[0].args[1].mode,'import-new-sequence');assert.equal(h.requests[0].expiresAt,undefined,'generation must not be treated as a replayable read');
+ for(const args of [[{...source,sequenceId:'two'},mode,'one'],[source,{},'one'],[source,{mode:'auto'},'one']])await assert.rejects(h.api.generateNativeGraphics(...args),/explicit native graphics/);
+ assert.equal(h.requests.length,1);
+});
+
+test('completed native graphics receipts survive a project change after the service finishes without retrying',async t=>{
+ for(const status of ['saved','imported','import-unconfirmed']){
+  const generationId='a'.repeat(32),directory='/projects/Better Captions/one/native-graphics-'+generationId;
+  const receipt={ok:true,version:1,generationId,source:{sequenceId:'one',projectPath:'/projects/edit.prproj'},status,importAttempted:status!=='saved',automaticRetryAllowed:false,
+   artifacts:{directory,xml:directory+'/graphics.xml',manifest:directory+'/manifest.json',srt:directory+'/source-plan.srt'},verification:status==='imported'?'new-sequence-identity-and-settings':'artifacts-only',warnings:['Retain this generation before any manual retry.'],
+   ...(status==='imported'?{nativeSequence:{id:'created-native-sequence',name:'Better Captions graphics '+generationId}}:{})};
+  let h;h=harness(t,{serviceResult:request=>{assert.equal(request.action,'generateNativeGraphics');h.relocate('/projects/changed-after-'+status+'.prproj');return receipt;}});
+  await h.api.getActiveSequenceInfo();
+  const result=await h.api.generateNativeGraphics({sequenceId:'one',projectPath:'/projects/edit.prproj',captions:[],style:{}},{mode:status==='saved'?'save-only':'import-new-sequence'},'one');
+  assert.equal(result,receipt,'the exact completed receipt must remain available after a project switch or Save As');
+  assert.equal(h.requests.length,1);assert.equal(h.requests[0].sequenceId,'one');assert.equal(h.requests[0].projectPath,'/projects/edit.prproj');
+ }
+});
+
+test('native graphics receipt preservation keeps pre-write and envelope checks while other writes retain their final context guard',async t=>{
+ const stale=harness(t);await stale.api.getActiveSequenceInfo();stale.relocate('/projects/before-request.prproj');
+ await assert.rejects(stale.api.generateNativeGraphics({sequenceId:'one',captions:[],style:{}},{mode:'save-only'},'one'),/project location changed/);assert.equal(stale.requests.length,0);
+ const mismatch=harness(t,{autoRespond:false});await mismatch.api.getActiveSequenceInfo();
+ const generating=mismatch.api.generateNativeGraphics({sequenceId:'one',captions:[],style:{}},{mode:'save-only'},'one');await tick();
+ mismatch.respond(mismatch.requests[0],{ok:true,status:'saved'},{projectPath:'/foreign/project.prproj'});
+ await assert.rejects(generating,/mismatched response/);assert.equal(mismatch.requests.length,1);
+ let other;other=harness(t,{serviceResult:request=>{assert.equal(request.action,'beginCaption');other.relocate('/projects/changed-after-other-write.prproj');return '/generated/caption';}});await other.api.getActiveSequenceInfo();
+ await assert.rejects(other.api.beginCaption('caption-one','one'),/project location changed/);assert.equal(other.requests.length,1);
 });
 
 function conversionFixture(t,mode='success'){

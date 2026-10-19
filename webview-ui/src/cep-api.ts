@@ -1,12 +1,13 @@
 import type { CaptionItem, SequenceInfo, RenderBounds } from './lib/types';
 import type { DeletedCaptionLink } from './lib/export/deleted-links';
+import type { NativeGraphicsSource, NativeGraphicsGenerationOptions, NativeGraphicsGenerationResult } from './lib/native-graphics/generate';
 import { emptyPresetLibrary, validatePresetLibrary, PRESET_STORAGE_KEY, type PresetLibrary } from './lib/style-presets.ts';
 declare const window: Window & { __adobe_cep__?: any; require?: any };
 const demoWords = 'Every word has its own style. Move captions anywhere in the frame.'.split(' ').map((text, i) => ({ text, start: i * .42, duration: .36, confidence: 1, eos: /[.!?]$/.test(text), type: 'word' as const, tags: [] }));
 export interface CapturedContext { id: string; name: string; projectPath: string; width: number; height: number; fps: number; duration: number; dir: string; }
 export interface NativeTranscriptProvider { fetch(context: CapturedContext): Promise<string | null>; transcribe(context: CapturedContext): Promise<string | null>; }
 export interface FontCatalogEntry { family:string;weights:number[];italic:boolean;variable?:{min:number;max:number}; }
-const HOST_BRIDGE_METHODS = ['context','seek','selectCaptionClip','readCaptionSelection','readCaptionConnections','writeNativeCaptionDocument','readCaptionGeometry','readCaptionMotion','readCaptionAreaDescriptor','patchCaptionKeyValues','preflight','prepareCaptionTrack','apply','readTimeline','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation'];
+const HOST_BRIDGE_METHODS = ['context','seek','selectCaptionClip','readCaptionSelection','readCaptionConnections','writeNativeCaptionDocument','readCaptionGeometry','readCaptionMotion','readCaptionAreaDescriptor','patchCaptionKeyValues','preflight','prepareCaptionTrack','apply','readTimeline','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation','importNativeGraphics'];
 function sameSavedSequence(a:unknown,b:string) {
   if(typeof a!=='string')return false;
   const canonical=(value:string)=>{
@@ -241,6 +242,49 @@ catch(e){var line=Number(e&&e.line);return '{"version":1,"ok":false,"error":'+qu
       // reads the real runtime catalog and propagates any enumeration failure.
       if(!cep)return ['Arial','Helvetica','Georgia','Verdana','Times New Roman','Impact'].map(family=>({family,weights:family==='Impact'?[400]:[400,700],italic:family!=='Impact'}));
       return runtime.fontCatalog();
+    },
+    async generateNativeGraphics(source: NativeGraphicsSource, options: NativeGraphicsGenerationOptions, sequenceId = currentId): Promise<NativeGraphicsGenerationResult> {
+      if (!cep) throw new Error('Generate native graphics from the installed Premiere panel.');
+      // Freeze authoring data before awaiting host reads. Paths and XML are never
+      // accepted from the caller; both come from this generation's owned writer.
+      const text = JSON.stringify(source);
+      if (!text || text.length > 8 * 1024 * 1024) throw new Error('Native graphics source exceeds its size limit.');
+      const frozen = JSON.parse(text), chosen = options && { ...options };
+      const context = await checkSequence(sequenceId);
+      const { prepareNativeGraphicsGeneration } = await import('./lib/native-graphics/generate.ts');
+      const generationId = runtime.newNativeGraphicsId();
+      const output = prepareNativeGraphicsGeneration(frozen, chosen, context, generationId);
+      await checkSequence(sequenceId);
+      const artifacts = runtime.saveNativeGraphics(context, generationId, output);
+      const result: NativeGraphicsGenerationResult = {
+        ok: true, version: 1, generationId, source: { projectPath: context.projectPath, sequenceId: context.id },
+        status: 'saved', importAttempted: false, automaticRetryAllowed: false, artifacts, verification: 'artifacts-only', warnings: [...output.manifest.warnings],
+      };
+      if (chosen.mode === 'import-new-sequence') {
+        let dispatched = false;
+        try {
+          await checkSequence(sequenceId);
+          const payload = runtime.nativeGraphicsImportPayload(context, generationId, artifacts, output.manifest.output.sequenceName);
+          dispatched = true;
+          const receipt = await readJob('importNativeGraphics', payload);
+          if (!receipt || receipt.ok !== true || receipt.version !== 1 || receipt.generationId !== generationId || receipt.projectPath !== context.projectPath || receipt.sequenceId !== context.id || !['saved', 'imported', 'import-unconfirmed'].includes(receipt.status) || receipt.importAttempted !== (receipt.status !== 'saved') || !Array.isArray(receipt.warnings) || receipt.warnings.length > 10 || receipt.warnings.some((warning: unknown) => typeof warning !== 'string' || warning.length > 2000)) throw new Error('Premiere did not return a matching native graphics import receipt.');
+          if (receipt.status === 'imported') {
+            const nativeSequence = receipt.nativeSequence;
+            if (!nativeSequence || typeof nativeSequence.id !== 'string' || !nativeSequence.id || nativeSequence.id.length > 160 || /[\u0000-\u001f\u007f]/.test(nativeSequence.id) || sameSavedSequence(nativeSequence.id, context.id) || nativeSequence.name !== output.manifest.output.sequenceName) throw new Error('Premiere did not identify this newly generated sequence.');
+            result.nativeSequence = { id: nativeSequence.id, name: nativeSequence.name };
+            result.verification = 'new-sequence-identity-and-settings';
+          }
+          result.status = receipt.status; result.importAttempted = receipt.importAttempted;
+          result.warnings.push(...receipt.warnings);
+        } catch (error) {
+          result.status = dispatched ? 'import-unconfirmed' : 'saved'; result.importAttempted = dispatched;
+          result.warnings.push((error instanceof Error ? error.message : String(error)).slice(0, 1500));
+          if (dispatched) result.warnings.push('The import outcome is uncertain. Inspect the project for this generation before any manual retry; this operation will not retry automatically.');
+        }
+      }
+      try { runtime.saveNativeGraphicsResult(artifacts, result); }
+      catch { result.warnings.push('The artifacts are preserved, but the import-result.json receipt could not be saved. Keep this result before closing the panel.'); }
+      return result;
     },
     async showInPremiere(time: number, sequenceId = currentId) { const context = captured(sequenceId); return host('seek', [context.id, time, context.projectPath]); },
     async beginCaption(id: string, sequenceId: string) {

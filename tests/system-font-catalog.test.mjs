@@ -48,19 +48,52 @@ test('Windows catalog contains only observed physical-face weights and keeps loc
 });
 
 function mockedRuntime(platformName,stdout,exitCode=0){
- const calls=[],module={exports:{}};
+ const calls=[],warnings=[],timeouts=[],module={exports:{}};
  const platform={systemPowerShell:()=>'/fixed/system/powershell.exe',powerShellEnv:()=>({PSModulePath:'fixed'}),resolveTool:name=>{assert.equal(name,'fc-list');return '/fixed/fc-list';}};
- vm.runInNewContext(fs.readFileSync(new URL('../cep/runtime.cjs',import.meta.url),'utf8'),{module,exports:module.exports,Buffer,process:{platform:platformName},setTimeout,clearTimeout,require:name=>{
+ vm.runInNewContext(fs.readFileSync(new URL('../cep/runtime.cjs',import.meta.url),'utf8'),{module,exports:module.exports,Buffer,console:{warn:message=>warnings.push(message)},process:{platform:platformName},setTimeout:(callback,delay)=>{timeouts.push(delay);return setTimeout(callback,delay);},clearTimeout,require:name=>{
   if(name==='./platform.cjs')return platform;
   if(name==='node:child_process')return{spawn(exe,args,options){calls.push({exe,args,options});const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.stdout.setEncoding=child.stderr.setEncoding=()=>{};child.kill=()=>{};queueMicrotask(()=>{child.stdout.emit('data',stdout);child.emit('close',exitCode);});return child;}};
   return require(name);
  }});
- return{runtime:module.exports,calls};
+ return{runtime:module.exports,calls,warnings,timeouts};
 }
+
+test('Windows skips a complete malformed face without renaming aliases or contaminating valid weights',async()=>{
+ const faces=[
+  {families:['Real Family','真實字體'],weight:400,italic:false},
+  {families:['Real Family','Unsafe Family\u007f'],weight:700,italic:true},
+  {families:['Only On Bad Face','Unsafe\nAlias'],weight:900,italic:false},
+  {families:['Comma, Literal $(name)'],weight:550,italic:true},
+ ];
+ const h=mockedRuntime('win32',JSON.stringify(faces)),catalog=await h.runtime.fontCatalog();
+ assert.deepEqual(JSON.parse(JSON.stringify(catalog)),[
+  {family:'Comma, Literal $(name)',weights:[550],italic:true},
+  {family:'Real Family',weights:[400],italic:false},
+  {family:'真實字體',weights:[400],italic:false},
+ ]);
+ assert.equal(h.warnings.length,1);assert.match(h.warnings[0],/Skipped 2 installed Windows font faces/);
+ assert.ok(h.warnings[0].length<200);assert.doesNotMatch(h.warnings[0],/Unsafe|\u007f|\n/);
+ const valid=mockedRuntime('win32',JSON.stringify([faces[0],faces[3]]));
+ assert.deepEqual(JSON.parse(JSON.stringify(await valid.runtime.fontCatalog())),JSON.parse(JSON.stringify(catalog)));
+ assert.deepEqual(valid.warnings,[]);
+});
+test('Windows still rejects unusable catalogs and malformed structure while bounding skipped-face diagnostics',()=>{
+ const h=mockedRuntime('win32','');
+ const unusable=Array.from({length:1000},()=>({families:['Never Surface\u007f'],weight:400,italic:false}));
+ assert.throws(()=>h.runtime.parseWindowsFontCatalog(JSON.stringify(unusable)),/No physical installed font families/);
+ assert.equal(h.warnings.length,1);assert.match(h.warnings[0],/Skipped 1000 installed Windows font faces/);assert.ok(h.warnings[0].length<200);
+ const valid={families:['Good Family'],weight:400,italic:false};
+ for(const invalid of [
+  null,{families:[],weight:400,italic:false},{families:Array(257).fill('Alias'),weight:400,italic:false},
+  {families:['Bad\u007f'],weight:1001,italic:false},{families:['Bad\u007f'],weight:400,italic:'true'},
+ ])assert.throws(()=>h.runtime.parseWindowsFontCatalog(JSON.stringify([valid,invalid])),/font|Windows/i);
+ assert.equal(h.warnings.length,1,'malformed catalog structure must fail instead of being treated as another skipped face');
+});
 test('catalog invokes a fixed metadata format without a command shell and getFonts remains a family-name array',async()=>{
  const h=mockedRuntime('darwin',row(['Literal $(never executes), Name'],'200','100'));
  const catalog=await h.runtime.fontCatalog();assert.equal(catalog[0].family,'Literal $(never executes), Name');assert.deepEqual(Array.from(catalog[0].weights),[700]);
  assert.equal(h.calls[0].exe,'/fixed/fc-list');assert.equal(h.calls[0].options.shell,false);assert.deepEqual(Array.from(h.calls[0].args),['--format',runtime.FONTCONFIG_FORMAT]);
+ assert.equal(h.timeouts[0],15000);
  assert.deepEqual(Array.from(await h.runtime.fonts()),['Literal $(never executes), Name']);
  const failed=mockedRuntime('darwin','',1);await assert.rejects(failed.runtime.fontCatalog(),/process stopped/);await assert.rejects(failed.runtime.fonts(),/process stopped/);
 });
@@ -69,6 +102,7 @@ test('Windows uses fixed WPF physical-face enumeration with no simulated face or
  assert.equal((await h.runtime.fontCatalog())[0].weights[0],550);
  const call=h.calls[0],script=Buffer.from(call.args.at(-1),'base64').toString('utf16le');
  assert.equal(call.exe,'/fixed/system/powershell.exe');assert.equal(call.options.shell,false);assert.equal(call.options.windowsHide,true);assert.equal(script,runtime.WINDOWS_FONT_SCRIPT);
+ assert.equal(h.timeouts[0],30000,'cold Windows WPF scans receive a bounded startup allowance');
  assert.match(script,/SystemFontFamilies/);assert.match(script,/GetTypefaces\(\)/);assert.match(script,/TryGetGlyphTypeface\(\[ref\]\$glyph\)/);assert.match(script,/IsBoldSimulated/);assert.match(script,/IsObliqueSimulated/);assert.match(script,/ToOpenTypeWeight\(\)/);assert.doesNotMatch(script,/100\.\.1000|100\.\.900|Invoke-Expression/);
 });
 test('strict process output limits reject even a successful child instead of parsing a truncated font catalog',async()=>{

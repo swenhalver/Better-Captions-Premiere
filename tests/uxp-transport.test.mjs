@@ -101,6 +101,16 @@ function harness(t, nativeOverrides = {}, options = {}) {
   };
 }
 
+test('native graphics is an allowlisted explicit action and its pending import cannot be replayed',async t=>{
+ let finish;const calls=[],result={ok:true,status:'import-unconfirmed',automaticRetryAllowed:false};
+ const app=harness(t,{generateNativeGraphics:(...args)=>{calls.push(args);return new Promise(resolve=>{finish=resolve;});}},{manualTimers:true});await tick();
+ const source={sequenceId:'native-sequence',captions:[],style:{}},mode={mode:'import-new-sequence'};
+ const pending=app.api.generateNativeGraphics(source,mode,'native-sequence');await tick();assert.deepEqual(calls,[[source,mode,'native-sequence']]);
+ app.fireTimeout(60000);await assert.rejects(pending,error=>error.code==='BC_NATIVE_PENDING'&&error.method==='generateNativeGraphics'&&error.recoverable===false&&error.operationPending===true);
+ await assert.rejects(app.api.generateNativeGraphics(source,mode,'native-sequence'),{code:'BC_NATIVE_WAITING'});assert.equal(calls.length,1);
+ finish(result);await tick();assert.equal(app.api.getTransportAvailability().state,'ready');assert.equal(calls.length,1);
+});
+
 test('host playhead sampling starts only after editor readiness and visibility and forwards captured position callbacks',async t=>{
   let reads=0;const position={sequenceId:'native-sequence',projectPath:'/captured/project.prproj',time:1.25};
   const app=harness(t,{readPlayheadIfIdle:async()=>{reads++;return position;}},{manualTimers:true,autoAgent:false});

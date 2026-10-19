@@ -65,10 +65,23 @@ test('case conversion and explicit regular/bold mapping do not change source dat
   const input = makeInput(); input.style.textTransform = 'uppercase'; input.style.fontWeight = 500;
   const { xml, manifest } = buildNativeGraphicsXml(input, options);
   assert.match(xml, /NATIVE &amp; EDITABLE/);
-  assert.match(xml, /<parameterid>fontstyle<\/parameterid><name>Style<\/name><value>1<\/value>/);
+  assert.match(xml, /<parameterid>fontstyle<\/parameterid><name>Style<\/name><value>0<\/value>/);
   assert.ok(manifest.warnings.some(value => value.includes('Weight 500')));
   assert.equal(manifest.sourcePlan.source.captions[0].text, 'Native & editable');
   assert.throws(() => buildNativeGraphicsXml({ ...input, captions: [] }, options), /Transcribe or load captions/);
+});
+
+test('Premiere font-style calibration emits upright regular and retains the bold threshold', () => {
+  for (const [weight, expected] of [[400, '0'], [500, '0'], [599, '0'], [600, '2'], [700, '2']]) {
+    const input = makeInput(); input.style.fontFamily = 'Arial'; input.style.fontWeight = weight;
+    const before = structuredClone(input), { xml, manifest } = buildNativeGraphicsXml(input, options);
+    const styles = [...xml.matchAll(/<parameterid>fontstyle<\/parameterid><name>Style<\/name><value>(\d+)<\/value>/g)].map(match => match[1]);
+    assert.deepEqual(styles, [expected, expected], `weight ${weight} must not request Premiere's italic value 1`);
+    assert.equal(manifest.output.requestedAppearance.bold, expected === '2');
+    assert.equal(manifest.sourcePlan.source.style.fontWeight, weight);
+    assert.deepEqual(input, before);
+    assert.ok(manifest.warnings.some(value => value.includes('Regular/Bold mapping') && value.includes('Premiere 26.5.2')));
+  }
 });
 
 test('re-export IDs are disjoint while source phrase identities remain stable', () => {

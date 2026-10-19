@@ -76,6 +76,7 @@ const agentSource=main.slice(main.indexOf('  function agentAreaCaption('),main.i
 function areaAgentHarness(){
   const reads=[],scope={plain:structuredClone,validateAreaRead,validateAreaEdit,
     timelineBusy:false,exportBusy:false,areaBusy:false,agentAreaBusy:false,isRefreshing:false,isSyncing:false,automaticReflow:false,motionWatcher:null,
+    nativeGraphics:{exporting:false,result:null,failure:null,attempted:false,projectReviewed:false},
     sessionManager:{current:{sequenceId:'sequence',frameRate:24,captions:[caption()]},setCurrentTime(){}},
     api:{isDemo:false,async getActiveSequenceInfo(){return {id:'sequence',playhead:3};},async readCaptionArea(_caption,_sequence,frame){reads.push(frame);return {frame,count:48,startTime:2.5,frameRate:24};}}};
   vm.createContext(scope);vm.runInContext(transpile(busySource+agentSource),scope);return {scope,reads};
@@ -89,7 +90,21 @@ test('agent area work keeps its own busy gate when the component finishes a read
   await assert.rejects(h.scope.runAgentArea({captionId:'caption'},false),/current caption operation/);
   resolve({id:'sequence',playhead:3});await pending;
   assert.equal(h.scope.agentAreaBusy,false);assert.equal(h.scope.timelineBusy,false);
-  assert.match(main,/disabled=\{exportBusy\|\|agentAreaBusy\|\|isRefreshing/);
+  assert.match(main,/disabled=\{exportBusy\|\|nativeGraphics.exporting\|\|agentAreaBusy\|\|isRefreshing/);
+});
+
+test('pending native graphics keep agent area reads blocked until that native operation finishes',async()=>{
+  const h=areaAgentHarness();let hostReads=0;
+  h.scope.api.getActiveSequenceInfo=async()=>{hostReads++;return {id:'sequence',playhead:3};};
+  h.scope.setNativeGraphicsBusy(true);
+  h.scope.setAreaBusy(false);h.scope.setAgentAreaBusy(false);h.scope.setTimelineBusy(false);
+  assert.equal(h.scope.nativeGraphics.exporting,true);assert.equal(h.scope.timelineBusy,true);
+  await assert.rejects(h.scope.runAgentArea({captionId:'caption',frame:7},false),/current caption operation/);
+  assert.equal(hostReads,0);assert.deepEqual(h.reads,[]);
+  h.scope.setNativeGraphicsBusy(false);
+  const result=await h.scope.runAgentArea({captionId:'caption',frame:7},false);
+  assert.equal(result.frame,7);assert.equal(hostReads,1);assert.deepEqual(h.reads,[7]);
+  assert.equal(h.scope.timelineBusy,false);
 });
 test('default agent area read corrects pending caption timing from the native receipt',async()=>{
   const h=areaAgentHarness(),result=await h.scope.runAgentArea({captionId:'caption'},false);

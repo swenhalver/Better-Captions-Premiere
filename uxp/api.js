@@ -153,7 +153,11 @@ function createHostAPI(options = {}) {
             if (response.code === 'BC_OUTPUT_UNCONFIRMED' && response.recoverable === false && typeof response.outputApplied === 'boolean') Object.assign(failure, {code:response.code,method:active?.method,recoverable:false,operationPending:false,outputApplied:response.outputApplied});
             throw failure;
           }
-          if (!SERVICE_READS.has(action)) await sequenceContext(context.id);
+          // A completed graphics generation belongs to its captured project and
+          // saved artifact paths. Do not discard its import/no-retry receipt if
+          // the user switches projects or saves as after the worker finishes.
+          // The pre-write context and matching response-envelope checks remain.
+          if (!SERVICE_READS.has(action) && action !== 'generateNativeGraphics') await sequenceContext(context.id);
           return response.result;
         }
         await sleep(unresolved ? 1000 : 150);
@@ -216,6 +220,10 @@ function createHostAPI(options = {}) {
     },
     async getFonts() { if (!currentId) await nativeAPI.getActiveSequenceInfo(); return backend('getFonts', []); },
     async getFontCatalog() { if (!currentId) await nativeAPI.getActiveSequenceInfo(); return backend('getFontCatalog', []); },
+    async generateNativeGraphics(source,options,id=currentId) {
+      if(!record(source)||!sameSavedSequence(source.sequenceId,id)||!record(options)||Object.keys(options).length!==1||!['save-only','import-new-sequence'].includes(options.mode))throw new Error('Choose an explicit native graphics mode for the captured source sequence.');
+      return backend('generateNativeGraphics',[source,options],id);
+    },
     async showInPremiere(time, id = currentId) { return backend('showInPremiere', [time], id); },
     async beginCaption(captionId, id) { return backend('beginCaption', [captionId], id); },
     async saveCaptionFrames(folder, frames, start, id) { return backend('saveCaptionFrames', [folder, frames, start], id); },
@@ -298,13 +306,14 @@ function createHostAPI(options = {}) {
       if (['fetchTranscriptJSON', 'transcribeSequence', 'loadSession', 'readCaptionConnections'].includes(method) && args[0] === undefined) args[0] = currentId;
       if (method==='readCaptionConnections') { args[1]=JSON.parse(JSON.stringify(args[1]??[]));args[2]=JSON.parse(JSON.stringify(args[2]??{})); }
       if (method==='writeNativeCaptionDocument') { if(args[2]===undefined)args[2]=currentId;args[0]=JSON.parse(JSON.stringify(args[0]??null)); }
+      if (method==='generateNativeGraphics') { if(args[2]===undefined)args[2]=currentId;args[0]=JSON.parse(JSON.stringify(args[0]??null));args[1]=JSON.parse(JSON.stringify(args[1]??null)); }
       if (method==='saveSession')args[0]=JSON.parse(JSON.stringify(args[0]??null));
       if (['showInPremiere', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'selectCaptionClip', 'readCaptionArea', 'editCaptionArea'].includes(method) && args[1] === undefined) args[1] = currentId;
       let id=currentId;
       if(['fetchTranscriptJSON','transcribeSequence','loadSession','readCaptionConnections'].includes(method))id=args[0];
       else if(method==='saveSession')id=args[0]?.sequenceId;
       else if(['showInPremiere','readTimeline','readCaptionMotion','readCaptionGeometry','readCaptionSelection','selectCaptionClip','readCaptionArea','editCaptionArea','beginCaption','readCaptionConsolidation'].includes(method))id=args[1];
-      else if(['preflightCaptionClips','applyCaptionClips','writeNativeCaptionDocument'].includes(method))id=args[2];
+      else if(['preflightCaptionClips','applyCaptionClips','writeNativeCaptionDocument','generateNativeGraphics'].includes(method))id=args[2];
       else if(['saveCaptionFrames','finishCaption','applyConsolidatedCaption'].includes(method))id=args[3];
       const context=['getActiveSequenceInfo','loadStylePresets','saveStylePresets'].includes(method)?null:contexts.get(key(id??currentId));
       return serial(method, () => nativeAPI[method](...args),context);
