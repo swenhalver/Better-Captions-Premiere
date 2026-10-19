@@ -180,6 +180,25 @@ catch(e){var line=Number(e&&e.line);return '{"version":1,"ok":false,"error":'+qu
     });
   }
   const api = {
+    /** Internal CEP service path: fixed native actions, never a method/script/path endpoint. */
+    async dispatchNativeCaptionControlRequest(envelope:{action:string;sequenceId:string;projectPath:string;args:unknown[]}):Promise<NativeCaptionControls>{
+      if(!envelope||typeof envelope!=='object'||Object.keys(envelope).some(key=>!['action','sequenceId','projectPath','args'].includes(key))||
+        !['readNativeCaptionControls','editNativeCaptionControl','seekNativeCaptionKeyframe'].includes(envelope.action)||
+        typeof envelope.sequenceId!=='string'||!/^[a-zA-Z0-9_-]{1,160}$/.test(envelope.sequenceId)||typeof envelope.projectPath!=='string'||
+        !Array.isArray(envelope.args)||envelope.args.length!==(envelope.action==='readNativeCaptionControls'?1:2))throw new Error('Invalid native caption control service envelope.');
+      const frozen=JSON.parse(JSON.stringify(envelope)),snapshot=frozen.args[0],request=frozen.args[1];
+      if(!snapshot||typeof snapshot!=='object'||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024||
+        !snapshot.locator||snapshot.locator.projectPath!==frozen.projectPath||!sameSavedSequence(snapshot.locator.sequenceId,frozen.sequenceId)||
+        frozen.action!=='readNativeCaptionControls'&&(!request||typeof request!=='object'||Array.isArray(request)))throw new Error('The native caption snapshot differs from the captured service project or sequence.');
+      // Warm once after a service reload. Subsequent gestures reuse only the
+      // captured settings; the native job revalidates them and all identities
+      // before sampling and before/after any setter. No stale live data cache.
+      if(!contexts.has(frozen.sequenceId))await api.getActiveSequenceInfo(frozen.sequenceId);
+      const context=captured(frozen.sequenceId);
+      if(context.projectPath!==frozen.projectPath)throw new Error('The captured native caption project changed. Refresh Better Captions.');
+      return readJob(frozen.action,{sequenceId:context.id,projectPath:context.projectPath,snapshot,
+        expectedSequenceSettings:{width:context.width,height:context.height,fps:context.fps},...(request===undefined?{}:{request})});
+    },
     async loadStylePresets(): Promise<PresetLibrary> {
       if (cep) throw new Error('Style presets require the Better Captions UXP panel.');
       const raw = localStorage.getItem(PRESET_STORAGE_KEY);

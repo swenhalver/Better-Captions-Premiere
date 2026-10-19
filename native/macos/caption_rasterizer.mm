@@ -28,6 +28,23 @@ struct FrameFonts {
   return choice.font;
  }
 };
+// Preserve the exact legacy path when no join is needed. Joined edges have
+// zero corner radius; separate state colors/alpha still paint their own span.
+CGPathRef bubblePath(CGRect rect,double radius,bool joinLeft,bool joinRight){
+ if(!joinLeft&&!joinRight)return CGPathCreateWithRoundedRect(rect,radius,radius,nullptr);
+ auto path=CGPathCreateMutable();if(!path)throw std::runtime_error("Bubble path allocation failed");
+ const auto left=CGRectGetMinX(rect),right=CGRectGetMaxX(rect),bottom=CGRectGetMinY(rect),top=CGRectGetMaxY(rect);
+ const double l=joinLeft?0:radius,r=joinRight?0:radius;
+ CGPathMoveToPoint(path,nullptr,left+l,bottom);CGPathAddLineToPoint(path,nullptr,right-r,bottom);
+ if(r)CGPathAddArcToPoint(path,nullptr,right,bottom,right,bottom+r,r);else CGPathAddLineToPoint(path,nullptr,right,bottom);
+ CGPathAddLineToPoint(path,nullptr,right,top-r);
+ if(r)CGPathAddArcToPoint(path,nullptr,right,top,right-r,top,r);else CGPathAddLineToPoint(path,nullptr,right,top);
+ CGPathAddLineToPoint(path,nullptr,left+l,top);
+ if(l)CGPathAddArcToPoint(path,nullptr,left,top,left,top-l,l);else CGPathAddLineToPoint(path,nullptr,left,top);
+ CGPathAddLineToPoint(path,nullptr,left,bottom+l);
+ if(l)CGPathAddArcToPoint(path,nullptr,left,bottom,left+l,bottom,l);else CGPathAddLineToPoint(path,nullptr,left,bottom);
+ CGPathCloseSubpath(path);return path;
+}
 struct Shaped {
  Ref<CFStringRef> text;
  bool syntheticItalic=false;
@@ -99,7 +116,7 @@ Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::
    Ref<CGColorRef> bubble(Shaped::color(space,s.bubbleColor,s.opacity));CGContextSetFillColorWithColor(context,bubble);
    auto rect=CGRectMake(run.x,height-run.baseline-m.descent-pad,run.width+run.bubbleExtraWidth,m.ascent+m.descent+2*pad);
    double radius=std::fmin(s.radius,std::fmin(rect.size.width,rect.size.height)/2);
-   Ref<CGPathRef> path(CGPathCreateWithRoundedRect(rect,radius,radius,nullptr));CGContextAddPath(context,path);CGContextFillPath(context);
+   Ref<CGPathRef> path(bubblePath(rect,radius,run.bubbleJoinLeft,run.bubbleJoinRight));CGContextAddPath(context,path);CGContextFillPath(context);
   }
   const bool shadow=s.shadowColor.a>0&&(s.shadowBlur>0||s.shadowX!=0||s.shadowY!=0);
   if(shadow){

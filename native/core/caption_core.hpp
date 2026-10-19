@@ -59,6 +59,8 @@ struct DrawWord {
     double x=0,baseline=0,width=0,height=0;
     // Paint-only extension; never participates in glyph origins or wrapping.
     double bubbleExtraWidth=0;
+    // Derived joins flatten only internal touching edges; never serialized.
+    bool bubbleJoinLeft=false,bubbleJoinRight=false;
 };
 struct RollUpSettings {
     bool enabled=false;

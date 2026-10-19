@@ -4,15 +4,14 @@ var BetterCaptionsHost = (function () {
     // ExtendScript does not guarantee JSON. Keep a local codec instead of
     // depending on another extension's JSON2 globals or evaluating file text.
     function jsonString(value) {
-        var out = '"';
-        for (var i = 0; i < value.length; i++) {
-            var c = value.charAt(i), n = value.charCodeAt(i);
-            if (c === '"') out += '\\"';
-            else if (c === '\\') out += '\\\\';
-            else if (n < 32) out += '\\u' + ('0000' + n.toString(16)).slice(-4);
-            else out += c;
-        }
-        return out + '"';
+        // Most native carrier strings are long uninterrupted hex runs. Let
+        // the ES3 regex engine copy those runs instead of concatenating every
+        // character through ExtendScript. Preserve the exact local encoding.
+        return '"' + value.replace(/["\\\x00-\x1f]/g, function (c) {
+            if (c === '"') return '\\"';
+            if (c === '\\') return '\\\\';
+            return '\\u' + ('0000' + c.charCodeAt(0).toString(16)).slice(-4);
+        }) + '"';
     }
     function stringify(value) {
         if (value === null) return 'null';
@@ -37,23 +36,26 @@ var BetterCaptionsHost = (function () {
         function whitespace() { while (cursor < text.length && /[ \t\r\n]/.test(text.charAt(cursor))) cursor++; }
         function string() {
             if (text.charAt(cursor++) !== '"') fail();
-            var out = '';
+            var parts = [], special = /["\\\x00-\x1f]/g;
             while (cursor < text.length) {
-                var c = text.charAt(cursor++);
-                if (c === '"') return out;
+                special.lastIndex = cursor;
+                var match = special.exec(text);
+                if (!match) fail();
+                parts.push(text.substring(cursor, match.index)); cursor = match.index + 1;
+                var c = match[0];
+                if (c === '"') return parts.join('');
                 if (c.charCodeAt(0) < 32) fail();
-                if (c !== '\\') { out += c; continue; }
                 c = text.charAt(cursor++);
-                if (c === '"' || c === '\\' || c === '/') out += c;
-                else if (c === 'b') out += '\b';
-                else if (c === 'f') out += '\f';
-                else if (c === 'n') out += '\n';
-                else if (c === 'r') out += '\r';
-                else if (c === 't') out += '\t';
+                if (c === '"' || c === '\\' || c === '/') parts.push(c);
+                else if (c === 'b') parts.push('\b');
+                else if (c === 'f') parts.push('\f');
+                else if (c === 'n') parts.push('\n');
+                else if (c === 'r') parts.push('\r');
+                else if (c === 't') parts.push('\t');
                 else if (c === 'u') {
                     var hex = text.substr(cursor, 4);
                     if (!/^[0-9a-fA-F]{4}$/.test(hex)) fail();
-                    out += String.fromCharCode(parseInt(hex, 16)); cursor += 4;
+                    parts.push(String.fromCharCode(parseInt(hex, 16))); cursor += 4;
                 } else fail();
             }
             fail();
@@ -1850,12 +1852,21 @@ var BetterCaptionsHost = (function () {
         if (typeof value !== 'number' || !isFinite(value) || value < 1 || value > 8192) throw new Error('Native caption dimensions must be between 1 and 8192 pixels.');
         return value;
     }
+    function nativeControlSequence(p) {
+        var s = sequence(p.sequenceId, p.projectPath);
+        if (p.expectedSequenceSettings) {
+            var settings = p.expectedSequenceSettings;
+            if (typeof settings.width !== 'number' || typeof settings.height !== 'number' || typeof settings.fps !== 'number' || !isFinite(settings.fps) ||
+                s.frameSizeHorizontal !== settings.width || s.frameSizeVertical !== settings.height || Math.abs(TICKS / Number(s.timebase) - settings.fps) > 0.000001) throw new Error('The Premiere project or sequence settings changed. Refresh Better Captions.');
+        }
+        return s;
+    }
     function nativeControlContext(p) {
         var snapshot = p.snapshot, target = snapshot && snapshot.locator;
         if (!snapshot || !target || typeof snapshot.revision !== 'string' || !snapshot.revision || snapshot.revision.length > nativeCarrierBytes || typeof p.sequenceId !== 'string' || !p.sequenceId || !localMediaPath(p.projectPath) || target.projectPath !== p.projectPath || !sameSequenceId(target.sequenceId, p.sequenceId) || typeof target.clipNodeId !== 'string' || !target.clipNodeId) throw new Error('Invalid native caption snapshot identity.');
         var fields = ['trackIndex', 'clipIndex', 'componentIndex', 'documentParamIndex'];
         for (var i = 0; i < fields.length; i++) { var bound = 128; if (fields[i] === 'clipIndex') bound = 100000; if (fields[i] === 'trackIndex') bound = 255; nativeInteger(target[fields[i]], 0, bound, 'control locator'); }
-        var s = sequence(p.sequenceId, p.projectPath), trackCount = connectionCount(s.videoTracks.numTracks, 256);
+        var s = nativeControlSequence(p), trackCount = connectionCount(s.videoTracks.numTracks, 256);
         if (target.trackIndex >= trackCount) throw new Error('The native caption track changed.');
         var track = s.videoTracks[target.trackIndex], clips = track.clips, clipCount = connectionCount(clips.numItems, 100000);
         if (target.clipIndex >= clipCount) throw new Error('The native caption clip changed.');
@@ -1896,7 +1907,7 @@ var BetterCaptionsHost = (function () {
         if (descriptors.alignment) receipt.alignment = descriptors.alignment;
         for (var rp = 0; rp < nativeRollUpNames.length; rp++) if (descriptors[nativeRollUpNames[rp]]) receipt[nativeRollUpNames[rp]] = descriptors[nativeRollUpNames[rp]];
         receipt.revision = stringify({ documentRevision: snapshot.revision, timelineTicks: at, controls: descriptors });
-        var sampledSequence = sequence(p.sequenceId, p.projectPath);
+        var sampledSequence = nativeControlSequence(p);
         if (nativeControlTicks(String(sampledSequence.getPlayerPosition().ticks)) !== at) throw new Error('The playhead moved while reading native caption controls. Read them again.');
         return { receipt: receipt, params: params, track: track, clip: clip };
     }

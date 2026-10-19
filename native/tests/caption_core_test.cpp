@@ -111,6 +111,16 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
   const auto bytes=encode(fill);assert(decode(bytes).schemaVersion==5&&encode(decode(bytes))==bytes);
   const auto wrapped=layoutFrame(fill,time,{0,0,160,600},measure);for(const auto& run:wrapped.words)assert(run.bubbleExtraWidth==0);
  }
+ // A continuous same-line run squares internal boundaries only. Each physical
+ // wrapped line starts and ends with rounded outer corners, without layout edits.
+ Document joined;joined.containers.push_back({"joins",false,{{"AA",0,1,false},{"BB",1,2,false},{"CC",2,3,false}}});
+ for(auto* style:{&joined.style.current,&joined.style.upcoming,&joined.style.spoken}){style->fontSize=20;style->bubble=true;style->bubbleFillSpaces=true;style->padding=2;style->radius=10;}
+ const auto joinBytes=encode(joined);const auto joinFrame=layoutFrame(joined,1.5,{0,0,300,300},measure);
+ assert(joinFrame.words.size()==3&&!joinFrame.words[0].bubbleJoinLeft&&joinFrame.words[0].bubbleJoinRight&&joinFrame.words[1].bubbleJoinLeft&&joinFrame.words[1].bubbleJoinRight&&joinFrame.words[2].bubbleJoinLeft&&!joinFrame.words[2].bubbleJoinRight);
+ const auto wrapJoins=layoutFrame(joined,1.5,{0,0,65,300},measure);
+ assert(!wrapJoins.words[0].bubbleJoinLeft&&wrapJoins.words[0].bubbleJoinRight&&wrapJoins.words[1].bubbleJoinLeft&&!wrapJoins.words[1].bubbleJoinRight&&!wrapJoins.words[2].bubbleJoinLeft&&!wrapJoins.words[2].bubbleJoinRight);
+ joined.style.current.bubbleColor.a=0;const auto transparentJoin=layoutFrame(joined,1.5,{0,0,300,300},measure);for(const auto& run:transparentJoin.words)assert(!run.bubbleJoinLeft&&!run.bubbleJoinRight);
+ joined.style.current.bubbleColor.a=1;assert(encode(joined)==joinBytes); // joins are derived, not a new format
  auto v5Bad=encode(bubbles);auto v5Fill=bubbles;v5Fill.style.current.bubbleFillSpaces=true;v5Bad=encode(v5Fill);v5Bad.back()=2;rejects([&]{decode(v5Bad);});
  auto again=layoutFrame(bubbles,0.1,{0,0,1200,300},measure);
  assert(again.words.size()==bubbleFrame.words.size());for(std::size_t i=0;i<again.words.size();++i)assert(again.words[i].x==bubbleFrame.words[i].x&&again.words[i].baseline==bubbleFrame.words[i].baseline&&again.words[i].text==bubbleFrame.words[i].text);

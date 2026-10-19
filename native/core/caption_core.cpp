@@ -41,6 +41,7 @@ void style(const WordStyle& s) {
  require(finite(s.shadowX)&&finite(s.shadowY)&&std::abs(s.shadowX)<=4096&&std::abs(s.shadowY)<=4096,"invalid shadow offset");
  color(s.color);color(s.bubbleColor);color(s.outlineColor);color(s.shadowColor);
 }
+bool visibleBubble(const WordStyle& s) { return s.bubble&&s.opacity>0&&s.bubbleColor.a>0; }
 bool punctuation(const std::string& s) { return !s.empty()&&std::string(".,!?;:%)]}").find(s.front())!=std::string::npos; }
 std::size_t chars(const std::string& s) { std::size_t n=0;for(unsigned char c:s) if((c&0xc0)!=0x80)++n;return n; }
 struct Writer {
@@ -220,6 +221,7 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
     if(horizontal){const auto block=index/lines;const double shift=block*box.width-offset;left+=settings.direction==3?shift:-shift;top+=(index%lines)*rowHeight;}
     else{const double shift=index*rowHeight-offset;top+=settings.direction==1?shift:viewportHeight-rowHeight-shift;}
     if(left+box.width<=box.x||left>=box.x+box.width||top+rowHeight<=viewportTop||top>=viewportTop+viewportHeight)continue;
+    bool previousBubbleJoin=false;
     for(std::size_t slotIndex=0;slotIndex<line.words.size();++slotIndex){
      const auto& slot=line.words[slotIndex];
      const auto& word=container.words[slot.index];if(word.start>time)continue;
@@ -228,12 +230,15 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
      const double pad=style.bubble?style.padding:0,width=metrics.width+2*pad;
      const double x=left+lineInset(box,line.width)+slot.left+(slot.reserved.width-width)/2;
      DrawWord run{slot.text,container.id,slot.index,state,style,x,top+maxAscent,width,metrics.ascent+metrics.descent+2*pad};
+     run.bubbleJoinLeft=previousBubbleJoin;
      if(style.bubble&&style.bubbleFillSpaces&&slotIndex+1<line.words.size()){
       const auto& next=line.words[slotIndex+1];
       if(!punctuation(next.text)){const auto& nextWord=container.words[next.index];const auto& nextStyle=time<nextWord.start?d.style.upcoming:time<nextWord.end?d.style.current:d.style.spoken;
        const auto nextMetrics=measure(next.text,nextStyle);const double nextWidth=nextMetrics.width+(nextStyle.bubble?2*nextStyle.padding:0);
-       const double nextX=left+lineInset(box,line.width)+next.left+(next.reserved.width-nextWidth)/2;run.bubbleExtraWidth=std::max(0.0,nextX-x-width);}
+       const double nextX=left+lineInset(box,line.width)+next.left+(next.reserved.width-nextWidth)/2;run.bubbleExtraWidth=std::max(0.0,nextX-x-width);
+       run.bubbleJoinRight=visibleBubble(style)&&visibleBubble(nextStyle)&&nextWord.start<=time;}
      }
+     previousBubbleJoin=run.bubbleJoinRight;
      if(settled)settled->emplace(slot.index,run);
      run.style.opacity*=alpha;
      run.style.fontSize*=scale;run.style.padding*=scale;run.style.radius*=scale;run.style.outlineWidth*=scale;run.style.shadowBlur*=scale;run.style.shadowX*=scale;run.style.shadowY*=scale;
@@ -329,7 +334,10 @@ Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const Measu
    for(std::size_t index=0;index<line.size();++index){
     auto& run=line[index];if(index&&!punctuation(run.text))x+=d.style.wordSpacing;
     run.x=x;run.baseline=y+lineAscent;
-    if(run.style.bubble&&run.style.bubbleFillSpaces&&index+1<line.size()&&!punctuation(line[index+1].text))run.bubbleExtraWidth=d.style.wordSpacing;
+    if(run.style.bubble&&run.style.bubbleFillSpaces&&index+1<line.size()&&!punctuation(line[index+1].text)){
+     run.bubbleExtraWidth=d.style.wordSpacing;
+     if(visibleBubble(run.style)&&visibleBubble(line[index+1].style)){run.bubbleJoinRight=true;line[index+1].bubbleJoinLeft=true;}
+    }
     x+=run.width;result.words.push_back(std::move(run));
    }
    double h=lineAscent+lineDescent;if(y+h>box.y+box.height)result.overflow=true;y+=h*d.style.lineHeight;line.clear();lineWidth=lineAscent=lineDescent=0;

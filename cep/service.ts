@@ -47,6 +47,12 @@ export function validateServiceRequest(value: unknown, filename: string, now = D
 
 /** The envelope holds sequence identity; args contain only the method's other arguments. */
 export async function dispatchServiceRequest(api: any, request: Request): Promise<unknown> {
+  // These fixed native jobs validate the captured envelope inside the same
+  // host evaluation as their document/clip/clock checks. Avoid two preceding
+  // context evalScript round trips for every interactive numeric movement.
+  if (['readNativeCaptionControls','editNativeCaptionControl','seekNativeCaptionKeyframe'].includes(request.action) && typeof api.dispatchNativeCaptionControlRequest === 'function') {
+    return api.dispatchNativeCaptionControlRequest({action:request.action,sequenceId:request.sequenceId,projectPath:request.projectPath,args:request.args});
+  }
   const info = await api.getActiveSequenceInfo(request.sequenceId);
   if (!info || info.id !== request.sequenceId || info.projectPath !== request.projectPath) throw new Error('The active Premiere sequence or project changed. Refresh Better Captions.');
   const [a, b, c, d] = request.args, id = info.id;

@@ -30,9 +30,22 @@ test('bubble space filling reaches the next visible word without shifting text o
  const cue={id:'spaces',text:'AA BB',startTime:0,endTime:2,words};
  const style=structuredClone(DEFAULT_STYLE);Object.assign(style,{fontSize:20,strokeEnabled:false,shadowEnabled:false,backgroundEnabled:false,wordSpacing:200});
  for(const key of ['activeWord','spokenWord','upcomingWord'])style[key]={...style[key],fontSize:key==='upcomingWord'?30:20,bubble:true,padding:0,radius:0,bubbleOpacity:.4,opacity:.6,sizeScale:1,strokeEnabled:false,shadowEnabled:false};
- const paint=(config,width=400)=>{const ctx=context(),renderer=new CaptionRenderer(ctx,720,1280),rects=[];renderer.roundRect=(...rect)=>rects.push(rect);const layout=renderer.renderFrame(cue,.5,config,{...DEFAULT_ANIMATION,preset:'karaoke',fadeInDuration:0,fadeOutDuration:0},{width,height:300});return{ctx,rects,layout};};
+ const paint=(config,width=400)=>{const ctx=context(),renderer=new CaptionRenderer(ctx,720,1280),rects=[];renderer.bubbleRect=(...rect)=>rects.push(rect);const layout=renderer.renderFrame(cue,.5,config,{...DEFAULT_ANIMATION,preset:'karaoke',fadeInDuration:0,fadeOutDuration:0},{width,height:300});return{ctx,rects,layout};};
  const baseline=paint(style);style.activeWord.bubbleFillSpaces=true;const filled=paint(style);
  assert.deepEqual(filled.ctx.texts,baseline.ctx.texts,'glyph positions and state fonts remain unchanged');assert.deepEqual(filled.layout,baseline.layout,'line fitting must not use background fill extensions');
- assert.equal(filled.rects[0][0]+filled.rects[0][2],filled.rects[1][0],'filled background reaches the next bubble start');assert.ok(filled.rects[0][2]>baseline.rects[0][2]);assert.deepEqual(filled.rects[1],baseline.rects[1],'line trailing background remains unchanged');
+ assert.equal(filled.rects[0][0]+filled.rects[0][2],filled.rects[1][0],'filled background reaches the next bubble start');assert.ok(filled.rects[0][2]>baseline.rects[0][2]);assert.deepEqual(filled.rects[1].slice(0,5),baseline.rects[1].slice(0,5),'line trailing background geometry remains unchanged');
+ assert.deepEqual(filled.rects.map(rect=>rect.slice(5)),[[false,true],[true,false]],'only interior touching corners are square');
  const wrapped=paint(style,40),without=structuredClone(style);without.activeWord.bubbleFillSpaces=false;assert.deepEqual(wrapped.rects,paint(without,40).rects,'space fill cannot bridge a wrapped line');
+});
+
+
+test('canvas bubble joins reset at each physical line and keep independent state colors/opacity',()=>{
+ const words=['AA','BB','CC'].map((text,i)=>({text,startTime:i,endTime:i+1,isActive:false}));const cue={id:'joined',text:'AA BB CC',startTime:0,endTime:3,words};
+ const style=structuredClone(DEFAULT_STYLE);Object.assign(style,{fontSize:20,strokeEnabled:false,shadowEnabled:false,backgroundEnabled:false,wordSpacing:100});
+ for(const key of ['activeWord','spokenWord','upcomingWord'])style[key]={...style[key],fontSize:20,sizeScale:1,bubble:true,bubbleFillSpaces:true,padding:2,radius:10,bubbleOpacity:.4,opacity:.6,strokeEnabled:false,shadowEnabled:false};
+ Object.assign(style.spokenWord,{bubbleColor:'#ff0000',bubbleOpacity:.25,opacity:.5});Object.assign(style.activeWord,{bubbleColor:'#0000ff',bubbleOpacity:.8,opacity:.75});
+ const paint=width=>{const ctx=context(),renderer=new CaptionRenderer(ctx,720,1280),rects=[];renderer.bubbleRect=(...rect)=>rects.push({rect,fill:ctx.fillStyle,opacity:ctx.globalAlpha});renderer.renderFrame(cue,1.5,style,{...DEFAULT_ANIMATION,preset:'karaoke',fadeInDuration:0,fadeOutDuration:0},{width,height:300});return rects;};
+ const wide=paint(300);assert.deepEqual(wide.map(({rect})=>rect.slice(5)),[[false,true],[true,true],[true,false]]);assert.equal(wide[0].fill,'rgba(255,0,0,0.25)');assert.equal(wide[0].opacity,.5);assert.equal(wide[1].fill,'rgba(0,0,255,0.8)');assert.equal(wide[1].opacity,.75);
+ const wrapped=paint(60);assert.deepEqual(wrapped.map(({rect})=>rect.slice(5)),[[false,true],[true,false],[false,false]],'each wrapped line keeps its own rounded first/last end');
+ style.activeWord.bubbleOpacity=0;const transparent=paint(300);assert.deepEqual(transparent.map(({rect})=>rect.slice(5)),[[false,false],[false,false],[false,false]],'invisible bubble cannot erase an outer rounded endpoint');
 });

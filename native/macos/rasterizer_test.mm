@@ -33,6 +33,28 @@ int main(){
  const auto finalRun=layoutFrame(spaced,.5,spacedBox,nativeMeasure).words.back();const auto trailing=static_cast<std::size_t>(std::ceil(finalRun.x+finalRun.width+4));
  check(filledGap.pixels[gapY*filledGap.stride+trailing*4+3]==0,"Space fill extended beyond final line word");
  spaced.style.current.bubble=false;const auto disabledBubble=macos::rasterize(spaced,.5,spacedBox,640,240);check(disabledBubble.pixels[gapY*disabledBubble.stride+gapX*4+3]==0,"Disabled bubble still colored its spaces");
+ // Joining bubbles removes the top/bottom rounded notches at interior
+ // spaces while retaining the two outer rounded endpoints and state alpha.
+ Document connected=spaced;connected.style.current.bubble=true;
+ for(auto* style:{&connected.style.current,&connected.style.spoken,&connected.style.upcoming}){style->bubbleFillSpaces=true;style->padding=8;style->radius=12;}
+ connected.style.spoken.bubbleColor={1,0,0,.5};connected.style.current.bubbleColor={0,0,1,.8};
+ const auto connectedFrame=layoutFrame(connected,1.5,spacedBox,nativeMeasure);const auto& a=connectedFrame.words[0];const auto& z=connectedFrame.words[1];
+ const auto connectedBitmap=macos::rasterize(connected,1.5,spacedBox,640,240);
+ const auto top=static_cast<std::size_t>(std::ceil(a.baseline-nativeMeasure(a.text,a.style).ascent-a.style.padding)+1);
+ auto alphaAt=[&](std::size_t x,std::size_t y){return connectedBitmap.pixels[y*connectedBitmap.stride+x*4+3];};
+ const auto beforeJoin=static_cast<std::size_t>(std::floor(z.x)-2),afterJoin=static_cast<std::size_t>(std::ceil(z.x)+2);
+ check(alphaAt(beforeJoin,top)>=63&&alphaAt(beforeJoin,top)<=65,"Filled space retains a rounded notch on its right join");
+ check(alphaAt(afterJoin,top)>=101&&alphaAt(afterJoin,top)<=103,"Following bubble retains a rounded notch or loses its alpha on its left join");
+ check(alphaAt(static_cast<std::size_t>(a.x)+1,top)<32,"First outer bubble end lost its rounded corner");
+ check(alphaAt(static_cast<std::size_t>(z.x+z.width)-2,top)<50,"Last outer bubble end lost its rounded corner");
+ check(connectedBitmap.pixels[top*connectedBitmap.stride+beforeJoin*4]>0&&connectedBitmap.pixels[top*connectedBitmap.stride+beforeJoin*4+2]==0,"Previous state fill color changed at join");
+ check(connectedBitmap.pixels[top*connectedBitmap.stride+afterJoin*4]==0&&connectedBitmap.pixels[top*connectedBitmap.stride+afterJoin*4+2]>0,"Current state fill color changed at join");
+ const auto wrappedConnected=layoutFrame(connected,1.5,{10,10,75,200,1},nativeMeasure);for(const auto& run:wrappedConnected.words)check(!run.bubbleJoinLeft&&!run.bubbleJoinRight,"Join leaked across a physical wrapped line");
+ const auto wrappedBitmap=macos::rasterize(connected,1.5,{10,10,75,200,1},640,240);
+ for(const auto& run:wrappedConnected.words){const auto metrics=nativeMeasure(run.text,run.style);const auto y=static_cast<std::size_t>(std::ceil(run.baseline-metrics.ascent-run.style.padding)+1);const auto left=static_cast<std::size_t>(run.x)+1,right=static_cast<std::size_t>(run.x+run.width)-2;
+  const auto fullAlpha=255*run.style.opacity*run.style.bubbleColor.a;
+  check(wrappedBitmap.pixels[y*wrappedBitmap.stride+left*4+3]<fullAlpha/2&&wrappedBitmap.pixels[y*wrappedBitmap.stride+right*4+3]<fullAlpha/2,"A wrapped physical line lost its rounded first or last endpoint");}
+
  Document pages;pages.containers.push_back({"pages",false,{{"First.",0,1,true},{"Second.",1,2,true},{"Third.",2,3,true},{"Last.",3,4,true}}});
  for(auto* s:{&pages.style.current,&pages.style.upcoming,&pages.style.spoken})s->fontSize=32;
  const auto unchangedPages=encode(pages);

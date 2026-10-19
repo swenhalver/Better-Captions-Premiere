@@ -14,7 +14,7 @@ const collection=(values,key='numItems')=>Object.defineProperty(values,key,{get:
 function events(){const handlers=new Map();return{addEventListener(type,fn){if(!handlers.has(type))handlers.set(type,new Set());handlers.get(type).add(fn);},removeEventListener(type,fn){handlers.get(type)?.delete(fn);},emit(type,event){for(const fn of handlers.get(type)??[])void fn(event);}};}
 function system(t){
  let projectPath='/first/edit.prproj',nextJob=0,nextRequest=0,documentText='BCDOC1:424341500200000000000000',setterMode='normal',transcribe=async()=>null,savedSession=null;
- const payloads=new Map(),requests=[],nativeWrites=[],cepSaves=[],sidecars=[],ipcFolders=new Map();
+ const payloads=new Map(),requests=[],nativeWrites=[],cepSaves=[],sidecars=[],ipcFolders=new Map(),hostCalls=[];
  const time=seconds=>({seconds,ticks:String(seconds*254016000000)});
  const documentParam={displayName:'Caption document (experimental)',isTimeVarying:()=>false,getValue:()=>documentText,setValue(value){nativeWrites.push(value);if(setterMode==='ignored')return 0;documentText=value;return 0;}};
  let characterLimit=56,playheadTicks=String(.5*254016000000);const keyframeSeeks=[];
@@ -29,7 +29,7 @@ function system(t){
  const nativeContext=vm.createContext({app:{project:nativeProject},Time:function(){this.ticks='0';},File:function(file){this.length=(payloads.get(file)??'').length;this.open=()=>payloads.has(file);this.read=()=>payloads.get(file);this.close=()=>{};}});
  vm.runInContext(source('cep/host/bridge.jsx'),nativeContext);nativeContext.$={global:vm.runInContext('this',nativeContext)};
  const runtime={path,directory:info=>info.projectPath.replace(/\/[^/]*$/,'')+'/Better Captions/'+info.id,readJob:data=>{const file='/ipc-'+ ++nextJob+'.json';payloads.set(file,JSON.stringify(data));return file;},disposeReadJob:file=>payloads.delete(file),load:()=>savedSession,save:(folder,data)=>cepSaves.push({folder,data})};
- const cepExports={};vm.runInNewContext(compile('webview-ui/src/cep-api.ts'),{exports:cepExports,console,require:()=>({}),window:{require:name=>name==='node:path'?path:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript(script,callback){callback(vm.runInContext(script,nativeContext));}}}});
+ const cepExports={};vm.runInNewContext(compile('webview-ui/src/cep-api.ts'),{exports:cepExports,console,require:()=>({}),window:{require:name=>name==='node:path'?path:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript(script,callback){if(script.startsWith('BetterCaptionsHost.'))hostCalls.push(script.slice('BetterCaptionsHost.'.length).split('(')[0]);callback(vm.runInContext(script,nativeContext));}}}});
  const cep=cepExports.createHostAPI();
  const service={};vm.runInNewContext(compile('cep/service.ts'),{exports:service,console,require:()=>({createHostAPI:()=>cep}),setTimeout,clearTimeout,setInterval,clearInterval});
  function folder(name){if(ipcFolders.has(name))return ipcFolders.get(name);const entries=new Map();const value={nativePath:name,entries,getEntry:async file=>{if(name==='/private/service'&&file==='service.json')return{data:{version:1,instanceId:'a'.repeat(24),updatedAt:Date.now(),actions:service.SERVICE_ACTIONS}};if(file==='captions.better-captions.json'&&savedSession!==null)return{data:savedSession};if(!entries.has(file))throw new Error('Not found');return entries.get(file);}};ipcFolders.set(name,value);return value;}
@@ -60,7 +60,7 @@ function system(t){
  const uiExports={};vm.runInNewContext(compile('webview-ui/src/webview-setup.ts'),{exports:uiExports,window:uiWindow,setTimeout,clearTimeout,console,require:()=>({createHostAPI(){throw new Error('The visible native editor must use UXP.');}})});
  const api=uiExports.initWebview({}).api,stop=api.startAgentBridge({getState:()=>null,patchStyle:()=>null,setCaptions:()=>null,refresh:()=>null,apply:()=>null});
  t.after(async()=>{await tick();stop();await entrypoints.plugin.destroy();nativeApi.dispose();});
- return{api,nativeApi,cep,service,requests,nativeWrites,geometry,keyframeSeeks,cepSaves,sidecars,payloads,
+ return{api,nativeApi,cep,service,requests,nativeWrites,geometry,keyframeSeeks,cepSaves,sidecars,payloads,hostCalls,nativeSequence,
   get projectPath(){return projectPath;},set projectPath(value){projectPath=value;},set sequenceId(value){nativeSequence.sequenceID=value;},set savedSession(value){savedSession=value;},set setterMode(value){setterMode=value;},set transcribe(value){transcribe=value;},get document(){return documentText;}};
 }
 test('connection reads and existing native edits round trip through actual webview, UXP, service, CEP and host code',async t=>{
@@ -165,6 +165,26 @@ test('native controls round trip through webview, UXP, expiring read service and
  const read=h.requests.find(r=>r.action==='readNativeCaptionControls'),write=h.requests.find(r=>r.action==='editNativeCaptionControl');assert.equal(read.expiresAt-read.createdAt,10000);assert.equal(Object.hasOwn(write,'expiresAt'),false);
  h.setterMode='ignored';await assert.rejects(h.api.editNativeCaptionControl(snapshot,{revision:after.revision,parameter:'width',operation:'set',value:500,atTicks:after.timelineTicks}),e=>e.code==='BC_OUTPUT_UNCONFIRMED'&&e.recoverable===false);
  assert.equal(h.nativeWrites.length,2);await tick();assert.equal(h.nativeWrites.length,2);assert.equal(h.payloads.size,0);
+});
+
+test('warm native control service operations cross one host boundary and retain exact project/settings checks',async t=>{
+ const h=system(t);await tick();await h.api.getActiveSequenceInfo();const entry=(await h.api.readCaptionConnections()).native[0],snapshot={locator:entry.locator,revision:entry.revision};
+ h.hostCalls.length=0;const controls=await h.api.readNativeCaptionControls(snapshot);assert.deepEqual(h.hostCalls,['readNativeCaptionControls']);
+ h.hostCalls.length=0;const after=await h.api.editNativeCaptionControl(snapshot,{revision:controls.revision,parameter:'width',operation:'set',value:600,atTicks:controls.timelineTicks});
+ assert.equal(after.readbackVerified,true);assert.deepEqual(h.hostCalls,['editNativeCaptionControl']);assert.equal(h.nativeWrites.length,1);
+ h.nativeSequence.frameSizeHorizontal=1920;await assert.rejects(h.api.readNativeCaptionControls(snapshot),/sequence settings changed/);assert.equal(h.nativeWrites.length,1);
+ h.nativeSequence.frameSizeHorizontal=720;h.projectPath='/other/edit.prproj';
+ await assert.rejects(h.cep.dispatchNativeCaptionControlRequest({action:'editNativeCaptionControl',sequenceId:'seq-a',projectPath:'/first/edit.prproj',args:[snapshot,{revision:after.revision,parameter:'width',operation:'set',value:500,atTicks:after.timelineTicks}]}),/project changed/);
+ assert.equal(h.nativeWrites.length,1);
+});
+
+test('fixed native service dispatcher refuses redirected snapshots, extra arguments and arbitrary host names',async t=>{
+ const h=system(t);await h.api.getActiveSequenceInfo();const entry=(await h.api.readCaptionConnections()).native[0],snapshot={locator:entry.locator,revision:entry.revision};
+ const base={action:'readNativeCaptionControls',sequenceId:'seq-a',projectPath:'/first/edit.prproj',args:[snapshot]};h.hostCalls.length=0;
+ for(const change of [{action:'writeNativeCaptionDocument'},{action:'context'},{args:[snapshot,'injected']},{script:'code'},{projectPath:'/other/edit.prproj'},{sequenceId:'other'}]){
+  await assert.rejects(h.cep.dispatchNativeCaptionControlRequest({...base,...change}),/envelope|snapshot/);
+ }
+ assert.deepEqual(h.hostCalls,[]);assert.deepEqual(h.nativeWrites,[]);
 });
 
 test('keyframe navigation round trips all adapters as a single exact-tick seek, preserving parameter data',async t=>{

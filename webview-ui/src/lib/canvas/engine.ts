@@ -42,6 +42,11 @@ export class CaptionRenderer {
   private roundRect(x:number,y:number,w:number,h:number,r:number){
     const c=this.ctx;r=Math.min(Math.max(0,r),w/2,h/2);c.beginPath();c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.quadraticCurveTo(x+w,y,x+w,y+r);c.lineTo(x+w,y+h-r);c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);c.lineTo(x+r,y+h);c.quadraticCurveTo(x,y+h,x,y+h-r);c.lineTo(x,y+r);c.quadraticCurveTo(x,y,x+r,y);c.closePath();
   }
+  private bubbleRect(x:number,y:number,w:number,h:number,r:number,joinLeft:boolean,joinRight:boolean){
+    if(!joinLeft&&!joinRight){this.roundRect(x,y,w,h,r);return;}
+    const c=this.ctx;r=Math.min(Math.max(0,r),w/2,h/2);const left=joinLeft?0:r,right=joinRight?0:r;
+    c.beginPath();c.moveTo(x+left,y);c.lineTo(x+w-right,y);c.quadraticCurveTo(x+w,y,x+w,y+right);c.lineTo(x+w,y+h-right);c.quadraticCurveTo(x+w,y+h,x+w-right,y+h);c.lineTo(x+left,y+h);c.quadraticCurveTo(x,y+h,x,y+h-left);c.lineTo(x,y+left);c.quadraticCurveTo(x,y,x+left,y);c.closePath();
+  }
   renderFrame(caption:CaptionItem|null,time:number,style:StyleConfig,animation:AnimationConfig,area?:RenderArea):RenderLayout|undefined{
     this.clear();caption=captionAtRenderTime(caption,time);if(!caption||this.width<=0||this.height<=0)return;
     const c=this.ctx,all=['upcoming','active','spoken'] as const;
@@ -132,6 +137,7 @@ export class CaptionRenderer {
       let x=style.textAlign==='left'?-alignmentWidth/2:style.textAlign==='right'?alignmentWidth/2-rowWidths[ri]:-rowWidths[ri]/2;
       x+=overhang(r[0]);
       const y=-height/2+(ri+.5)*rowHeight;
+      let previousBubbleJoin=false;
       for(let wordIndex=0;wordIndex<r.length;wordIndex++){
         const wm=r[wordIndex];
         x+=wm.gapBefore;
@@ -139,7 +145,7 @@ export class CaptionRenderer {
         const visibleText=transformCaptionText(wm.text,a.textTransform,wm.precedingText),actualWidth=this.measureText(visibleText,a),tx=x+(wm.width-actualWidth)/2;
         c.globalAlpha=clamp(alpha,0,1)*clamp(a.opacity,0,1);
         const started=time>=wm.word.startTime;
-        if((animation.preset==='typewriter'||animation.preset==='pop'||animation.preset==='bounce')&&!started){c.restore();x+=wm.width;continue;}
+        if((animation.preset==='typewriter'||animation.preset==='pop'||animation.preset==='bounce')&&!started){previousBubbleJoin=false;c.restore();x+=wm.width;continue;}
         if(state==='active'){
           // Complete entrances within short words too, before their spoken
           // appearance takes over at the exact word end.
@@ -149,18 +155,22 @@ export class CaptionRenderer {
           if(animation.preset==='bounce')c.translate(0,-bounceLift*(1-easeOutBounce(p)));
         }
         // Both text and its highlight use the same local animation transform.
+        const joinLeft=previousBubbleJoin;previousBubbleJoin=false;
         if(a.bubble){
-          let fillSpace=0;
+          let fillSpace=0,joinRight=false;
           const next=r[wordIndex+1];
-          if(a.bubbleFillSpaces&&next&&next.gapBefore>0){
+          if(a.bubbleFillSpaces&&next&&!next.continuation){
             const nextAppearance=appearance(style,wordState(next.word,time));
             const nextText=transformCaptionText(next.text,nextAppearance.textTransform,next.precedingText);
             const ownFont=c.font;c.font=this.font(style,nextAppearance);
             const nextWidth=this.measureText(nextText,nextAppearance);c.font=ownFont;
             const nextLeft=x+wm.width+next.gapBefore+(next.width-nextWidth)/2-(nextAppearance.bubble?nextAppearance.padding:0);
             fillSpace=Math.max(0,nextLeft-(tx+actualWidth+a.padding));
+            const nextVisible=!['typewriter','pop','bounce'].includes(animation.preset)||time>=next.word.startTime;
+            joinRight=a.opacity>0&&a.bubbleOpacity>0&&nextVisible&&nextAppearance.bubble&&nextAppearance.opacity>0&&nextAppearance.bubbleOpacity>0;
           }
-          c.fillStyle=rgba(a.bubbleColor,a.bubbleOpacity);this.roundRect(tx-a.padding,y-a.fontSize*.6-a.padding,actualWidth+2*a.padding+fillSpace,a.fontSize*1.2+2*a.padding,a.radius);c.fill();
+          previousBubbleJoin=joinRight;
+          c.fillStyle=rgba(a.bubbleColor,a.bubbleOpacity);this.bubbleRect(tx-a.padding,y-a.fontSize*.6-a.padding,actualWidth+2*a.padding+fillSpace,a.fontSize*1.2+2*a.padding,a.radius,joinLeft,joinRight);c.fill();
         }
         if(a.shadowEnabled){c.shadowColor=rgba(a.shadowColor,a.shadowOpacity);c.shadowBlur=a.shadowBlur;c.shadowOffsetX=a.shadowOffsetX;c.shadowOffsetY=a.shadowOffsetY;}
         if(a.strokeEnabled&&a.strokeWidth>0){c.strokeStyle=rgba(a.strokeColor,a.strokeOpacity);c.lineWidth=a.strokeWidth*2;c.lineJoin='round';this.paintText(visibleText,tx,y,a,true);c.shadowBlur=0;}
