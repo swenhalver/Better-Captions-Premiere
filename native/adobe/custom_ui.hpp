@@ -1,10 +1,11 @@
 #pragma once
-// Optional real-SDK Program Monitor event probe. Never used by frame rendering.
-// Host routing, keyframe/undo semantics and coordinate handling require acceptance.
+// Draw-only Program Monitor caption bounds; never used by frame rendering.
+// Pointer editing is a separate opt-in experiment and is off in production.
 #include "AE_EffectUI.h"
 #include "AE_EffectSuites.h"
 #include <adobesdk/DrawbotSuite.h>
 #include <SPBasic.h>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -14,7 +15,7 @@
 
 namespace better_captions::adobe::ui_probe {
 inline void log(const char* action,long event,long window,long error=0,long x=0,long y=0,long continuation=0,long sendDrag=0,long lastTime=0) {
-#ifdef BC_UI_PROBE_TEST_NO_LOG
+#if defined(BC_UI_PROBE_TEST_NO_LOG) || !BC_ENABLE_CUSTOM_UI_PROBE
  (void)action;(void)event;(void)window;(void)error;(void)x;(void)y;(void)continuation;(void)sendDrag;(void)lastTime;return;
 #else
  const int file=::open("/tmp/better-captions-native-ui-probe.log",O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW,0600);
@@ -27,7 +28,7 @@ inline void log(const char* action,long event,long window,long error=0,long x=0,
 }
 template<class T>class Suite {
  SPBasicSuite* basic_;const char* name_;int version_;const T* suite_=nullptr;
- public:Suite(PF_InData* in,const char* name,int version):basic_(in->pica_basicP),name_(name),version_(version){if(basic_)basic_->AcquireSuite(name_,version_,reinterpret_cast<const void**>(&suite_));}
+ public:Suite(PF_InData* in,const char* name,int version):basic_(in->pica_basicP),name_(name),version_(version){if(basic_){const void* acquired=nullptr;if(!basic_->AcquireSuite(name_,version_,&acquired))suite_=static_cast<const T*>(acquired);}}
  ~Suite(){if(suite_)basic_->ReleaseSuite(name_,version_);}const T* operator->()const{return suite_;}explicit operator bool()const{return suite_!=nullptr;}
 };
 inline PF_Err registerUI(PF_InData* in) {
@@ -38,8 +39,9 @@ inline PF_Err registerUI(PF_InData* in) {
  return PF_Err_NONE;
 }
 inline bool transform(PF_InData* in,PF_EventExtra* e,PF_FixedPoint& point,bool toFrame) {
- if(!e->cbs.source_to_frame||!e->cbs.frame_to_source||!e->cbs.layer_to_comp||!e->cbs.comp_to_layer)return false;
  PF_Err err=0;
+ if(toFrame&&(!e->cbs.source_to_frame||!e->cbs.layer_to_comp))return false;
+ if(!toFrame&&(!e->cbs.frame_to_source||!e->cbs.comp_to_layer))return false;
  if(toFrame){err=e->cbs.layer_to_comp(e->cbs.refcon,e->contextH,in->current_time,in->time_scale,&point);if(!err)err=e->cbs.source_to_frame(e->cbs.refcon,e->contextH,&point);}
  else{err=e->cbs.frame_to_source(e->cbs.refcon,e->contextH,&point);if(!err)err=e->cbs.comp_to_layer(e->cbs.refcon,e->contextH,in->current_time,in->time_scale,&point);}
  return err==0;
@@ -51,30 +53,59 @@ inline std::array<PF_FixedPoint,4> handles(PF_ParamDef* p[]){
  const auto halfW=fixed(p[2]->u.fs_d.value/2),halfH=fixed(p[3]->u.fs_d.value/2);
  return {{{x,y},{x+halfW,y},{x,y+halfH},{x+halfW,y+halfH}}};
 }
-inline void draw(PF_InData* in,PF_ParamDef* p[],PF_EventExtra* e) {
- if(e->evt_in_flags&PF_EI_DONT_DRAW)return;
+// Point parameters are already downsampled by the host. Pixel-distance sliders
+// are not; apply exactly the same anisotropic factors as the frame renderer.
+inline bool frameBounds(PF_InData* in,PF_ParamDef* p[],PF_EventExtra* e,std::array<PF_FixedPoint,4>& corners) {
+ if(!in||!p||!p[1]||!p[2]||!p[3])return false;
+ const double sx=in->downsample_x.den?double(in->downsample_x.num)/in->downsample_x.den:1;
+ const double sy=in->downsample_y.den?double(in->downsample_y.num)/in->downsample_y.den:1;
+ const double x=p[1]->u.td.x_value/65536.0,y=p[1]->u.td.y_value/65536.0;
+ const double w=p[2]->u.fs_d.value*sx,h=p[3]->u.fs_d.value*sy;
+ if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(w)||!std::isfinite(h)||w<=0||h<=0)return false;
+ corners={{{fixed(x-w/2),fixed(y-h/2)},{fixed(x+w/2),fixed(y-h/2)},{fixed(x+w/2),fixed(y+h/2)},{fixed(x-w/2),fixed(y+h/2)}}};
+ for(auto& point:corners)if(!transform(in,e,point,true))return false;
+ return true;
+}
+inline bool draw(PF_InData* in,PF_ParamDef* p[],PF_EventExtra* e) {
+ if(e->evt_in_flags&PF_EI_DONT_DRAW)return false;
+ std::array<PF_FixedPoint,4> corners{};if(!frameBounds(in,p,e,corners))return false;
  Suite<PF_EffectCustomUISuite1> ui(in,kPFEffectCustomUISuite,kPFEffectCustomUISuiteVersion1);
  Suite<DRAWBOT_DrawbotSuite1> drawbot(in,kDRAWBOT_DrawSuite,kDRAWBOT_DrawSuite_Version1);
  Suite<DRAWBOT_SurfaceSuite1> surface(in,kDRAWBOT_SurfaceSuite,kDRAWBOT_SurfaceSuite_Version1);
- if(!ui||!drawbot||!surface){log("draw-suite-unavailable",e->e_type,PF_Window_COMP);return;}
- DRAWBOT_DrawRef ref=nullptr;DRAWBOT_SurfaceRef canvas=nullptr;
- if(ui->PF_GetDrawingReference(e->contextH,&ref)||!ref||drawbot->GetSurface(ref,&canvas)||!canvas){log("draw-reference-unavailable",e->e_type,PF_Window_COMP);return;}
- // Small actual overlay handles, never included in exported frame pixels.
+ Suite<DRAWBOT_SupplierSuite1> supplier(in,kDRAWBOT_SupplierSuite,kDRAWBOT_SupplierSuite_Version1);
+ Suite<DRAWBOT_PathSuite1> path(in,kDRAWBOT_PathSuite,kDRAWBOT_PathSuite_Version1);
+ if(!ui||!drawbot||!surface||!supplier||!path)return false;
+ DRAWBOT_DrawRef ref=nullptr;DRAWBOT_SurfaceRef canvas=nullptr;DRAWBOT_SupplierRef provider=nullptr;
+ if(ui->PF_GetDrawingReference(e->contextH,&ref)||!ref||drawbot->GetSurface(ref,&canvas)||!canvas||drawbot->GetSupplier(ref,&provider)||!provider)return false;
  const DRAWBOT_ColorRGBA color{0.2f,0.7f,1.0f,1.0f};
- auto points=handles(p);for(auto point:points){if(!transform(in,e,point,true))continue;DRAWBOT_RectF32 box{float(point.x/65536.0-4),float(point.y/65536.0-4),8,8};surface->PaintRect(canvas,&color,&box);}
- log("draw-handles",e->e_type,PF_Window_COMP);
+ DRAWBOT_PenRef pen=nullptr;DRAWBOT_PathRef outline=nullptr;
+ auto cleanup=[&]{if(outline)supplier->ReleaseObject(reinterpret_cast<DRAWBOT_ObjectRef>(outline));if(pen)supplier->ReleaseObject(reinterpret_cast<DRAWBOT_ObjectRef>(pen));};
+ if(supplier->NewPen(provider,&color,1.0f,&pen)||!pen||supplier->NewPath(provider,&outline)||!outline){cleanup();return false;}
+ auto xy=[](const PF_FixedPoint& point){return DRAWBOT_PointF32{float(point.x/65536.0),float(point.y/65536.0)};};
+ auto first=xy(corners[0]);bool ok=!path->MoveTo(outline,first.x,first.y);
+ for(std::size_t i=1;ok&&i<corners.size();++i){const auto point=xy(corners[i]);ok=!path->LineTo(outline,point.x,point.y);}
+ if(ok)ok=!path->Close(outline);if(ok)ok=!surface->StrokePath(canvas,pen,outline);
+ // Eight fixed screen-size markers follow each transformed corner and edge.
+ // They communicate the independent text area, but accept no pointer input.
+ for(std::size_t i=0;ok&&i<corners.size();++i){
+  const auto a=xy(corners[i]),b=xy(corners[(i+1)%corners.size()]);
+  const DRAWBOT_RectF32 corner{a.x-3,a.y-3,6,6},middle{(a.x+b.x)/2-3,(a.y+b.y)/2-3,6,6};
+  ok=!surface->PaintRect(canvas,&color,&corner)&&!surface->PaintRect(canvas,&color,&middle);
+ }
+ cleanup();return ok;
 }
 inline PF_Err event(PF_InData* in,PF_ParamDef* p[],PF_EventExtra* e) {
  if(!e||!e->contextH||!*e->contextH)return PF_Err_NONE;
  const auto window=(*e->contextH)->w_type;
  if(e->e_type!=PF_Event_IDLE)log("event",e->e_type,window);
  if(window!=PF_Window_COMP)return PF_Err_NONE;
+ if(e->e_type==PF_Event_DRAW){if(draw(in,p,e))e->evt_out_flags|=PF_EO_HANDLED_EVENT;return PF_Err_NONE;}
+#if BC_ENABLE_CUSTOM_UI_PROBE
  if(e->e_type==PF_Event_DO_CLICK||e->e_type==PF_Event_DRAG){
   const auto& click=e->u.do_click;log("pointer",e->e_type,window,0,click.screen_point.h,click.screen_point.v,static_cast<long>(click.continue_refcon[0]),click.send_drag,click.last_time);
  }
  // Match the official CCU sample: some continuation callbacks retain DO_CLICK.
  if(e->e_type==PF_Event_DO_CLICK&&e->u.do_click.send_drag)e->e_type=PF_Event_DRAG;
- if(e->e_type==PF_Event_DRAW){draw(in,p,e);e->evt_out_flags|=PF_EO_HANDLED_EVENT;return PF_Err_NONE;}
  if(e->e_type==PF_Event_DO_CLICK){
   auto points=handles(p);const auto mouse=e->u.do_click.screen_point;
   for(std::size_t i=0;i<points.size();++i){auto point=points[i];if(!transform(in,e,point,true))continue;
@@ -90,6 +121,7 @@ inline PF_Err event(PF_InData* in,PF_ParamDef* p[],PF_EventExtra* e) {
   click.send_drag=!click.last_time;if(click.last_time)click.continue_refcon[0]=0;
   e->evt_out_flags|=PF_EO_HANDLED_EVENT|PF_EO_ALWAYS_UPDATE;log("native-param-drag",e->e_type,window,mode);
  }
+#endif
  return PF_Err_NONE;
 }
 }

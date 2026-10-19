@@ -37,7 +37,7 @@ int main(int argc,char** argv){try{
  PF_InData in{};PF_OutData out{};check(main(PF_Cmd_GLOBAL_SETUP,&in,&out,nullptr,nullptr,nullptr)==0,"global setup failed");
  SPBasicSuite basic{};basic.AcquireSuite=acquireTime;basic.ReleaseSuite=releaseTime;in.pica_basicP=&basic;clockInput=&in;testUtility.GetSequenceTime=mockSequence;testUtility.GetSourceTrackCurrentMediaTimeInfo=mockMedia;testClock.GetTicksPerSecond=mockClock;testUtility.GetUnscaledClipStart=mockStart;testUtility.GetTrackItemStart=mockLayerStart;testUtility.GetMediaFrameRate=mockRate;testUtility.GetClipSpeed=mockSpeed;
  check(out.out_flags==(PF_OutFlag_NON_PARAM_VARY
-#if BC_ENABLE_CUSTOM_UI_PROBE
+#if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
  |PF_OutFlag_CUSTOM_UI
 #endif
  ),"unexpected flags");check(out.my_version==PF_VERSION(0,1,0,PF_Stage_DEVELOP,1),"version mismatch");
@@ -53,6 +53,7 @@ int main(int argc,char** argv){try{
  values[0].u.ld.data=source.data();values[0].u.ld.width=width;values[0].u.ld.height=height;values[0].u.ld.rowbytes=width*4;
  values[1].u.td.x_value=320*65536;values[1].u.td.y_value=270*65536;
  values[2].u.fs_d.value=500;values[3].u.fs_d.value=160;values[4].u.fs_d.value=56;values[5].u.fs_d.value=36;
+ values[GroupsPerPage].u.fs_d.value=1;
  values[6].u.cd.value={255,255,255,255};in.width=width;in.height=height;in.downsample_x={1,1};in.downsample_y={1,1};in.time_scale=100;in.current_time=125;
  PF_LayerDef output{};output.data=pixels.data();output.width=width;output.height=height;output.rowbytes=width*4;
  check(main(PF_Cmd_RENDER,&in,&out,params.data(),&output,nullptr)==0,"render failed");
@@ -104,5 +105,11 @@ int main(int argc,char** argv){try{
  check(differs(regularFrame,italicFrame),"Compiled italic did not change native glyph pixels");
  fixture.style.current.fontFamily="Impact";fixture.style.current.italic=0;const auto plainOnlyFrame=typographyFrame();
  fixture.style.current.italic=1;check(differs(plainOnlyFrame,typographyFrame()),"Compiled synthetic italic did not change glyph pixels");
+ fixture=better_captions::Document{};fixture.containers.push_back({"page-count",false,{{"First.",0,1,true},{"Second.",1,2,true},{"Third.",2,3,true},{"Fourth.",3,4,true}}});
+ values[5].u.fs_d.value=24;values[3].u.fs_d.value=240;in.current_time=45;
+ values[GroupsPerPage].u.fs_d.value=1;const auto singleGroupPixels=typographyFrame();
+ values[GroupsPerPage].u.fs_d.value=3;check(differs(singleGroupPixels,typographyFrame()),"Compiled groups-per-page scalar did not change native caption rendering");
+ const auto threeGroupPixels=typographyFrame();values[GroupsPerPage].u.fs_d.value=2.7;
+ check(!differs(threeGroupPixels,typographyFrame()),"Compiled fractional group sample did not round consistently");
  dlclose(binary);std::cout<<"Compiled adapter smoke passed: ARGB/determinism/reflow/half-resolution and pixel-equal persisted adjustment-origin Razor frames; not host acceptance.\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

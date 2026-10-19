@@ -85,6 +85,7 @@
 
 <script lang="ts">
   import FontPicker from './FontPicker.svelte';
+  import ScrubbableNumber from './ScrubbableNumber.svelte';
   interface Props { style: StyleConfig; fonts?: string[]; fontCatalog?: InstalledFont[]; fontsLoading?: boolean; fontsError?: string; onRefreshFonts?: () => void; scope?: TextStyleScope; onScopeChange: (scope: TextStyleScope) => void; onUpdate: (updates: Partial<StyleConfig>) => void; disabled?: boolean; nativeMode?: boolean; }
   let { style, fonts = [], fontCatalog = [], fontsLoading = false, fontsError = '', onRefreshFonts, scope = "all", onScopeChange, onUpdate, disabled = false, nativeMode = false }: Props = $props();
   const componentId = $props.id();
@@ -107,10 +108,6 @@
       Object.assign(patch, { [key]: { ...patch[key], fontWeight: resolveFontWeight(fontFamily, style[key]?.fontWeight ?? style.fontWeight) } });
     }
     onUpdate(patch);
-  }
-  function numeric(event: Event, min: number, max: number, apply: (value: number) => void, factor = 1) {
-    const number = (event.currentTarget as HTMLInputElement).valueAsNumber;
-    if (Number.isFinite(number)) apply(clamp(number, min, max) / factor);
   }
   const effects = [
     { key: "stroke", label: "Outline", enabled: "strokeEnabled", fields: [
@@ -138,7 +135,7 @@
 
   <div class="text-style__font-row">
     <FontPicker value={mixed('fontFamily') ? '' : appearance.fontFamily} {fonts} placeholder={mixed('fontFamily') ? 'Mixed fonts' : 'Font family'} loading={fontsLoading} error={fontsError} onOpen={() => { if (!fonts.length) onRefreshFonts?.(); }} onRetry={onRefreshFonts} onSelect={selectFont} />
-    <label class="text-style__number" title={scope === "all" ? "Base font size, px — keeps relative word sizes" : "Font size, px"}><input type="number" aria-label={scope === "all" ? "Base font size, px" : "Font size, px"} min="8" max={sizeMax} step=".5" value={Number(appearance.fontSize.toFixed(2))} onchange={(event) => numeric(event, 8, sizeMax, fontSize => update({ fontSize }))} /><span aria-hidden="true">px</span></label>
+    <div class="text-style__number" title={scope === "all" ? "Base font size, px — keeps relative word sizes" : "Font size, px"}><ScrubbableNumber label={scope === "all" ? "Base font size, px" : "Font size, px"} min={8} max={sizeMax} step={.5} value={Number(appearance.fontSize.toFixed(2))} {disabled} onChange={fontSize => update({ fontSize })} /><span aria-hidden="true">px</span></div>
     <button class="text-style__toggle" aria-label="Bold" title={boldDisabled ? 'This font has no heavier installed weight' : boldState === true ? 'Turn off the bolder step and follow All words' : `Next supported weight above All words (${style.fontWeight})`} aria-pressed={boldState} disabled={boldDisabled} onclick={() => onUpdate(textStyleBoldPatch(style, scope))}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3.5h4a3.25 3.25 0 0 1 0 6.5H6m4 0a3.25 3.25 0 0 1 0 6.5H6v-13"/></svg></button>
     <button class="text-style__toggle" aria-label="Italic" title="Italic — uses a synthetic slant when needed" aria-pressed={mixed("italic") ? "mixed" : appearance.italic} onclick={() => update({ italic: mixed("italic") || !appearance.italic })}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 3.5h8M4 16.5h8M12 3.5l-4 13"/></svg></button>
     <input class="text-style__color" type="color" value={appearance.color} aria-label="Text color" title={mixed("color") ? "Text color — mixed word colors" : "Text color"} oninput={(event) => update({ color: value(event) })} />
@@ -147,7 +144,7 @@
   <div class="text-style__format-row">
     <select class="text-style__input" aria-label="Font weight" disabled={!weights.length} title={weights.length ? scope === "all" ? "All words font weight" : "Font weight — absolute override" : "Select an installed font to choose its supported weights"} value={appearance.fontWeight} onchange={(event) => update({ fontWeight: Number(value(event)) })}>{#if !weights.length}<option value={appearance.fontWeight}>{appearance.fontWeight}</option>{:else}{#if !weights.includes(appearance.fontWeight)}<option value={appearance.fontWeight} disabled hidden>{appearance.fontWeight}</option>{/if}{#each weights as weight}<option value={weight}>{weight}</option>{/each}{/if}</select>
     <select class="text-style__input" aria-label="Text case" title="Text case" disabled={nativeMode && scope !== "all"} value={mixed("textTransform") ? "" : appearance.textTransform} onchange={(event) => update({ textTransform: value(event) as WordAppearance["textTransform"] })}>{#if mixed("textTransform")}<option value="" disabled>Mixed case</option>{/if}<option value="none">As typed</option><option value="uppercase">UPPERCASE</option><option value="lowercase">lowercase</option><option value="titlecase">Title Case</option></select>
-    <label class="text-style__number" title="Text opacity, %"><input type="number" aria-label="Text opacity, %" min="0" max="100" value={mixed("opacity") ? "" : Math.round(appearance.opacity * 100)} placeholder="Mixed" onchange={(event) => numeric(event, 0, 100, opacity => update({ opacity }), 100)} /><span aria-hidden="true">%</span></label>
+    <div class="text-style__number" title="Text opacity, %"><ScrubbableNumber label="Text opacity, %" min={0} max={100} value={mixed("opacity") ? null : Math.round(appearance.opacity * 100)} {disabled} onChange={opacity => update({ opacity: opacity / 100 })} /><span aria-hidden="true">%</span></div>
   </div>
 
   <div class="text-style__more" role="group" aria-label="More text settings">
@@ -159,9 +156,9 @@
   {#if expanded === "spacing"}
     <div class="text-style__expanded" id={`${componentId}-spacing`} role="group" aria-label="Text spacing">
       <div class="caption-controls">
-        <label class="caption-field"><span>Letter spacing, px</span><input type="number" min="-10" max="40" step=".5" disabled={nativeMode} value={mixed("letterSpacing") ? "" : appearance.letterSpacing} placeholder="Mixed" onchange={(event) => numeric(event, -10, 40, letterSpacing => update({ letterSpacing }))} /></label>
-        <label class="caption-field"><span>Word spacing, %</span><input type="number" min="0" max="300" disabled={nativeMode} value={style.wordSpacing ?? ""} placeholder="Original" onchange={(event) => numeric(event, 0, 300, wordSpacing => onUpdate({ wordSpacing }))} /></label>
-        <label class="caption-field"><span>Line height</span><input type="number" min=".6" max="3" step=".05" value={style.lineHeight} onchange={(event) => numeric(event, .6, 3, lineHeight => onUpdate({ lineHeight }))} /></label>
+        <div class="caption-field"><span>Letter spacing, px</span><ScrubbableNumber label="Letter spacing, px" min={-10} max={40} step={.5} disabled={disabled || nativeMode} value={mixed("letterSpacing") ? null : appearance.letterSpacing} onChange={letterSpacing => update({ letterSpacing })} /></div>
+        <div class="caption-field"><span>Word spacing, %</span><ScrubbableNumber label="Word spacing, %" min={0} max={300} disabled={disabled || nativeMode} value={style.wordSpacing ?? null} placeholder="Original" onChange={wordSpacing => onUpdate({ wordSpacing })} /></div>
+        <div class="caption-field"><span>Line height</span><ScrubbableNumber label="Line height" min={.6} max={3} step={.05} value={style.lineHeight} {disabled} onChange={lineHeight => onUpdate({ lineHeight })} /></div>
         {#if style.wordSpacing === undefined && !nativeMode}<button class="caption-button" onclick={() => onUpdate({ wordSpacing: 100 })}>Use normal spacing</button>{/if}
       </div>
       <p class="caption-help">Word spacing and line height apply to all words.</p>
@@ -175,7 +172,11 @@
         <div class="caption-controls">
           {#each effect.fields as raw}
             {@const field = raw as { key: keyof WordAppearance; label: string; type?: string; min?: number; max?: number; step?: number; factor?: number }}
-            <label class="caption-field"><span>{field.label}</span><input type={field.type ?? "number"} min={field.min} max={field.max} step={field.step ?? 1} disabled={!nativeMode && !appearance[effect.enabled] && !mixed(effect.enabled)} value={field.type === "color" ? appearance[field.key] as string : mixed(field.key) ? "" : Number(appearance[field.key]) * (field.factor ?? 1)} placeholder={field.type === "color" ? undefined : "Mixed"} onchange={(event) => field.type === "color" ? update({ [field.key]: value(event) }) : numeric(event, field.min ?? 0, field.max ?? 100, next => update({ [field.key]: next }), field.factor ?? 1)} /></label>
+            {#if field.type === "color"}
+              <label class="caption-field"><span>{field.label}</span><input type="color" disabled={!nativeMode && !appearance[effect.enabled] && !mixed(effect.enabled)} value={appearance[field.key] as string} onchange={(event) => update({ [field.key]: value(event) })} /></label>
+            {:else}
+              <div class="caption-field"><span>{field.label}</span><ScrubbableNumber label={`${effect.label} ${field.label}`} min={field.min ?? 0} max={field.max ?? 100} step={field.step ?? 1} disabled={disabled || !nativeMode && !appearance[effect.enabled] && !mixed(effect.enabled)} value={mixed(field.key) ? null : Number(appearance[field.key]) * (field.factor ?? 1)} onChange={next => update({ [field.key]: next / (field.factor ?? 1) })} /></div>
+            {/if}
           {/each}
         </div>
       </div>
@@ -186,15 +187,15 @@
     <div class="text-style__expanded" id={`${componentId}-layout`} role="group" aria-label="Caption layout">
       <div class="caption-controls">
         <label class="caption-field"><span>Alignment</span><select value={style.textAlign} onchange={(event) => onUpdate({ textAlign: value(event) as CanvasTextAlign })}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
-        <label class="caption-field"><span>Line width, % of frame</span><input type="number" min="10" max="100" value={Math.round(style.maxWidth * 100)} onchange={(event) => numeric(event, 10, 100, maxWidth => onUpdate({ maxWidth }), 100)} /></label>
+        <div class="caption-field"><span>Line width, % of frame</span><ScrubbableNumber label="Line width, % of frame" min={10} max={100} value={Math.round(style.maxWidth * 100)} {disabled} onChange={next => onUpdate({ maxWidth: next / 100 })} /></div>
       </div>
       <label class="caption-check"><input type="checkbox" checked={style.backgroundEnabled} onchange={(event) => onUpdate({ backgroundEnabled: event.currentTarget.checked })} /><span>Whole caption background</span></label>
       {#if style.backgroundEnabled}
         <div class="caption-controls">
           <label class="caption-field"><span>Background color</span><input type="color" value={style.backgroundColor} oninput={(event) => onUpdate({ backgroundColor: value(event) })} /></label>
-          <label class="caption-field"><span>Opacity, %</span><input type="number" min="0" max="100" value={Math.round(style.backgroundOpacity * 100)} onchange={(event) => numeric(event, 0, 100, backgroundOpacity => onUpdate({ backgroundOpacity }), 100)} /></label>
-          <label class="caption-field"><span>Padding, px</span><input type="number" min="0" max="100" value={style.backgroundPadding} onchange={(event) => numeric(event, 0, 100, backgroundPadding => onUpdate({ backgroundPadding }))} /></label>
-          <label class="caption-field"><span>Corners, px</span><input type="number" min="0" max="200" value={style.backgroundRadius} onchange={(event) => numeric(event, 0, 200, backgroundRadius => onUpdate({ backgroundRadius }))} /></label>
+          <div class="caption-field"><span>Opacity, %</span><ScrubbableNumber label="Opacity, %" min={0} max={100} value={Math.round(style.backgroundOpacity * 100)} {disabled} onChange={next => onUpdate({ backgroundOpacity: next / 100 })} /></div>
+          <div class="caption-field"><span>Padding, px</span><ScrubbableNumber label="Padding, px" min={0} max={100} value={style.backgroundPadding} {disabled} onChange={next => onUpdate({ backgroundPadding: next })} /></div>
+          <div class="caption-field"><span>Corners, px</span><ScrubbableNumber label="Corners, px" min={0} max={200} value={style.backgroundRadius} {disabled} onChange={next => onUpdate({ backgroundRadius: next })} /></div>
         </div>
       {/if}
     </div>
@@ -209,7 +210,7 @@
   .text-style__format-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 5.25rem; gap: var(--caption-space-xs); }
   .text-style__input, .text-style__number, .text-style__toggle, .text-style__color { min-inline-size: 0; min-block-size: 2.25rem; border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); background: var(--color-input); color: var(--color-panel-text); font-size: var(--caption-type-s); &:disabled { opacity: .5; cursor: default; } }
   .text-style__input { inline-size: 100%; padding: .3rem .4rem; }
-  .text-style__number { display: flex; align-items: center; padding-inline-end: var(--caption-space-xs); & input { inline-size: 100%; min-inline-size: 0; border: 0; background: transparent; color: inherit; padding: .3rem .2rem .3rem .4rem; font-variant-numeric: tabular-nums; } & span { color: var(--color-panel-secondary); font-size: var(--caption-type-xs); } }
+  .text-style__number { display: flex; align-items: center; padding-inline-end: var(--caption-space-xs); & :global(.scrubbable-number) { flex: 1; } & :global(.scrubbable-number__value), & :global(.scrubbable-number__input) { border: 0; background: transparent; } & span { color: var(--color-panel-secondary); font-size: var(--caption-type-xs); } }
   .text-style__toggle { display: inline-flex; align-items: center; justify-content: center; padding: .4rem; cursor: pointer; background: var(--color-surface-raised); & svg { inline-size: 1.25rem; block-size: 1.25rem; } &[aria-pressed="true"] { border-color: var(--color-accent); background: var(--color-selection); color: var(--color-accent); } &[aria-pressed="mixed"] { color: var(--color-accent); text-decoration: underline; } &:hover:enabled { background: var(--color-surface-overlay); } }
   .text-style__color { inline-size: 2.25rem; padding: var(--caption-space-xs); cursor: pointer; }
   .text-style__more { display: flex; flex-wrap: wrap; gap: var(--caption-space-xs); }

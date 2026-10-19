@@ -7,7 +7,7 @@ const demoWords = 'Every word has its own style. Move captions anywhere in the f
 export interface CapturedContext { id: string; name: string; projectPath: string; width: number; height: number; fps: number; duration: number; dir: string; ticksPerFrame?: string; tracks?: {index:number;locked:boolean}[]; }
 export interface NativeTranscriptProvider { fetch(context: CapturedContext): Promise<string | null>; transcribe(context: CapturedContext): Promise<string | null>; }
 export interface FontCatalogEntry { family:string;weights:number[];italic:boolean;variable?:{min:number;max:number}; }
-const HOST_BRIDGE_METHODS = ['context','seek','selectCaptionClip','readCaptionSelection','readCaptionConnections','writeNativeCaptionDocument','createNativeCaptionDocument','readCaptionGeometry','readCaptionMotion','readCaptionAreaDescriptor','patchCaptionKeyValues','preflight','prepareCaptionTrack','apply','readTimeline','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation'];
+const HOST_BRIDGE_METHODS = ['context','seek','selectCaptionClip','readCaptionSelection','readCaptionConnections','readNativeCaptionControls','readNativeCaptionExtension','extendNativeCaptionDocument','editNativeCaptionControl','seekNativeCaptionKeyframe','writeNativeCaptionDocument','createNativeCaptionDocument','readCaptionGeometry','readCaptionMotion','readCaptionAreaDescriptor','patchCaptionKeyValues','preflight','prepareCaptionTrack','apply','readTimeline','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation'];
 function sameSavedSequence(a:unknown,b:string) {
   if(typeof a!=='string')return false;
   const canonical=(value:string)=>{
@@ -18,11 +18,18 @@ function sameSavedSequence(a:unknown,b:string) {
 }
 export interface NativeCaptionLocator { projectPath:string;sequenceId:string;clipNodeId:string;trackIndex:number;clipIndex:number;componentIndex:number;documentParamIndex:number; }
 export interface NativeCaptionSnapshot { locator:NativeCaptionLocator;revision:string;grouping?:{before:number;value:number}; }
+export interface NativeCaptionControlDescriptor { value:number|[number,number];defaultValue:number|[number,number];animated:boolean;keyframesSupported:boolean;hasKey:boolean;keys:{ticks:string;value:number|[number,number]}[]; }
+export interface NativeCaptionControls { ok:true;clipNodeId:string;revision:string;timelineTicks:string;sourceTicks:string|null;startTicks:string;endTicks:string;inTicks:string;outTicks:string;clock:'clip-source';insideClip:boolean;position:NativeCaptionControlDescriptor;width:NativeCaptionControlDescriptor;height:NativeCaptionControlDescriptor;groups?:NativeCaptionControlDescriptor;readbackVerified?:boolean;retry?:'never'; }
+export interface NativeCaptionControlEdit { revision:string;parameter:'position'|'width'|'height'|'groups';operation:'set'|'reset';value?:number|[number,number];atTicks:string; }
+export interface NativeCaptionKeyframeSeek { revision:string;parameter:'position'|'width'|'height'|'groups';direction:'previous'|'next';atTicks:string; }
 export interface CaptionConnectionTiming { startTicks:string;endTicks:string;inTicks:string;outTicks:string; }
 export interface NativeCaptionConnection extends CaptionConnectionTiming {
   kind:'native-effect';maxChars?:number;disabled?:boolean;clipNodeId:string;projectItemId:string;trackIndex:number;clipIndex:number;selected:boolean;
   locator:NativeCaptionLocator;matchName:string;connectionRevision:string;documentText?:string;revision?:string;
 }
+export interface NativeCaptionExtensionReceipt { ok:true;revision:string;connection:NativeCaptionConnection;ticksPerFrame:string;targetEndTicks:string;targetOutTicks:string;canExtend:boolean; }
+export interface NativeCaptionExtensionRequest { revision:string;documentText:string;endTicks:string;outTicks:string; }
+export interface NativeCaptionExtensionResult { ok:true;connection:NativeCaptionConnection;readbackVerified:true;retry:'never'; }
 export interface LegacyCaptionConnection extends CaptionConnectionTiming {
   kind:'generated-movie';disabled?:boolean;clipNodeId:string;projectItemId:string;path:string;trackIndex:number;clipIndex:number;startTime:number;endTime:number;selected:boolean;
 }
@@ -236,6 +243,9 @@ catch(e){var line=Number(e&&e.line);return '{"version":1,"ok":false,"error":'+qu
       const context = await checkSequence(sequenceId), json = await nativeTranscript.transcribe(context);
       await checkSequence(sequenceId); return json;
     },
+    async transcribeSequenceRange(_beginSeconds:number,_endSeconds:number,_sequenceId=currentId):Promise<string>{
+      throw new Error('Extend captions is available in the installed Premiere panel.');
+    },
     async getFonts() { return cep ? runtime.fonts() : ['Arial', 'Helvetica', 'Georgia', 'Verdana', 'Times New Roman', 'Impact']; },
     async getFontCatalog():Promise<FontCatalogEntry[]> {
       // BrowserPreview labels its synthetic fixture; installed Premiere always
@@ -322,6 +332,32 @@ catch(e){var line=Number(e&&e.line);return '{"version":1,"ok":false,"error":'+qu
       if(document.timeOriginSeconds!==0 || frozen.startFrame!==0 || frozen.sourceInTicks!=='0')throw new Error('New native captions must use the verified zero source clock.');
       return readJob('createNativeCaptionDocument',{...frozen,version:1,creationId:window.require!('node:crypto').randomUUID(),projectPath:context.projectPath,sequenceId:context.id,
         width:context.width,height:context.height,ticksPerFrame:context.ticksPerFrame,expectedVideoTrackCount:context.tracks?.length});
+    },
+    async readNativeCaptionExtension(snapshot:NativeCaptionSnapshot,sequenceId=currentId):Promise<NativeCaptionExtensionReceipt>{
+      if(!snapshot||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024)throw new Error('Invalid caption extension snapshot.');
+      const frozen=JSON.parse(JSON.stringify(snapshot)),context=await checkSequence(sequenceId);
+      return readJob('readNativeCaptionExtension',{sequenceId:context.id,projectPath:context.projectPath,snapshot:frozen});
+    },
+    async extendNativeCaptionDocument(snapshot:NativeCaptionSnapshot,request:NativeCaptionExtensionRequest,sequenceId=currentId):Promise<NativeCaptionExtensionResult>{
+      if(!snapshot||typeof snapshot.revision!=='string'||!request||typeof request.revision!=='string'||typeof request.documentText!=='string'||(request.documentText.length+1)*2>16*1024*1024)throw new Error('Invalid bounded caption extension.');
+      const frozen=JSON.parse(JSON.stringify({snapshot,request})),context=await checkSequence(sequenceId);
+      decodeNativePanelDocument(request.documentText,sequenceId);
+      return readJob('extendNativeCaptionDocument',{sequenceId:context.id,projectPath:context.projectPath,...frozen});
+    },
+    async readNativeCaptionControls(snapshot:NativeCaptionSnapshot,sequenceId=currentId):Promise<NativeCaptionControls>{
+      if(!snapshot||typeof snapshot!=='object'||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024)throw new Error('Invalid native caption control snapshot.');
+      const frozen=JSON.parse(JSON.stringify(snapshot)),context=await checkSequence(sequenceId);
+      return readJob('readNativeCaptionControls',{sequenceId:context.id,projectPath:context.projectPath,snapshot:frozen});
+    },
+    async seekNativeCaptionKeyframe(snapshot:NativeCaptionSnapshot,request:NativeCaptionKeyframeSeek,sequenceId=currentId):Promise<NativeCaptionControls>{
+      if(!snapshot||typeof snapshot!=='object'||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024||!request||typeof request!=='object')throw new Error('Invalid native caption keyframe navigation.');
+      const frozen=JSON.parse(JSON.stringify({snapshot,request})),context=await checkSequence(sequenceId);
+      return readJob('seekNativeCaptionKeyframe',{sequenceId:context.id,projectPath:context.projectPath,...frozen});
+    },
+    async editNativeCaptionControl(snapshot:NativeCaptionSnapshot,request:NativeCaptionControlEdit,sequenceId=currentId):Promise<NativeCaptionControls>{
+      if(!snapshot||typeof snapshot!=='object'||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024||!request||typeof request!=='object')throw new Error('Invalid native caption control edit.');
+      const frozen=JSON.parse(JSON.stringify({snapshot,request})),context=await checkSequence(sequenceId);
+      return readJob('editNativeCaptionControl',{sequenceId:context.id,projectPath:context.projectPath,...frozen});
     },
     async writeNativeCaptionDocument(snapshot:NativeCaptionSnapshot,documentText:string,sequenceId=currentId){
       if(!snapshot||typeof snapshot!=='object'||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024||typeof documentText!=='string'||(documentText.length+1)*2>16*1024*1024)throw new Error('Invalid bounded native caption update.');

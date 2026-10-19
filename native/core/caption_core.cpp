@@ -125,15 +125,25 @@ std::string displayText(const std::string& text,bool title,int letterCase) {
  for(char& c:out){auto u=static_cast<unsigned char>(c);if(u>=128){initial=false;continue;}if((c>='a'&&c<='z')||(c>='A'&&c<='Z')){if(initial&&c>='a'&&c<='z')c-=32;else if(!initial&&c>='A'&&c<='Z')c+=32;initial=false;}else if(c=='-'||c==' '||c=='\t')initial=true;}
  return out;
 }
-Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measure,std::size_t maxChars,double pause,const TransformText& transform) {
+std::size_t sampledGroupsPerPage(double value) {
+ require(finite(value),"invalid groups per page");
+ return static_cast<std::size_t>(std::floor(std::max(1.0,std::min(double(kMaxGroupsPerPage),value))+.5));
+}
+Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measure,std::size_t maxChars,double pause,const TransformText& transform,std::size_t groupsPerPage) {
  require(finite(time),"invalid time");require(finite(box.x)&&finite(box.y)&&finite(box.width)&&finite(box.height)&&box.width>0&&box.height>0,"invalid layout box");require(bool(measure),"missing text measurer");
  require(std::abs(box.x)<=1e7&&std::abs(box.y)<=1e7&&box.width<=1e7&&box.height<=1e7,"layout geometry exceeds bounds");
+ require(groupsPerPage>=1&&groupsPerPage<=kMaxGroupsPerPage,"invalid groups per page");
  Frame result;auto phrases=regroup(d,maxChars,pause);
- for(const auto& p:phrases){if(time<p.start||time>=p.end)continue;
-  const auto it=std::find_if(d.containers.begin(),d.containers.end(),[&](const CaptionContainer& c){return c.id==p.containerId;});
+ for(std::size_t first=0;first<phrases.size();){
+  std::size_t last=first+1;double pageEnd=phrases[first].end;
+  while(last<phrases.size()&&last-first<groupsPerPage&&phrases[last].containerId==phrases[first].containerId){pageEnd=std::max(pageEnd,phrases[last].end);++last;}
+  const auto begin=first;first=last;
+  if(time<phrases[begin].start||time>=pageEnd)continue;
+  const auto it=std::find_if(d.containers.begin(),d.containers.end(),[&](const CaptionContainer& c){return c.id==phrases[begin].containerId;});
   std::vector<DrawWord> line;double lineWidth=0,lineAscent=0,lineDescent=0,y=box.y;
   auto flush=[&](){if(line.empty())return;double x=box.x+(box.width-lineWidth)/2;bool firstRun=true;for(auto& run:line){if(!firstRun&&!punctuation(run.text))x+=d.style.wordSpacing;run.x=x;run.baseline=y+lineAscent;x+=run.width;result.words.push_back(std::move(run));firstRun=false;}double h=lineAscent+lineDescent;if(y+h>box.y+box.height)result.overflow=true;y+=h*d.style.lineHeight;line.clear();lineWidth=lineAscent=lineDescent=0;};
-  for(std::size_t i=p.firstWord;i<p.firstWord+p.wordCount;++i){const auto& w=it->words[i];WordState state=time<w.start?WordState::Upcoming:time<w.end?WordState::Current:WordState::Spoken;
+  for(std::size_t phraseIndex=begin;phraseIndex<last;++phraseIndex){const auto& p=phrases[phraseIndex];
+   for(std::size_t i=p.firstWord;i<p.firstWord+p.wordCount;++i){const auto& w=it->words[i];WordState state=time<w.start?WordState::Upcoming:time<w.end?WordState::Current:WordState::Spoken;
    WordStyle s=state==WordState::Current?d.style.current:state==WordState::Spoken?d.style.spoken:d.style.upcoming;
    auto text=transform?transform(w.text,d.style):displayText(w.text,d.style.titleCase,d.style.letterCase);auto m=measure(text,s);require(finite(m.width)&&finite(m.ascent)&&finite(m.descent)&&m.width>=0&&m.ascent>=0&&m.descent>=0&&m.width<=1e9&&m.ascent<=1e9&&m.descent<=1e9,"invalid text metrics");
    double pad=s.bubble?s.padding:0;double width=m.width+2*pad,ascent=m.ascent+pad,descent=m.descent+pad;
@@ -141,7 +151,8 @@ Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const Measu
    if(!line.empty()&&!punctuation(text)&&lineWidth+gap+width>box.width){flush();gap=0;}
    lineWidth+=gap+width;lineAscent=std::max(lineAscent,ascent);lineDescent=std::max(lineDescent,descent);if(lineWidth>box.width)result.overflow=true;
    line.push_back({text,p.containerId,i,state,s,0,0,width,ascent+descent});
-  }flush();
+   }flush(); // Explicit group break, independently of width-based wrapping.
+  }
  }return result;
 }
 } // namespace better_captions

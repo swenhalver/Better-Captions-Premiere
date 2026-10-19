@@ -6,10 +6,12 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 test -f "$AE_SDK_EXAMPLES/Headers/AE_Effect.h"
 build_dir="${BC_NATIVE_OUTPUT_DIR:-$root/artifacts/native}"
 probe="${BC_ENABLE_CUSTOM_UI_PROBE:-0}"
+bounds_ui="${BC_ENABLE_CAPTION_BOUNDS_UI:-0}"
 time_probe="${BC_ENABLE_SOURCE_TIME_PROBE:-0}"
 adjustment_probe="${BC_ENABLE_ADJUSTMENT_TIME_PROBE:-0}"
 render_diagnostics="${BC_ENABLE_RENDER_TIME_DIAGNOSTICS:-0}"
 case "$probe" in 0|1) ;; *) printf '%s\n' 'BC_ENABLE_CUSTOM_UI_PROBE must be 0 or 1' >&2; exit 1;; esac
+case "$bounds_ui" in 0|1) ;; *) printf '%s\n' 'BC_ENABLE_CAPTION_BOUNDS_UI must be 0 or 1' >&2; exit 1;; esac
 case "$time_probe" in 0|1) ;; *) printf '%s\n' 'BC_ENABLE_SOURCE_TIME_PROBE must be 0 or 1' >&2; exit 1;; esac
 case "$adjustment_probe" in 0|1) ;; *) printf '%s\n' 'BC_ENABLE_ADJUSTMENT_TIME_PROBE must be 0 or 1' >&2; exit 1;; esac
 case "$render_diagnostics" in 0|1) ;; *) printf '%s\n' 'BC_ENABLE_RENDER_TIME_DIAGNOSTICS must be 0 or 1' >&2; exit 1;; esac
@@ -19,12 +21,12 @@ includes=(-I "$AE_SDK_EXAMPLES/Headers" -I "$AE_SDK_EXAMPLES/Headers/SP" -I "$AE
 : "${PREMIERE_SDK_HEADERS:?Set PREMIERE_SDK_HEADERS to official Premiere SDK Examples/Headers for native source-time mapping}"
 test -f "$PREMIERE_SDK_HEADERS/PrSDKAESupport.h"
 includes=(-I "$PREMIERE_SDK_HEADERS" "${includes[@]}")
-xcrun clang++ -arch arm64 -std=c++17 -O2 -fvisibility=hidden -DBC_ENABLE_CUSTOM_UI_PROBE="$probe" -DBC_ENABLE_SOURCE_TIME_PROBE="$time_probe" -DBC_ENABLE_ADJUSTMENT_TIME_PROBE="$adjustment_probe" -DBC_ENABLE_RENDER_TIME_DIAGNOSTICS="$render_diagnostics" -bundle \
+xcrun clang++ -arch arm64 -std=c++17 -O2 -fvisibility=hidden -DBC_ENABLE_CUSTOM_UI_PROBE="$probe" -DBC_ENABLE_CAPTION_BOUNDS_UI="$bounds_ui" -DBC_ENABLE_SOURCE_TIME_PROBE="$time_probe" -DBC_ENABLE_ADJUSTMENT_TIME_PROBE="$adjustment_probe" -DBC_ENABLE_RENDER_TIME_DIAGNOSTICS="$render_diagnostics" -bundle \
   "${includes[@]}" "$root/native/adobe/BetterCaptionsEffect.cpp" \
   "$root/native/core/caption_core.cpp" "$root/native/macos/caption_rasterizer.mm" \
   -framework CoreText -framework CoreGraphics -framework CoreFoundation \
   -o "$output/Contents/MacOS/BetterCaptionsNativeProbe"
-xcrun Rez -useDF -d __MACH__ -d __arm64__ -d "BC_ENABLE_CUSTOM_UI_PROBE=$probe" "${includes[@]}" \
+xcrun Rez -useDF -d __MACH__ -d __arm64__ -d "BC_ENABLE_CUSTOM_UI_PROBE=$probe" -d "BC_ENABLE_CAPTION_BOUNDS_UI=$bounds_ui" "${includes[@]}" \
   "$root/native/adobe/BetterCaptionsPiPL.r" -o "$output/Contents/Resources/BetterCaptionsNativeProbe.rsrc"
 cat > "$output/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -41,7 +43,7 @@ cat > "$output/Contents/Info.plist" <<'PLIST'
 PLIST
 codesign --force --sign - "$output"
 codesign --verify --strict "$output"
-xcrun clang++ -arch arm64 -std=c++17 -DBC_ENABLE_CUSTOM_UI_PROBE="$probe" -DBC_ENABLE_SOURCE_TIME_PROBE="$time_probe" "${includes[@]}" \
+xcrun clang++ -arch arm64 -std=c++17 -DBC_ENABLE_CUSTOM_UI_PROBE="$probe" -DBC_ENABLE_CAPTION_BOUNDS_UI="$bounds_ui" -DBC_ENABLE_SOURCE_TIME_PROBE="$time_probe" "${includes[@]}" \
   "$root/native/adobe/adapter_smoke_test.cpp" "$root/native/core/caption_core.cpp" -o "$build_dir/adapter_smoke_test"
 "$build_dir/adapter_smoke_test" "$output/Contents/MacOS/BetterCaptionsNativeProbe"
 xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
@@ -50,7 +52,7 @@ xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]
 xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
   "$root/native/adobe/render_style_test.cpp" "$root/native/core/caption_core.cpp" -o "$build_dir/render_style_test"
 "$build_dir/render_style_test"
-if test "$probe" = 1; then
+if test "$probe" = 1 || test "$bounds_ui" = 1; then
   xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
     "$root/native/adobe/custom_ui_test.cpp" -o "$build_dir/custom_ui_test"
   "$build_dir/custom_ui_test"

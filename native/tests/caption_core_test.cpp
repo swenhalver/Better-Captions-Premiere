@@ -95,6 +95,43 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  auto again=layoutFrame(bubbles,0.1,{0,0,1200,300},measure);
  assert(again.words.size()==bubbleFrame.words.size());for(std::size_t i=0;i<again.words.size();++i)assert(again.words[i].x==bubbleFrame.words[i].x&&again.words[i].baseline==bubbleFrame.words[i].baseline&&again.words[i].text==bubbleFrame.words[i].text);
  auto overlap=sample();overlap.containers[0].words={ {"long",0,2,false},{"short",0.5,1,false} };assert(layoutFrame(overlap,1.5,{0,0,1200,300},measure).words.size()==2);
+ // Multi-group pages retain character-limit phrases, place each on a new line,
+ // and evaluate current/spoken/upcoming styling across the complete page.
+ Document pages;pages.style.spoken.opacity=.4;pages.style.current.color={0,1,0,1};
+ pages.containers.push_back({"page-source",false,{}});
+ const char* pageWords[]={"one","two","three","four","five","six","seven","eight"};
+ for(std::size_t i=0;i<8;++i)pages.containers[0].words.push_back({pageWords[i],i*.5,i*.5+.4,false});
+ const auto pageBytes=encode(pages);assert(regroup(pages,11).size()==4);
+ const auto singlePage=layoutFrame(pages,1.2,{0,0,1200,1000},measure,11);
+ const auto explicitSingle=layoutFrame(pages,1.2,{0,0,1200,1000},measure,11,.6,{},1);
+ assert(singlePage.words.size()==2&&explicitSingle.words.size()==singlePage.words.size());
+ for(std::size_t i=0;i<singlePage.words.size();++i)assert(singlePage.words[i].text==explicitSingle.words[i].text&&singlePage.words[i].x==explicitSingle.words[i].x&&singlePage.words[i].baseline==explicitSingle.words[i].baseline);
+ const auto threeGroups=layoutFrame(pages,1.2,{0,0,1200,1000},measure,11,.6,{},3);
+ assert(threeGroups.words.size()==6&&threeGroups.words[0].state==WordState::Spoken&&threeGroups.words[2].state==WordState::Current&&threeGroups.words[3].state==WordState::Upcoming);
+ assert(threeGroups.words[0].style.opacity==.4&&threeGroups.words[2].style.color.g==1);
+ assert(threeGroups.words[0].baseline==threeGroups.words[1].baseline&&threeGroups.words[2].baseline>threeGroups.words[1].baseline&&threeGroups.words[4].baseline>threeGroups.words[3].baseline);
+ assert(layoutFrame(pages,2.95,{0,0,1200,1000},measure,11,.6,{},3).words.empty()); // Inter-page gap.
+ const auto lastPage=layoutFrame(pages,3.1,{0,0,1200,1000},measure,11,.6,{},3);
+ assert(lastPage.words.size()==2&&lastPage.words[0].wordIndex==6&&lastPage.words[0].baseline==threeGroups.words[0].baseline);
+ const auto pageReflow=layoutFrame(pages,1.2,{0,0,180,1000},measure,11,.6,{},3);
+ assert(pageReflow.words.size()==6&&pageReflow.words[1].baseline>pageReflow.words[0].baseline&&pageReflow.words[2].baseline>pageReflow.words[1].baseline);
+ assert(layoutFrame(pages,1.2,{0,0,1200,100},measure,11,.6,{},3).overflow);
+ // A page remains visible during an internal pause, without inventing a current
+ // word, but does not bridge separate manually split caption containers.
+ auto paused=pages;for(std::size_t i=2;i<paused.containers[0].words.size();++i){paused.containers[0].words[i].start+=2;paused.containers[0].words[i].end+=2;}
+ const auto pausedPage=layoutFrame(paused,2,{0,0,1200,1000},measure,11,.6,{},3);
+ assert(pausedPage.words.size()==6);for(const auto& run:pausedPage.words)assert(run.state!=WordState::Current);
+ auto splitPages=pages;splitPages.containers.push_back({"manual-next",true,{{"separate",5,6,false}}});
+ const auto splitFrame=layoutFrame(splitPages,3.1,{0,0,1200,1000},measure,11,.6,{},100);
+ assert(splitFrame.words.size()==8);for(const auto& run:splitFrame.words)assert(run.containerId=="page-source");
+ assert(layoutFrame(splitPages,5.2,{0,0,1200,1000},measure,11,.6,{},100).words.size()==1);
+ assert(encode(pages)==pageBytes); // Layout never modifies the carrier/word clock.
+ rejects([&]{layoutFrame(pages,1.2,{0,0,1200,1000},measure,11,.6,{},0);});
+ rejects([&]{layoutFrame(pages,1.2,{0,0,1200,1000},measure,11,.6,{},101);});
+ assert(sampledGroupsPerPage(1)==1&&sampledGroupsPerPage(1.49)==1&&sampledGroupsPerPage(1.5)==2&&sampledGroupsPerPage(2.7)==3);
+ assert(sampledGroupsPerPage(-1e308)==1&&sampledGroupsPerPage(0)==1&&sampledGroupsPerPage(100.4)==100&&sampledGroupsPerPage(1e308)==100);
+ for(double badGroups:{std::numeric_limits<double>::infinity(),-std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()})rejects([&]{sampledGroupsPerPage(badGroups);});
+ assert(layoutFrame(pages,1.2,{0,0,1200,1000},measure,11,.6,{},sampledGroupsPerPage(2.7)).words.size()==6);
  // Deterministic malformed-buffer stress: decode can reject or return a valid bounded document.
  std::uint32_t seed=17;for(unsigned trial=0;trial<1000;++trial){auto mutated=encoded;seed=1664525*seed+1013904223;auto index=seed%mutated.size();seed=1664525*seed+1013904223;mutated[index]^=static_cast<std::uint8_t>(seed>>24);try{validate(decode(mutated));}catch(const std::invalid_argument&){} }
  std::cout<<"caption_core: grouping, layout, styling, timing, codec and malformed-data checks passed\n";

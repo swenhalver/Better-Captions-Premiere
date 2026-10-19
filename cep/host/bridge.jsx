@@ -1707,6 +1707,378 @@ var BetterCaptionsHost = (function () {
             return response;
         } catch (e) { return reply({ error: e.toString() }); }
     }
+    // Geometry lives on the owned native effect, independently of BCDOC.
+    // Premiere ComponentParam keys are clip-source times, matching Motion's
+    // verified source clock. Map the captured timeline position through the
+    // 1x clip in point; do not seek, retime, recreate keys, or change animation.
+    function nativeControlTicks(value) {
+        if (typeof value !== 'string' || !/^(0|[1-9]\d{0,20})$/.test(value)) throw new Error('Invalid native caption control time.');
+        return value;
+    }
+    function nativeTickCompare(a, b) { if (a.length !== b.length) return a.length < b.length ? -1 : 1; if (a === b) return 0; return a < b ? -1 : 1; }
+    function nativeTickMath(a, b, subtract) {
+        // Exact decimal arithmetic avoids losing source ticks above 2^53.
+        var out = '', carry = 0, i = a.length - 1, j = b.length - 1;
+        if (subtract && nativeTickCompare(a, b) < 0) throw new Error('The playhead is outside the native caption clip.');
+        while (i >= 0 || j >= 0) {
+            var n = (i >= 0 ? Number(a.charAt(i--)) : 0) + (subtract ? -1 : 1) * (j >= 0 ? Number(b.charAt(j--)) : 0) + carry;
+            if (subtract) { carry = n < 0 ? -1 : 0; if (n < 0) n += 10; }
+            else { carry = Math.floor(n / 10); n %= 10; }
+            out = String(n) + out;
+        }
+        if (!subtract && carry) out = String(carry) + out;
+        return nativeControlTicks(out.replace(/^0+(?=\d)/, ''));
+    }
+    function nativeControlValue(value, name) {
+        if (name === 'position') {
+            var point = motionVector(value, 'native Position');
+            if (Math.abs(point[0]) > 100 || Math.abs(point[1]) > 100) throw new Error('Native Position is outside supported bounds.');
+            return point;
+        }
+        if (name === 'groups') {
+            nativeInteger(value, 1, 100, 'Groups per page'); return value;
+        }
+        if (typeof value !== 'number' || !isFinite(value) || value < 1 || value > 8192) throw new Error('Native caption dimensions must be between 1 and 8192 pixels.');
+        return value;
+    }
+    function nativeControlContext(p) {
+        var snapshot = p.snapshot, target = snapshot && snapshot.locator;
+        if (!snapshot || !target || typeof snapshot.revision !== 'string' || !snapshot.revision || snapshot.revision.length > nativeCarrierBytes || typeof p.sequenceId !== 'string' || !p.sequenceId || !localMediaPath(p.projectPath) || target.projectPath !== p.projectPath || !sameSequenceId(target.sequenceId, p.sequenceId) || typeof target.clipNodeId !== 'string' || !target.clipNodeId) throw new Error('Invalid native caption snapshot identity.');
+        var fields = ['trackIndex', 'clipIndex', 'componentIndex', 'documentParamIndex'];
+        for (var i = 0; i < fields.length; i++) { var bound = 128; if (fields[i] === 'clipIndex') bound = 100000; if (fields[i] === 'trackIndex') bound = 255; nativeInteger(target[fields[i]], 0, bound, 'control locator'); }
+        var s = sequence(p.sequenceId, p.projectPath), trackCount = connectionCount(s.videoTracks.numTracks, 256);
+        if (target.trackIndex >= trackCount) throw new Error('The native caption track changed.');
+        var track = s.videoTracks[target.trackIndex], clips = track.clips, clipCount = connectionCount(clips.numItems, 100000);
+        if (target.clipIndex >= clipCount) throw new Error('The native caption clip changed.');
+        var clip = clips[target.clipIndex];
+        if (!clip || connectionId(clip.nodeId) !== target.clipNodeId) throw new Error('The native caption clip identity changed.');
+        var before = nativeCaptionRecord(s, clip, target.trackIndex, target.clipIndex, target.componentIndex, true);
+        if (before.record.locator.documentParamIndex !== target.documentParamIndex || before.record.revision !== snapshot.revision) throw new Error('The native caption document or clip changed. Reconnect before editing.');
+        if (typeof clip.getSpeed !== 'function' || typeof clip.isSpeedReversed !== 'function') throw new Error('Premiere did not expose the native caption source clock.');
+        assertNormalSpeed(clip);
+        var timing = connectionTiming(clip), at = nativeControlTicks(String(s.getPlayerPosition().ticks));
+        nativeControlTicks(timing.inTicks); nativeControlTicks(timing.startTicks); nativeControlTicks(timing.endTicks); nativeControlTicks(timing.outTicks);
+        var inside = nativeTickCompare(at, timing.startTicks) >= 0 && nativeTickCompare(at, timing.endTicks) < 0;
+        var sourceTicks = inside ? nativeTickMath(nativeTickMath(at, timing.startTicks, true), timing.inTicks, false) : null;
+        if (sourceTicks !== null && nativeTickCompare(sourceTicks, timing.outTicks) >= 0) throw new Error('The native caption source timing changed.');
+        var names = ['position', 'width', 'height', 'groups'], labels = ['Position', 'Width', 'Height', 'Groups per page'], params = {}, descriptors = {}, properties = clip.components[target.componentIndex].properties;
+        for (var n = 0; n < names.length; n++) {
+            var name = names[n], param = null;
+            for (var index = 0; index < properties.numItems; index++) if (String(properties[index].displayName) === labels[n]) {
+                if (param) throw new Error('Ambiguous native caption geometry parameters.');
+                param = properties[index];
+            }
+            // Old native builds have no page-size parameter. Keep their geometry
+            // usable, but never invent a writable group count.
+            if (!param && name === 'groups') continue;
+            if (!param || typeof param.isTimeVarying !== 'function' || typeof param.areKeyframesSupported !== 'function') throw new Error('Premiere did not expose the native caption ' + labels[n] + ' control.');
+            params[name] = param;
+            var animated = param.isTimeVarying() === true, keys = [], nativeKeys = animated ? param.getKeys() : null;
+            if (nativeKeys && nativeKeys.length > 256) throw new Error('Native caption controls support at most 256 keys per property.');
+            for (var k = 0; nativeKeys && k < nativeKeys.length; k++) keys.push({ ticks: nativeControlTicks(String(nativeKeys[k].ticks)), value: nativeControlValue(param.getValueAtKey(nativeKeys[k]), name) });
+            keys.sort(function (a, b) { return nativeTickCompare(a.ticks, b.ticks); });
+            if (animated && !keys.length) throw new Error('Premiere did not expose the animated caption keys.');
+            var sampleAt = sourceTicks === null ? timing.inTicks : sourceTicks;
+            var value = nativeControlValue(animated ? param.getValueAtTime(ticksTime(sampleAt)) : param.getValue(), name), hasKey = false;
+            for (var h = 0; h < keys.length; h++) if (keys[h].ticks === sourceTicks) hasKey = true;
+            var defaultValue = 150; if (name === 'position') defaultValue = [0.5, 0.9]; if (name === 'width') defaultValue = 1536; if (name === 'groups') defaultValue = 1;
+            descriptors[name] = { value: value, defaultValue: defaultValue, animated: animated, keyframesSupported: param.areKeyframesSupported() === true, hasKey: hasKey, keys: keys };
+        }
+        var receipt = { ok: true, clipNodeId: target.clipNodeId, timelineTicks: at, sourceTicks: sourceTicks, startTicks: timing.startTicks, endTicks: timing.endTicks, inTicks: timing.inTicks, outTicks: timing.outTicks, clock: 'clip-source', insideClip: inside, position: descriptors.position, width: descriptors.width, height: descriptors.height };
+        if (descriptors.groups) receipt.groups = descriptors.groups;
+        receipt.revision = stringify({ documentRevision: snapshot.revision, timelineTicks: at, controls: descriptors });
+        var sampledSequence = sequence(p.sequenceId, p.projectPath);
+        if (nativeControlTicks(String(sampledSequence.getPlayerPosition().ticks)) !== at) throw new Error('The playhead moved while reading native caption controls. Read them again.');
+        return { receipt: receipt, params: params, track: track, clip: clip };
+    }
+    function readNativeCaptionControls(file) {
+        try { return reply(nativeControlContext(readPayload(file)).receipt); }
+        catch (e) { return reply({ error: e.toString() }); }
+    }
+    function nativeControlCurves(receipt) {
+        var result = {}, names = ['position', 'width', 'height', 'groups'];
+        for (var i = 0; i < names.length; i++) {
+            var descriptor = receipt[names[i]];
+            if (!descriptor) continue;
+            result[names[i]] = { animated: descriptor.animated, keyframesSupported: descriptor.keyframesSupported, keys: descriptor.keys, staticValue: descriptor.animated ? null : descriptor.value };
+        }
+        return stringify(result);
+    }
+    function seekNativeCaptionKeyframe(file) {
+        var attempted = false;
+        try {
+            var p = readPayload(file), request = p.request;
+            if (!request || typeof request !== 'object' || request instanceof Array) throw new Error('Invalid native caption keyframe navigation.');
+            for (var field in request) if (field !== 'revision' && field !== 'parameter' && field !== 'direction' && field !== 'atTicks') throw new Error('Unknown native caption keyframe navigation field.');
+            if (request.parameter !== 'position' && request.parameter !== 'width' && request.parameter !== 'height' && request.parameter !== 'groups' || request.direction !== 'previous' && request.direction !== 'next' || typeof request.revision !== 'string' || request.revision.length > nativeCarrierBytes) throw new Error('Invalid native caption keyframe navigation.');
+            nativeControlTicks(request.atTicks);
+            var before = nativeControlContext(p).receipt, descriptor = before[request.parameter];
+            if (request.revision !== before.revision || request.atTicks !== before.timelineTicks) throw new Error('The playhead or native controls changed. Read them again before navigating.');
+            if (!descriptor) throw new Error('Update the native caption effect to use Groups per page.');
+            if (!descriptor.animated || !descriptor.keyframesSupported) throw new Error('Enable animation in Effect Controls before navigating native caption keyframes.');
+            var destination = null, destinationSource = null;
+            for (var k = 0; k < descriptor.keys.length; k++) {
+                var source = descriptor.keys[k].ticks;
+                if (nativeTickCompare(source, before.inTicks) < 0 || nativeTickCompare(source, before.outTicks) >= 0) continue;
+                var timeline = nativeTickMath(nativeTickMath(source, before.inTicks, true), before.startTicks, false);
+                if (nativeTickCompare(timeline, before.startTicks) < 0 || nativeTickCompare(timeline, before.endTicks) >= 0) continue;
+                var side = nativeTickCompare(timeline, before.timelineTicks);
+                if (request.direction === 'previous' && side < 0 && (destination === null || nativeTickCompare(timeline, destination) > 0) || request.direction === 'next' && side > 0 && (destination === null || nativeTickCompare(timeline, destination) < 0)) {
+                    destination = timeline; destinationSource = source;
+                }
+            }
+            if (destination === null) throw new Error('There is no ' + request.direction + ' keyframe inside this caption clip.');
+            var sequenceBefore = sequence(p.sequenceId, p.projectPath);
+            if (typeof sequenceBefore.setPlayerPosition !== 'function') throw new Error('Premiere did not expose native playhead navigation.');
+            if (nativeControlContext(p).receipt.revision !== before.revision) throw new Error('The playhead or native controls changed during navigation preparation.');
+            attempted = true;
+            sequenceBefore.setPlayerPosition(destination);
+            var after = nativeControlContext(p).receipt;
+            if (after.timelineTicks !== destination || after.sourceTicks !== destinationSource || nativeControlCurves(after) !== nativeControlCurves(before)) throw new Error('Premiere did not confirm the native keyframe navigation.');
+            after.readbackVerified = true; after.retry = 'never'; return reply(after);
+        } catch (e) {
+            if (attempted) return reply({ error: 'Premiere did not confirm the last keyframe navigation. Inspect the playhead before trying again.', code: 'BC_OUTPUT_UNCONFIRMED', recoverable: false, outputApplied: false, retry: 'never' });
+            return reply({ error: e.toString() });
+        }
+    }
+    function editNativeCaptionControl(file) {
+        var attempted = false;
+        try {
+            var p = readPayload(file), request = p.request;
+            if (!request || typeof request !== 'object' || request instanceof Array) throw new Error('Invalid native caption control edit.');
+            for (var field in request) if (field !== 'revision' && field !== 'parameter' && field !== 'operation' && field !== 'value' && field !== 'atTicks') throw new Error('Unknown native caption control edit field.');
+            if (request.parameter !== 'position' && request.parameter !== 'width' && request.parameter !== 'height' && request.parameter !== 'groups' || request.operation !== 'set' && request.operation !== 'reset' || typeof request.revision !== 'string' || request.revision.length > nativeCarrierBytes) throw new Error('Invalid native caption control operation.');
+            nativeControlTicks(request.atTicks);
+            var before = nativeControlContext(p), receipt = before.receipt, name = request.parameter, descriptor = receipt[name], param = before.params[name];
+            if (request.revision !== receipt.revision || request.atTicks !== receipt.timelineTicks) throw new Error('The playhead or native controls changed. Read them again before editing.');
+            if (!receipt.insideClip) throw new Error('Move the playhead inside the native caption clip before editing.');
+            if (typeof before.track.isLocked !== 'function' || before.track.isLocked()) throw new Error('Unlock the native caption track before editing.');
+            if (!descriptor || !param) throw new Error('Update the native caption effect to use Groups per page.');
+            var value = nativeControlValue(request.operation === 'reset' ? descriptor.defaultValue : request.value, name);
+            if (request.operation === 'reset' && request.value !== undefined) throw new Error('A reset must use the native default.');
+            if (descriptor.animated && (!descriptor.keyframesSupported || typeof param.setValueAtKey !== 'function' || !descriptor.hasKey && typeof param.addKey !== 'function') || !descriptor.animated && typeof param.setValue !== 'function') throw new Error('Premiere cannot edit this native caption control.');
+            // Recheck all identities, current values, keys and playhead immediately
+            // before the first setter. Once attempted, never roll back or retry.
+            var recheck = nativeControlContext(p);
+            // Explicit plugin edits select their owned clip once so Premiere can
+            // route the effect's DRAW-only Program Monitor bounds. No menus,
+            // workspace changes, preference changes, or selection polling.
+            if (typeof recheck.clip.isSelected !== 'function' || recheck.clip.isSelected() !== true) {
+                if (typeof recheck.clip.setSelected !== 'function') throw new Error('Select this caption clip in the Premiere timeline before editing its controls.');
+                recheck.clip.setSelected(1, true);
+                if (typeof recheck.clip.isSelected !== 'function' || recheck.clip.isSelected() !== true) throw new Error('Premiere did not confirm caption clip selection. Select it in the timeline first.');
+                recheck = nativeControlContext(p);
+            }
+            if (typeof recheck.track.isLocked !== 'function' || recheck.track.isLocked()) throw new Error('Unlock the native caption track before editing.');
+            if (recheck.receipt.revision !== receipt.revision) throw new Error('Native caption controls changed during edit preparation.');
+            attempted = true;
+            if (descriptor.animated) {
+                var at = ticksTime(receipt.sourceTicks);
+                if (!descriptor.hasKey) param.addKey(at);
+                param.setValueAtKey(at, value, 1);
+            } else param.setValue(value, 1);
+            var after = nativeControlContext(p).receipt;
+            if (after.timelineTicks !== receipt.timelineTicks || !sameValue(after[name].value, value) || after[name].animated !== descriptor.animated) throw new Error('Native caption value readback failed.');
+            for (var other in before.params) if (other !== name && stringify(after[other]) !== stringify(receipt[other])) throw new Error('Another native caption control changed during the update.');
+            if (descriptor.animated) {
+                if (after[name].keys.length !== descriptor.keys.length + (descriptor.hasKey ? 0 : 1) || !after[name].hasKey) throw new Error('Native caption key readback failed.');
+                for (var old = 0; old < descriptor.keys.length; old++) {
+                    var key = descriptor.keys[old];
+                    if (key.ticks === receipt.sourceTicks) continue;
+                    var found = false;
+                    for (var fresh = 0; fresh < after[name].keys.length; fresh++) if (key.ticks === after[name].keys[fresh].ticks && sameValue(key.value, after[name].keys[fresh].value)) found = true;
+                    if (!found) throw new Error('An existing native caption key changed.');
+                }
+            }
+            after.readbackVerified = true; after.retry = 'never'; return reply(after);
+        } catch (e) {
+            if (attempted) return reply({ error: 'Premiere did not confirm the last native control update. Inspect it in Effect Controls before another write.', code: 'BC_OUTPUT_UNCONFIRMED', recoverable: false, outputApplied: false, retry: 'never' });
+            return reply({ error: e.toString() });
+        }
+    }
+    var nativeExtensionAttempts = {}, nativeExtensionAttemptCount = 0;
+    function nativeExtensionRemainder(value, divisor) {
+        var remainder = 0;
+        for (var i = 0; i < value.length; i++) remainder = (remainder * 10 + Number(value.charAt(i))) % divisor;
+        return remainder;
+    }
+    function nativeExtensionLocate(p) {
+        var snapshot = p.snapshot, target = snapshot && snapshot.locator;
+        if (!snapshot || !target || typeof snapshot.revision !== 'string' || !snapshot.revision || snapshot.revision.length > nativeCarrierBytes || !localMediaPath(p.projectPath) || target.projectPath !== p.projectPath || !sameSequenceId(target.sequenceId, p.sequenceId)) throw new Error('Invalid native caption extension identity.');
+        var fields = ['trackIndex', 'clipIndex', 'componentIndex', 'documentParamIndex'];
+        for (var i = 0; i < fields.length; i++) {
+            var locatorBound = 128;
+            if (fields[i] === 'trackIndex') locatorBound = 255;
+            if (fields[i] === 'clipIndex') locatorBound = 100000;
+            nativeInteger(target[fields[i]], 0, locatorBound, 'extension locator');
+        }
+        var s = sequence(p.sequenceId, p.projectPath), trackCount = connectionCount(s.videoTracks.numTracks, 256);
+        if (target.trackIndex >= trackCount) throw new Error('The caption extension track changed.');
+        var track = s.videoTracks[target.trackIndex], count = connectionCount(track.clips.numItems, 2000);
+        if (target.clipIndex >= count) throw new Error('The caption extension clip changed.');
+        var clip = track.clips[target.clipIndex];
+        if (!clip || connectionId(clip.nodeId) !== target.clipNodeId) throw new Error('The caption extension identity changed.');
+        var current = nativeCaptionRecord(s, clip, target.trackIndex, target.clipIndex, target.componentIndex, true);
+        if (current.record.locator.documentParamIndex !== target.documentParamIndex || current.record.carrierKind !== 'transparent-video') throw new Error('Extend captions requires the original owned native caption source.');
+        if (typeof track.isLocked !== 'function' || track.isLocked() || typeof track.isMuted === 'function' && track.isMuted() || clip.disabled === true) throw new Error('Enable and unlock the native caption track before extending it.');
+        if (typeof clip.getSpeed !== 'function' || typeof clip.isSpeedReversed !== 'function') throw new Error('Premiere did not expose the caption extension source clock.');
+        assertNormalSpeed(clip);
+        var timing = connectionTiming(clip), frameTicks = nativeControlTicks(String(s.timebase)), frame = Number(frameTicks);
+        if (!frame || !isFinite(frame) || frame > 1000000000000) throw new Error('Invalid caption extension frame rate.');
+        var duration = nativeTickMath(timing.endTicks, timing.startTicks, true);
+        if (duration !== nativeTickMath(timing.outTicks, timing.inTicks, true)) throw new Error('The caption source speed changed.');
+        for (i = 0; i < fields.length; i++) {
+            var tickName = ['startTicks', 'endTicks', 'inTicks', 'outTicks'][i];
+            nativeControlTicks(timing[tickName]);
+            if (nativeExtensionRemainder(timing[tickName], frame)) throw new Error('Caption extension requires exact frame boundaries.');
+        }
+        return { sequence: s, clip: clip, track: track, current: current, timing: timing, frameTicks: frameTicks };
+    }
+    function nativeExtensionEffectState(clip, ignoredDocument, budget) {
+        var components = clip.components, count = connectionCount(components && components.numItems, 128), result = [];
+        for (var c = 0; c < count; c++) {
+            var component = components[c], properties = component.properties, n = connectionCount(properties && properties.numItems, 256), values = [];
+            for (var p = 0; p < n; p++) {
+                var param = properties[p];
+                if (ignoredDocument && c === ignoredDocument.componentIndex && p === ignoredDocument.documentParamIndex) continue;
+                if (++budget.parameters > 10000 || !param || typeof param.isTimeVarying !== 'function' || typeof param.getValue !== 'function') throw new Error('Premiere could not preserve every effect parameter during caption extension.');
+                var animated = param.isTimeVarying() === true, keys = [], nativeKeys = animated ? param.getKeys() : null;
+                if (nativeKeys && nativeKeys.length > 256) throw new Error('Too many effect keys to verify caption extension.');
+                for (var k = 0; nativeKeys && k < nativeKeys.length; k++) {
+                    if (++budget.keys > 10000 || typeof param.getValueAtKey !== 'function') throw new Error('Premiere could not preserve existing caption extension keys.');
+                    var entry = { ticks: String(nativeKeys[k].ticks), value: param.getValueAtKey(nativeKeys[k]) };
+                    if (typeof param.getInterpolationTypeAtKey === 'function') entry.interpolation = param.getInterpolationTypeAtKey(nativeKeys[k]);
+                    keys.push(entry);
+                }
+                values.push({ index: p, name: String(param.displayName), animated: animated, value: animated ? null : param.getValue(), keys: keys });
+            }
+            result.push({ matchName: String(component.matchName), parameters: values });
+        }
+        var encoded = stringify(result);
+        if (encoded.length > nativeCarrierBytes) throw new Error('Effect preservation state exceeds the caption extension bound.');
+        return encoded;
+    }
+    function nativeExtensionState(p, located) {
+        var s = located.sequence, target = p.snapshot.locator, sets = [s.videoTracks, s.audioTracks], state = [], contentEnd = '0', budget = { parameters: 0, keys: 0 }, inspected = 0;
+        for (var group = 0; group < sets.length; group++) {
+            var tracks = sets[group], count = connectionCount(tracks.numTracks, 256), rows = [];
+            for (var t = 0; t < count; t++) {
+                var track = tracks[t], clips = track.clips, n = connectionCount(clips.numItems, 2000), entries = [], muted = typeof track.isMuted === 'function' && track.isMuted();
+                if (typeof track.isLocked !== 'function') throw new Error('Premiere did not expose a caption extension track lock.');
+                for (var c = 0; c < n; c++) {
+                    if (++inspected > 2000) throw new Error('Caption extension supports at most 2000 timeline clips.');
+                    var clip = clips[c], node = connectionId(clip && clip.nodeId), item = clip.projectItem, timing = connectionTiming(clip);
+                    if (!item || typeof item.getMediaPath !== 'function') throw new Error('Premiere did not expose caption extension media identities.');
+                    var path = String(item.getMediaPath()), isTarget = node === target.clipNodeId, caption = isTarget, components = clip.components, componentCount = connectionCount(components && components.numItems, 128);
+                    for (var f = 0; f < componentCount; f++) if (nativeCaptionName(String(components[f].matchName))) caption = true;
+                    if (/(^|[\\\/])caption-[a-zA-Z0-9_-]{1,200}[\\\/]caption\.mov$/.test(path)) caption = true;
+                    if (!muted && clip.disabled !== true && !caption && nativeTickCompare(timing.endTicks, contentEnd) > 0) contentEnd = timing.endTicks;
+                    entries.push({ node: node, item: connectionId(item.nodeId), path: path, name: clip.name, disabled: clip.disabled === true,
+                        timing: isTarget ? null : timing, effects: nativeExtensionEffectState(clip, isTarget ? target : null, budget) });
+                }
+                rows.push({ name: track.name, locked: track.isLocked(), muted: muted, clips: entries });
+            }
+            state.push(rows);
+        }
+        var remainder = nativeExtensionRemainder(contentEnd, Number(located.frameTicks));
+        if (remainder) contentEnd = nativeTickMath(contentEnd, String(Number(located.frameTicks) - remainder), false);
+        var out = nativeTickMath(located.timing.outTicks, nativeTickCompare(contentEnd, located.timing.endTicks) > 0 ? nativeTickMath(contentEnd, located.timing.endTicks, true) : '0', false);
+        if (nativeTickCompare(out, String(864000 * TICKS)) > 0) throw new Error('Caption extension exceeds the supported source duration.');
+        if (nativeTickCompare(contentEnd, located.timing.endTicks) > 0) for (var x = 0; x < located.track.clips.numItems; x++) {
+            var neighbor = located.track.clips[x];
+            if (connectionId(neighbor.nodeId) === target.clipNodeId) continue;
+            var boundary = connectionTiming(neighbor);
+            if (nativeTickCompare(boundary.startTicks, contentEnd) < 0 && nativeTickCompare(boundary.endTicks, located.timing.endTicks) > 0) throw new Error('Another clip blocks the caption extension on this track. Move it before extending captions.');
+        }
+        var preserved = stringify({ projectPath: p.projectPath, sequenceId: p.sequenceId, timebase: located.frameTicks, width: s.frameSizeHorizontal, height: s.frameSizeVertical,
+            carrierRevision: located.current.record.carrierRevision, start: located.timing.startTicks, inPoint: located.timing.inTicks, tracks: state });
+        if (preserved.length > nativeCarrierBytes) throw new Error('Caption extension preservation state is too large.');
+        return { preserved: preserved, targetEndTicks: contentEnd, targetOutTicks: out };
+    }
+    function nativeExtensionContext(p) {
+        var located = nativeExtensionLocate(p);
+        if (located.current.record.revision !== p.snapshot.revision) throw new Error('The caption changed before extension. Reconnect and try again.');
+        var state = nativeExtensionState(p, located), revision = stringify({ documentRevision: p.snapshot.revision, preservation: state.preserved, targetEndTicks: state.targetEndTicks, targetOutTicks: state.targetOutTicks });
+        if (revision.length > nativeCarrierBytes) throw new Error('The caption extension revision is too large.');
+        sequence(p.sequenceId, p.projectPath);
+        return { located: located, state: state, receipt: { ok: true, revision: revision, connection: located.current.record, ticksPerFrame: located.frameTicks,
+            targetEndTicks: state.targetEndTicks, targetOutTicks: state.targetOutTicks, canExtend: nativeTickCompare(state.targetEndTicks, located.timing.endTicks) > 0 } };
+    }
+    function readNativeCaptionExtension(file) {
+        try { return reply(nativeExtensionContext(readPayload(file)).receipt); }
+        catch (e) { return reply({ error: e.toString() }); }
+    }
+    function nativeExtensionBinary(text) {
+        boundedNativeCarrier(text);
+        var offset = 7, count = 0;
+        function u() {
+            if (offset + 8 > text.length) throw new Error('Truncated caption extension document.');
+            var value = 0;
+            for (var i = 0; i < 4; i++) value += parseInt(text.substr(offset + i * 2, 2), 16) * Math.pow(256, i);
+            offset += 8; return value;
+        }
+        function skip(bytes) { if (offset + bytes * 2 > text.length) throw new Error('Truncated caption extension words.'); offset += bytes * 2; }
+        if (u() !== 1346454338) throw new Error('Invalid caption extension document magic.');
+        var version = u(), n = u(), captions = [];
+        if (version < 1 || version > 4 || n > 10000) throw new Error('Invalid caption extension document version or size.');
+        for (var c = 0; c < n; c++) {
+            var identityStart = offset, length = u();
+            if (!length || length > 256) throw new Error('Invalid caption extension identity.');
+            skip(length); var manual = u(); if (manual > 1) throw new Error('Invalid caption extension split flag.');
+            var identity = text.substring(identityStart, offset), words = u(), wordStart = offset;
+            if (!words || (count += words) > 50000) throw new Error('Invalid caption extension word count.');
+            for (var w = 0; w < words; w++) { var size = u(); if (!size || size > 4096) throw new Error('Invalid caption extension text size.'); skip(size + 16); if (u() > 1) throw new Error('Invalid caption extension sentence flag.'); }
+            captions.push({ identity: identity, count: words, words: text.substring(wordStart, offset) });
+        }
+        return { version: version, captions: captions, trailer: text.substring(offset) };
+    }
+    function nativeExtensionAppendOnly(before, after) {
+        var old = nativeExtensionBinary(before), next = nativeExtensionBinary(after), changed = 0;
+        if (old.version !== next.version || old.captions.length !== next.captions.length || old.trailer !== next.trailer) throw new Error('Caption extension must preserve every previous style and manual container.');
+        for (var i = 0; i < old.captions.length; i++) {
+            var a = old.captions[i], b = next.captions[i];
+            if (a.identity !== b.identity || b.count < a.count || b.words.slice(0, a.words.length) !== a.words) throw new Error('Caption extension cannot replace previous caption text or timings.');
+            if (b.count !== a.count && ++changed > 1) throw new Error('Caption extension must append to only one existing container.');
+        }
+    }
+    function extendNativeCaptionDocument(file) {
+        var attempted = false, stage = 'preflight';
+        try {
+            var p = readPayload(file), request = p.request;
+            if (!request || typeof request !== 'object' || request instanceof Array || typeof request.revision !== 'string' || request.revision.length > nativeCarrierBytes) throw new Error('Invalid native caption extension request.');
+            for (var field in request) if (field !== 'revision' && field !== 'documentText' && field !== 'endTicks' && field !== 'outTicks') throw new Error('Unknown native caption extension field.');
+            nativeControlTicks(request.endTicks); nativeControlTicks(request.outTicks); boundedNativeCarrier(request.documentText);
+            var before = nativeExtensionContext(p), located = before.located;
+            if (!before.receipt.canExtend || before.receipt.revision !== request.revision || before.receipt.targetEndTicks !== request.endTicks || before.receipt.targetOutTicks !== request.outTicks) throw new Error('The footage or caption extension context changed. Refresh before extending.');
+            nativeExtensionAppendOnly(located.current.record.documentText, request.documentText);
+            if (typeof located.current.param.setValue !== 'function') throw new Error('Premiere did not expose the caption document setter.');
+            var attemptKey = '$' + p.projectPath + '|' + request.revision;
+            if (nativeExtensionAttempts[attemptKey] || nativeExtensionAttemptCount >= 100) throw new Error('This caption extension cannot be retried automatically. Inspect the clip first.');
+            if (nativeExtensionContext(p).receipt.revision !== request.revision) throw new Error('The caption extension changed during preparation.');
+            attempted = true; nativeExtensionAttempts[attemptKey] = true; nativeExtensionAttemptCount++;
+            stage = 'duration update';
+            located.clip.outPoint = ticksTime(request.outTicks);
+            sequence(p.sequenceId, p.projectPath);
+            // An out-point setter may also move the clip end. Permit either
+            // exact acknowledged state, while checking all protected data
+            // before issuing the next setter.
+            var pending = nativeCaptionRecord(located.sequence, located.clip, p.snapshot.locator.trackIndex, p.snapshot.locator.clipIndex, p.snapshot.locator.componentIndex, true).record;
+            if (pending.startTicks !== located.timing.startTicks || pending.inTicks !== located.timing.inTicks || pending.outTicks !== request.outTicks || pending.endTicks !== located.timing.endTicks && pending.endTicks !== request.endTicks || pending.documentText !== located.current.record.documentText || pending.carrierRevision !== located.current.record.carrierRevision || nativeExtensionState(p, located).preserved !== before.state.preserved) throw new Error('The caption or timeline changed while extending its source out point.');
+            if (pending.endTicks !== request.endTicks) located.clip.end = ticksTime(request.endTicks);
+            var extended = nativeExtensionLocate(p), timing = extended.timing;
+            if (timing.startTicks !== located.timing.startTicks || timing.inTicks !== located.timing.inTicks || timing.endTicks !== request.endTicks || timing.outTicks !== request.outTicks || extended.current.record.documentText !== located.current.record.documentText || nativeExtensionState(p, extended).preserved !== before.state.preserved) throw new Error('Premiere did not preserve the existing caption while extending its duration.');
+            stage = 'document update';
+            if (request.documentText !== extended.current.record.documentText) extended.current.param.setValue(request.documentText, 1);
+            var after = nativeExtensionLocate(p), expected = parseJSON(p.snapshot.revision);
+            expected.end = request.endTicks; expected.outPoint = request.outTicks; expected.documentText = request.documentText;
+            if (after.current.record.revision !== stringify(expected) || nativeExtensionState(p, after).preserved !== before.state.preserved) throw new Error('Premiere did not confirm the caption extension readback.');
+            sequence(p.sequenceId, p.projectPath);
+            return reply({ ok: true, connection: after.current.record, readbackVerified: true, renderVerified: false, retry: 'never' });
+        } catch (e) {
+            if (attempted) return reply({ error: 'Premiere did not confirm caption extension during ' + stage + '. Inspect the caption clip before another write.', code: 'BC_OUTPUT_UNCONFIRMED', recoverable: false, outputApplied: false, retry: 'never' });
+            return reply({ error: e.toString(), retry: 'never' });
+        }
+    }
     function writeNativeCaptionDocument(file) {
         var attempted = false, verified = false;
         try {
@@ -1752,5 +2124,5 @@ var BetterCaptionsHost = (function () {
             return reply({ error: e.toString() });
         }
     }
-    return { createNativeCaptionDocument: createNativeCaptionDocument, readCaptionConnections: readCaptionConnections, writeNativeCaptionDocument: writeNativeCaptionDocument, readCaptionConsolidation: readCaptionConsolidation, stageCaptionConsolidation: stageCaptionConsolidation, verifyCaptionConsolidation: verifyCaptionConsolidation, rollbackCaptionConsolidation: rollbackCaptionConsolidation, context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, readCaptionAreaDescriptor: readCaptionAreaDescriptor, patchCaptionKeyValues: patchCaptionKeyValues, preflight: preflight, prepareCaptionTrack: prepareCaptionTrack, apply: apply, readTimeline: readTimeline };
+    return { readNativeCaptionExtension: readNativeCaptionExtension, extendNativeCaptionDocument: extendNativeCaptionDocument, seekNativeCaptionKeyframe: seekNativeCaptionKeyframe, readNativeCaptionControls: readNativeCaptionControls, editNativeCaptionControl: editNativeCaptionControl, createNativeCaptionDocument: createNativeCaptionDocument, readCaptionConnections: readCaptionConnections, writeNativeCaptionDocument: writeNativeCaptionDocument, readCaptionConsolidation: readCaptionConsolidation, stageCaptionConsolidation: stageCaptionConsolidation, verifyCaptionConsolidation: verifyCaptionConsolidation, rollbackCaptionConsolidation: rollbackCaptionConsolidation, context: context, seek: seek, selectCaptionClip: selectCaptionClip, readCaptionSelection: readCaptionSelection, readCaptionGeometry: readCaptionGeometry, readCaptionMotion: readCaptionMotion, readCaptionAreaDescriptor: readCaptionAreaDescriptor, patchCaptionKeyValues: patchCaptionKeyValues, preflight: preflight, prepareCaptionTrack: prepareCaptionTrack, apply: apply, readTimeline: readTimeline };
 })();

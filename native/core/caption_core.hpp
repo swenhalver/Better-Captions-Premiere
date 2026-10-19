@@ -8,6 +8,10 @@ namespace better_captions {
 constexpr std::uint32_t kSchemaVersion = 4;
 constexpr std::size_t kMaxWords = 100000;
 constexpr std::size_t kMaxDocumentBytes = 16 * 1024 * 1024;
+constexpr std::size_t kMaxGroupsPerPage = 100;
+// Native integer sliders may interpolate fractional samples between keyframes.
+// Round finite host samples consistently; source/editor integer validation stays strict.
+std::size_t sampledGroupsPerPage(double);
 struct Color { double r=1,g=1,b=1,a=1; };
 struct Word { std::string text; double start=0,end=0; bool endOfSentence=false; };
 struct WordStyle {
@@ -51,6 +55,9 @@ struct DrawWord {
 struct Frame { std::vector<DrawWord> words; bool overflow=false; };
 // Host supplies real shaped font metrics. Commands retain independent styles and font sizes.
 // Box coordinates are top-left pixels; lines are centered within box, clipped by host.
+// Consecutive phrase groups share one page; every group starts a new line.
+// Pages do not cross manual containers. Source documents/word times stay unchanged.
 Frame layoutFrame(const Document&, double time, const LayoutBox&, const MeasureText&,
-                  std::size_t maxChars=56,double pauseSeconds=0.6,const TransformText& transform={});
+                  std::size_t maxChars=56,double pauseSeconds=0.6,const TransformText& transform={},
+                  std::size_t groupsPerPage=1);
 } // namespace better_captions

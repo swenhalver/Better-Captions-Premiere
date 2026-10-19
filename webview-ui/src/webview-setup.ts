@@ -5,11 +5,11 @@ import type { AgentHandler } from './lib/agent-bridge';
 const CHANNEL = 'better-captions';
 const HOST_METHODS = [
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession', 'loadStylePresets', 'saveStylePresets',
-  'transcribeSequence', 'getFonts', 'getFontCatalog', 'showInPremiere', 'beginCaption',
+  'transcribeSequence', 'transcribeSequenceRange', 'getFonts', 'getFontCatalog', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'writeNativeCaptionDocument', 'createNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'extendNativeCaptionDocument', 'editNativeCaptionControl', 'seekNativeCaptionKeyframe', 'writeNativeCaptionDocument', 'createNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
 ] as const;
-const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionArea', 'readCaptionConsolidation']);
+const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'readCaptionArea', 'readCaptionConsolidation']);
 // Internal position sampling may report lane availability, but cannot be
 // requested through the webview's RPC allowlist.
 const AVAILABILITY_METHODS = new Set<string>([...HOST_METHODS, 'readTimelinePlayhead']);
@@ -80,7 +80,7 @@ function nativeTransport(host: UXPMessageHost, webviewAPI: unknown) {
     if (unresolved.size || nativeAvailability.state === 'waiting') return Promise.reject(transportError('A previous Premiere operation has not returned. Native requests are paused; its timeout did not cancel the operation.', 'BC_NATIVE_WAITING', method, true, true));
     if(pending.size>=16)return Promise.reject(transportError('The caption panel is busy. Wait for its current operations to finish.', 'BC_NATIVE_BUSY', method, true, false));
     const id = prefix + ++nextId;
-    const timeout = READ_METHODS.has(method)?15000:method === 'transcribeSequence' ? 60 * 60 * 1000 : ['finishCaption','applyCaptionClips','applyConsolidatedCaption'].includes(method) ? 30 * 60 * 1000 : 60 * 1000;
+    const timeout = READ_METHODS.has(method)?15000:['transcribeSequence','transcribeSequenceRange'].includes(method) ? 60 * 60 * 1000 : ['finishCaption','applyCaptionClips','applyConsolidatedCaption'].includes(method) ? 30 * 60 * 1000 : 60 * 1000;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id); unresolved.set(id, method); publishAvailability();

@@ -52,7 +52,7 @@ function harness(t, options = {}) {
     folder('/private/service/requests').entries.delete(name);
     responses.entries.set(name,{data:{version:1,id:request.id,sequenceId:request.sequenceId,projectPath:request.projectPath,result,...extra},delete:async()=>responses.entries.delete(name)});
   }
-  const native={fetchTranscript:async sequence=>sequence.name,transcribe:async sequence=>options.transcribe?options.transcribe(sequence):sequence.name};
+  const native={transcribeRange:async(sequence,begin,end)=>options.transcribeRange?options.transcribeRange(sequence,begin,end):JSON.stringify({sequence:sequence.name,begin,end}),fetchTranscript:async sequence=>sequence.name,transcribe:async sequence=>options.transcribe?options.transcribe(sequence):sequence.name};
   const module={exports:{}};
   const context={module,exports:module.exports,setTimeout:schedule,clearTimeout:cancel,Date:{now},Map,Set,require:name=>{
     if(name==='premierepro')return {Project:{getActiveProject:async()=>{projectReads++;return options.noProject?null:project;}},Constants:{TrackItemType:{CLIP:1}}};
@@ -435,4 +435,29 @@ test('native key edits use the internal CEP lane without deadlock or exposing a 
   assert.deepEqual(h.requests.at(-1).args[1],patch);
   assert.equal(Object.hasOwn(h.requests.at(-1),'expiresAt'),false,'a mutation must not acquire the read-expiry contract');
   assert.equal(h.api.patchCaptionKeyValues,undefined,'only the trusted native editor gets the bounded internal callback');
+});
+
+test('range transcription dispatches the captured sequence and bounded seconds directly, without CEP service writes',async t=>{
+ const calls=[],h=harness(t,{transcribeRange:async(sequence,begin,end)=>{calls.push([sequence.name,begin,end]);return 'tail transcript';}});await h.api.getActiveSequenceInfo();
+ assert.equal(await h.api.transcribeSequenceRange(3,10),'tail transcript');assert.deepEqual(calls,[['one',3,10]]);assert.deepEqual(h.requests,[]);assert.deepEqual(h.writes,[]);
+ for(const [begin,end] of [[-1,10],[3,3],[3,11],[0,Infinity]])await assert.rejects(h.api.transcribeSequenceRange(begin,end),/valid transcript extension range|exceeds/);assert.equal(calls.length,1);
+});
+test('range transcription rejects a project/active-sequence change instead of returning tail words for another context',async t=>{
+ let finish;const h=harness(t,{transcribeRange:()=>new Promise(resolve=>{finish=resolve;})});await h.api.getActiveSequenceInfo();
+ const pending=h.api.transcribeSequenceRange(3,10);await tick();h.select('two');finish('tail transcript');await assert.rejects(pending,/sequence changed during transcription/);assert.deepEqual(h.writes,[]);
+});
+
+test('extension read and write wrappers use captured context and serialized distinct contracts',async t=>{
+ const h=harness(t,{serviceResult:request=>({ok:true,action:request.action})});await h.api.getActiveSequenceInfo();
+ const healthy=h.healthyService();healthy.actions.push('readNativeCaptionExtension','extendNativeCaptionDocument');h.setService(healthy);
+ const snapshot={locator:{clipNodeId:'caption'},revision:'original-doc'},request={revision:'range-rev',documentText:'BCDOC1:ab',endTicks:'400',outTicks:'400'};
+ assert.equal((await h.api.readNativeCaptionExtension(snapshot,'one')).action,'readNativeCaptionExtension');
+ assert.equal((await h.api.extendNativeCaptionDocument(snapshot,request,'one')).action,'extendNativeCaptionDocument');
+ assert.equal(h.requests.length,2);assert.equal(h.requests[0].expiresAt-h.requests[0].createdAt,10000);assert.equal(Object.hasOwn(h.requests[1],'expiresAt'),false);
+ assert.equal(JSON.stringify(h.requests[0].args),JSON.stringify([snapshot]));assert.equal(JSON.stringify(h.requests[1].args),JSON.stringify([snapshot,request]));assert.equal(h.requests[1].sequenceId,'one');
+});
+test('range transcription retains the hour deadline rather than the ordinary mutation timeout',async t=>{
+ let finish;const h=harness(t,{manualTimers:true,transcribeRange:()=>new Promise(resolve=>{finish=resolve;})});await h.api.getActiveSequenceInfo();
+ const pending=h.api.transcribeSequenceRange(3,10,'one');await tick();h.fireTimeout(3600000);await assert.rejects(pending,e=>e.code==='BC_NATIVE_PENDING'&&e.method==='transcribeSequenceRange'&&e.recoverable===false&&e.operationPending===true);
+ finish('tail');await tick();await tick();assert.deepEqual(h.requests,[]);
 });

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { tick } from "svelte";
   import type { SessionState } from "../lib/types";
-  interface Props { session: SessionState | null; onRefresh: () => void; onTranscribe: () => void; isDemo?: boolean; isBusy?: boolean; saveStatus?: string; }
-  let { session, onRefresh, onTranscribe, isDemo = false, isBusy = false, saveStatus = "" }: Props = $props();
+  interface Props { session: SessionState | null; onRefresh: () => void; onTranscribe: () => void; onExtend?: () => void; isDemo?: boolean; isBusy?: boolean; saveStatus?: string; }
+  let { session, onRefresh, onTranscribe, onExtend, isDemo = false, isBusy = false, saveStatus = "" }: Props = $props();
   let linked = $derived(session?.captions.some((caption) => caption.clipNodeId) ?? false);
   let ready = $derived(!!session && (session.hasTranscript || session.captions.length > 0));
   let sequenceName = $derived(isDemo ? "A little more human · Sample sequence" : session?.sequenceName ?? "No active sequence");
@@ -66,6 +66,7 @@
         {#if menuOpen}
           <div class="sequence-status__menu" bind:this={menu} id={menuId} role="menu" aria-label="Sequence actions" tabindex="-1" onkeydown={menuKeydown}>
             <button class="sequence-status__menu-item" role="menuitem" tabindex="-1" onclick={() => runAction(onRefresh)} disabled={isBusy} title="Refresh sequence without replacing caption edits">Refresh sequence</button>
+            {#if onExtend}<button class="sequence-status__menu-item" role="menuitem" tabindex="-1" onclick={() => runAction(onExtend!)} disabled={isBusy || isDemo} title="Append dialogue from added footage and keep existing caption edits">Extend captions</button>{/if}
             <button class="sequence-status__menu-item" role="menuitem" tabindex="-1" onclick={() => runAction(onTranscribe)} disabled={transcribeDisabled} title={transcribeTitle}>Transcribe again</button>
             {#if linked}<p class="sequence-status__menu-help">Edit the linked transcript below.</p>{/if}
           </div>

@@ -7,6 +7,7 @@ enum Param {
  CurrentGroup, CurrentSize, CurrentTint, CurrentOpacity, CurrentBubble, CurrentBubbleTint, CurrentBubbleOpacity, CurrentPadding, CurrentRadius, CurrentEnd,
  SpokenGroup, SpokenSize, SpokenTint, SpokenOpacity, SpokenBubble, SpokenBubbleTint, SpokenBubbleOpacity, SpokenPadding, SpokenRadius, SpokenEnd,
  UpcomingGroup, UpcomingSize, UpcomingTint, UpcomingOpacity, UpcomingBubble, UpcomingBubbleTint, UpcomingBubbleOpacity, UpcomingPadding, UpcomingRadius, UpcomingEnd,
+ GroupsPerPage,
  Count
 };
 enum DiskId {
@@ -14,7 +15,9 @@ enum DiskId {
  CurrentSizeId=8, CurrentTintId=9, CurrentOpacityId=10, CurrentBubbleId=11, CurrentBubbleTintId=12, CurrentBubbleOpacityId=13, CurrentPaddingId=14, CurrentRadiusId=15,
  SpokenSizeId=16, SpokenTintId=17, SpokenOpacityId=18, SpokenBubbleId=19, SpokenBubbleTintId=20, SpokenBubbleOpacityId=21, SpokenPaddingId=22, SpokenRadiusId=23,
  UpcomingSizeId=24, UpcomingTintId=25, UpcomingOpacityId=26, UpcomingBubbleId=27, UpcomingBubbleTintId=28, UpcomingBubbleOpacityId=29, UpcomingPaddingId=30, UpcomingRadiusId=31,
- CurrentGroupId=100, CurrentEndId=101, SpokenGroupId=102, SpokenEndId=103, UpcomingGroupId=104, UpcomingEndId=105
+ CurrentGroupId=100, CurrentEndId=101, SpokenGroupId=102, SpokenEndId=103, UpcomingGroupId=104, UpcomingEndId=105,
+ GroupsPerPageId=32
 };
 static_assert(Transcript==7 && TranscriptId==7,"Existing carrier position and disk ID are permanent");
+static_assert(UpcomingEnd==37&&GroupsPerPage==38&&GroupsPerPageId==32,"Page grouping must append after all existing native controls");
 }

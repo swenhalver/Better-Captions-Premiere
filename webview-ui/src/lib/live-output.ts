@@ -86,6 +86,7 @@ export function createLiveOutput(options: Options) {
   }
   return {
     notify,
+    block(sequenceId:string,message:string) { uncertain.set(sequenceId,message); notify(); },
     diagnostics: () => ({ running: !!running, queued: !!desired && desired !== complete, retries, blocked: uncertain.size > 0 }),
     stop() { alive = false; if (timer !== undefined) clearTimeout(timer); },
   };

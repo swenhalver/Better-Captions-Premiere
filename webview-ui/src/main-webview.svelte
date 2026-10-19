@@ -8,6 +8,8 @@
   import { startCaptionReconnect } from "./lib/reconnect";
   import { connectionKey, reconnectLegacyCaptions, nativeAboveDisabledBackups, sameSequenceId, type CaptionConnections } from "./lib/clip-connections";
   import { rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate } from "./lib/native-effect/panel";
+  import { extendNativeCaptions } from "./lib/native-effect/extension-workflow";
+  import NativeEffectControls from './components/NativeEffectControls.svelte';
   import { nativeCaptionPhrases } from "./lib/native-effect/phrases";
   import { prepareNativeCreation, nativeOutputKind } from "./lib/native-effect/create";
   import { encodeNativeTransportText } from "./lib/native-effect/encode";
@@ -380,6 +382,35 @@
       const session = sessionManager.sessions.get(id);
       if (session) session.isLoading = false;
     }
+  }
+  async function extendCaptions() {
+    const session=sessionManager.current, info=sequenceInfo;
+    if(!session?.nativeClipId||!nativeBinding||!info||api.isDemo||timelineBusy||isSyncing||isRefreshing)return;
+    isSyncing=true; error=''; timelineStatus='Reading added footage…';
+    try {
+      // Commit pending inline text/style changes first, then protect that exact document.
+      if(appliedSignatures[outputKey(session)]!==outputSignature(session))await applyNativeOutput();
+      if(sessionManager.current!==session||appliedSignatures[outputKey(session)]!==outputSignature(session))throw new Error('The caption changed while saving. Try Extend captions again.');
+      const binding=nativeBinding;
+      if(!binding)throw new Error('Reconnect the caption layer before extending.');
+      const signature=outputSignature(session);
+      const current=()=>sessionManager.current===session&&nativeBinding===binding&&outputSignature(session)===signature;
+      const result=await extendNativeCaptions(binding,api,session.sequenceId,current);
+      if(result.changed){
+        const recovered=rehydrateNativePanel(result.connection as typeof binding.clip,info);
+        nativeBinding=recovered.binding;
+        sessionManager.restore({...recovered.session,projectPath:session.projectPath,nativeClipId:session.nativeClipId,currentTime:session.currentTime});
+        const next=sessionManager.current!;
+        appliedSignatures[outputKey(next)]=outputSignature(next);
+        if(!next.captions.some(caption=>caption.id===selectedId))selectFirst();
+        watchRevisionChanged();
+        timelineStatus=result.appendedWords ? `Added ${result.appendedWords} words. Existing edits preserved.` : 'Caption clip extended. Existing edits preserved.';
+      }else timelineStatus='No new dialogue beyond the current caption clip.';
+    }catch(problem){
+      error=message(problem);timelineStatus='';
+      const failure=problem as {code?:string};
+      if(failure.code==='BC_OUTPUT_UNCONFIRMED'||failure.code==='BC_NATIVE_PENDING')liveOutput?.block(outputKey(session),error);
+    }finally{isSyncing=false;liveOutput?.notify();}
   }
   function restoreTranscription() {
     if (!transcriptionBackup || transcriptionBackup.sequenceId !== sessionManager.current?.sequenceId) return;
@@ -793,7 +824,7 @@
         await flushSave();
         const session = sessionManager.current;
         if (!session || outputKey(session) !== context.sequenceId || outputSignature(session) !== context.signature || !(nativeBinding || nativeOutputKind(session) === "new-native" || exportButton)) throw Object.assign(new Error('A newer edit replaced this render.'), { code: 'BC_RENDER_SUPERSEDED' });
-        if (nativeBinding) { await applyNativeOutput(); return; }
+        if (nativeBinding) { automaticOutput = true; try { await applyNativeOutput(); } finally { automaticOutput = false; } return; }
         if (nativeOutputKind(session) === 'new-native') { await createNativeOutput(); return; }
         if (!exportButton) throw new Error('Caption controls are not ready.');
         automaticOutput = true;
@@ -875,7 +906,7 @@
 </script>
 
 <main class="caption-app">
-  <SequenceStatus session={sessionManager.current} onRefresh={() => { void refreshSequence(); }} onTranscribe={() => { void transcribe(); }} isDemo={api.isDemo} isBusy={isRefreshing || isSyncing || timelineBusy || !!sessionManager.current?.isLoading} {saveStatus} />
+  <SequenceStatus session={sessionManager.current} onRefresh={() => { void refreshSequence(); }} onTranscribe={() => { void transcribe(); }} onExtend={sessionManager.current?.nativeClipId ? () => { void extendCaptions(); } : undefined} isDemo={api.isDemo} isBusy={isRefreshing || isSyncing || timelineBusy || !!sessionManager.current?.isLoading} {saveStatus} />
   {#if error}<div class="caption-app__error" role="alert"><p>{error}</p><button class="caption-button caption-button--icon" onclick={() => error = ""} aria-label="Dismiss error"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button></div>{/if}
   {#if sessionManager.current}
     {@const session = sessionManager.current}
@@ -883,7 +914,7 @@
     {@const position = locationScope === "caption" && selected?.position ? selected.position : { x: session.style.positionX, y: session.style.positionY }}
     <PanelTabs name="workspace" label="Caption workspace" value={activeTab} options={[{value:"transcript",label:"Transcript"},{value:"style",label:"Styling"}]} onChange={changeWorkspace} />
     <div class="caption-app__content" bind:this={contentEl}>
-      <fieldset class="caption-app__editor" disabled={editsLocked || session.isLoading} aria-label="Caption editing controls">
+      <fieldset class="caption-app__editor" disabled={editsLocked || isSyncing || session.isLoading} aria-label="Caption editing controls">
         <div id="workspace-panel-transcript" role="tabpanel" aria-labelledby="workspace-tab-transcript" tabindex="0" hidden={activeTab !== "transcript"}>
           {#if session.isLoading}<div class="caption-app__loading" role="status"><p>Transcribing in Premiere…</p><p class="caption-help">Timed words will appear here when Premiere finishes.</p><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div></div>{/if}
           {#if transcriptionBackup && transcriptionBackup.sequenceId === session.sequenceId}<div class="caption-app__backup"><button class="caption-button" onclick={restoreTranscription} disabled={session.captions.some((caption) => caption.clipNodeId)}>Restore previous transcription</button></div>{/if}
@@ -894,7 +925,7 @@
             <StylePresets style={session.style} animation={session.animation} load={api.loadStylePresets} save={api.saveStylePresets} onApply={applyStylePreset} isDemo={api.isDemo} disabled={editsLocked || isRefreshing || isSyncing || session.isLoading} />
           {/key}
           <TextStyleToolbar style={session.style} {fonts} {fontCatalog} {fontsLoading} {fontsError} onRefreshFonts={() => { void refreshFonts(); }} scope={wordState} nativeMode={!!session.nativeClipId} onScopeChange={changeWordState} onUpdate={handleStyle} />
-          {#if session.nativeClipId}<p class="caption-help">Position, box size and animation are in this layer’s Effect Controls.</p>{/if}
+          {#if session.nativeClipId && nativeBinding}<NativeEffectControls snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}
           {#if selected && !session.nativeClipId}
             <TextAreaControls caption={selected} sequenceId={session.sequenceId} frameRate={session.frameRate} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} refreshRevision={areaControlRevision} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={exportBusy||agentAreaBusy||isRefreshing||isSyncing||session.isLoading} isDemo={api.isDemo} read={api.readCaptionArea} edit={api.editCaptionArea} getCurrentTime={async()=>{if(api.isDemo)return session.currentTime;const info=await api.getActiveSequenceInfo();if(!info||info.id!==session.sequenceId)throw new Error("The active sequence changed. Refresh Position & size before editing.");return info.playhead??session.currentTime;}} onSeek={async(time)=>{const result=!api.isDemo?await api.showInPremiere(time,session.sequenceId):null;if(sessionManager.current?.sequenceId!==session.sequenceId)throw new Error("The active sequence changed while seeking.");sessionManager.setCurrentTime(typeof result?.time==='number'?result.time:time);}} onSelect={selectSelectedCaption} onBusy={setAreaBusy} onChanged={areaChanged}/>
           {/if}
@@ -919,7 +950,7 @@
       </fieldset>
     </div>
     <footer class="caption-app__output" aria-label="Program Monitor captions">
-      {#if connectionStatus}<p class="caption-message" role="status">{connectionStatus}</p>{/if}
+      {#if session.nativeClipId && timelineStatus}<p class="caption-message" role="status">{timelineStatus}</p>{:else if connectionStatus}<p class="caption-message" role="status">{connectionStatus}</p>{/if}
       {#if selectionHint}<p class="caption-help caption-app__selection-hint" role="status">Enable Transform below the Program Monitor to show the box handles.</p>{/if}
       {#if selected?.layoutOverflow}<p class="caption-message caption-message--error" role="alert">Text exceeds this box. Enlarge it or split the caption.</p>{/if}
       {#if liveStatus.phase === "error" && liveStatus.message}<p class="caption-message caption-message--error" role="alert">{liveStatus.message}</p>{/if}

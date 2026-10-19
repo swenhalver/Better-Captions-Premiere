@@ -19,5 +19,5 @@ struct FontSelection {
 FontSelection fontSelection(const WordStyle&,double baseWeight=400);
 Metrics measureText(const std::string&,const WordStyle&,double baseWeight=400);
 Bitmap rasterize(const Document&,double time,const LayoutBox&,std::size_t width,std::size_t height,
-                 std::size_t maxChars=56,double pauseSeconds=0.6);
+                 std::size_t maxChars=56,double pauseSeconds=0.6,std::size_t groupsPerPage=1);
 }

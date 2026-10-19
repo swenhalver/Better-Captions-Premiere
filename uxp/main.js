@@ -7,9 +7,9 @@ const CHANNEL = 'better-captions';
 const PANEL_ID = 'betterCaptions';
 const HOST_METHODS = new Set([
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession', 'loadStylePresets', 'saveStylePresets',
-  'transcribeSequence', 'getFonts', 'getFontCatalog', 'showInPremiere', 'beginCaption',
+  'transcribeSequence', 'transcribeSequenceRange', 'getFonts', 'getFontCatalog', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'writeNativeCaptionDocument', 'createNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'extendNativeCaptionDocument', 'editNativeCaptionControl', 'seekNativeCaptionKeyframe', 'writeNativeCaptionDocument', 'createNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
 ]);
 const AGENT_METHODS = new Set(['getState', 'patchStyle', 'patchAnimation', 'setCaptions', 'refresh', 'apply', 'readArea', 'editArea']);
 const ID = /^(?:ui|host)-[a-zA-Z0-9_-]{1,100}$/;

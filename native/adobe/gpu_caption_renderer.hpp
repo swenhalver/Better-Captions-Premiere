@@ -237,7 +237,7 @@ inline PreviewGeometry previewGeometry(double divisorX,double divisorY,double po
  // behavior. This does NOT claim an anisotropic glyph transform or PAR proof.
  return result;
 }
-struct Snapshot {Document document;LayoutBox box;std::size_t maxChars=56;double seconds=0;};
+struct Snapshot {Document document;LayoutBox box;std::size_t maxChars=56,groupsPerPage=1;double seconds=0;};
 inline Snapshot snapshot(State& s,const PrGPUFilterInstance& i,const PrGPUFilterRenderParams& r){
  using namespace parameters;
  require(r.inRenderWidth>0&&r.inRenderHeight>0&&r.inRenderWidth<=8192&&r.inRenderHeight<=8192&&std::uint64_t(r.inRenderWidth)*r.inRenderHeight<=33554432,"Render dimensions exceed bounds");
@@ -253,8 +253,9 @@ inline Snapshot snapshot(State& s,const PrGPUFilterInstance& i,const PrGPUFilter
   number(param(s,i,Width,r.inClipTime)),number(param(s,i,Height,r.inClipTime)),r.inRenderWidth,r.inRenderHeight);
  const double sx=geometry.sx,sy=geometry.sy;result.box=geometry.box;
  const double chars=number(param(s,i,MaxChars,r.inClipTime));require(chars>=1&&chars<=500&&std::floor(chars)==chars,"Invalid grouping count");result.maxChars=static_cast<std::size_t>(chars);
+ if(count>=GroupsPerPage)result.groupsPerPage=sampledGroupsPerPage(number(param(s,i,GroupsPerPage,r.inClipTime)));
  trace(7,&i,&r,1,"stage-layout-controls");NativeAppearanceControls c;
- if(count>=Count-1){c.current=wordControls(s,i,r.inClipTime,CurrentSize,&r);c.spoken=wordControls(s,i,r.inClipTime,SpokenSize,&r);c.upcoming=wordControls(s,i,r.inClipTime,UpcomingSize,&r);}
+ if(count>=UpcomingEnd){c.current=wordControls(s,i,r.inClipTime,CurrentSize,&r);c.spoken=wordControls(s,i,r.inClipTime,SpokenSize,&r);c.upcoming=wordControls(s,i,r.inClipTime,UpcomingSize,&r);}
  trace(7,&i,&r,1,"stage-word-controls");applyNativeStyle(result.document,number(param(s,i,Size,r.inClipTime)),tint(param(s,i,TextColor,r.inClipTime)),sx,sy,c);trace(7,&i,&r,1,"stage-style-applied");
  // No source-FPS assumption, 30fps conversion, rounding, or second animation clock.
  result.seconds=double(r.inClipTime)/double(s.ticksPerSecond)-result.document.timeOriginSeconds;
@@ -295,7 +296,7 @@ inline prSuiteError precompute(PrGPUFilterInstance* instance,const PrGPUFilterRe
   const auto formatError=s.ppix->GetPixelFormat(frame,&format);info.cpuFormat=static_cast<unsigned>(format);require(!formatError&&format==PrPixelFormat_BGRP_4444_8u,"Unexpected precompute format");
   require(!s.ppix->GetBounds(frame,&bounds)&&bounds.left==0&&bounds.top==0&&bounds.right==int(r->inRenderWidth)&&bounds.bottom==int(r->inRenderHeight),"Unexpected precompute bounds");
   const auto pitchError=s.ppix->GetRowBytes(frame,&stride);info.cpuPitch=stride;require(!pitchError&&!s.ppix->GetPixels(frame,PrPPixBufferAccess_WriteOnly,&pixels)&&pixels,"Precompute buffer inaccessible");
-  auto snap=snapshot(s,*instance,*r);trace(7,instance,r,1,"stage-snapshot-ready",info);auto bitmap=macos::rasterize(snap.document,snap.seconds,snap.box,r->inRenderWidth,r->inRenderHeight,snap.maxChars);trace(7,instance,r,1,"stage-raster-ready",info);copyOverlay(bitmap,pixels,stride);trace(3,instance,r,1,"ok",info);scrub.details(info);return scrub.finish(suiteError_NoError);
+  auto snap=snapshot(s,*instance,*r);trace(7,instance,r,1,"stage-snapshot-ready",info);auto bitmap=macos::rasterize(snap.document,snap.seconds,snap.box,r->inRenderWidth,r->inRenderHeight,snap.maxChars,0.6,snap.groupsPerPage);trace(7,instance,r,1,"stage-raster-ready",info);copyOverlay(bitmap,pixels,stride);trace(3,instance,r,1,"ok",info);scrub.details(info);return scrub.finish(suiteError_NoError);
  }catch(...){scrub.details(info);scrub.exception();return scrub.finish(failure(3,instance,r,info));}
 }
 struct GPUFrame {id<MTLBuffer> buffer=nil;std::uint32_t stride=0;bool half=false;};

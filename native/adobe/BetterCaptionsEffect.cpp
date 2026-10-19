@@ -13,7 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#if BC_ENABLE_CUSTOM_UI_PROBE
+#if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
 #include "custom_ui.hpp"
 #endif
 #include "source_time.hpp"
@@ -52,8 +52,9 @@ PF_Err parameters(PF_InData* in_data, PF_OutData* out_data) {
  PF_Err err=wordParameters(in_data,"Current word",CurrentSizeId,CurrentGroupId,CurrentEndId);if(err)return err;
  err=wordParameters(in_data,"Previously spoken words",SpokenSizeId,SpokenGroupId,SpokenEndId);if(err)return err;
  err=wordParameters(in_data,"Upcoming words",UpcomingSizeId,UpcomingGroupId,UpcomingEndId);if(err)return err;
+ PF_ADD_FLOAT_SLIDERX("Groups per page",1,100,1,10,1,PF_Precision_INTEGER,0,0,GroupsPerPageId);
  out_data->num_params=Count;
-#if BC_ENABLE_CUSTOM_UI_PROBE
+#if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
  return better_captions::adobe::ui_probe::registerUI(in_data);
 #else
  return PF_Err_NONE;
@@ -128,7 +129,8 @@ PF_Err render(PF_InData* in_data, PF_ParamDef* params[], PF_LayerDef* output) {
  // Short fixture repeats so every point on a long scratch clip remains testable.
  if(demoMode)time=std::fmod(std::max(0.0,time),8.0);
  auto bitmap=macos::rasterize(document,time,box,output->width,output->height,
-                            static_cast<std::size_t>(std::max(1.0,params[MaxChars]->u.fs_d.value)));
+                            static_cast<std::size_t>(std::max(1.0,params[MaxChars]->u.fs_d.value)),0.6,
+                            sampledGroupsPerPage(params[GroupsPerPage]?params[GroupsPerPage]->u.fs_d.value:1.0));
 #if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
  long long alphaCount=0;for(std::size_t i=3;i<bitmap.pixels.size();i+=4)if(bitmap.pixels[i])++alphaCount;
  adobe::logRenderTime(in_data,timeTrace,document,time,box,demoMode,PF_Err_NONE,alphaCount);
@@ -159,14 +161,14 @@ extern "C" DllExport PF_Err EffectMain(PF_Cmd cmd,PF_InData* in_data,PF_OutData*
   switch(cmd) {
    case PF_Cmd_ABOUT:std::snprintf(out_data->return_msg,sizeof(out_data->return_msg),"Better Captions Native Probe 0.1: synthetic embedded transcript, not migrated captions.");break;
    case PF_Cmd_GLOBAL_SETUP:out_data->my_version=PF_VERSION(0,1,0,PF_Stage_DEVELOP,1);out_data->out_flags=PF_OutFlag_NON_PARAM_VARY;
-#if BC_ENABLE_CUSTOM_UI_PROBE
+#if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
     out_data->out_flags|=PF_OutFlag_CUSTOM_UI;
 #endif
     break;
    case PF_Cmd_PARAMS_SETUP:return parameters(in_data,out_data);
    case PF_Cmd_RENDER:return render(in_data,params,output);
    case PF_Cmd_ARBITRARY_CALLBACK:return better_captions::adobe::arbitrary(in_data,static_cast<PF_ArbParamsExtra*>(extra),demo());
-#if BC_ENABLE_CUSTOM_UI_PROBE
+#if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
    case PF_Cmd_EVENT:return better_captions::adobe::ui_probe::event(in_data,params,static_cast<PF_EventExtra*>(extra));
 #endif
    default:break;

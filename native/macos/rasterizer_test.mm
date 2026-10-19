@@ -20,6 +20,15 @@ int main(){
  check(count(macos::rasterize(d,3,box,640,240))==0,"Caption leaked past half-open interval");
  auto narrow=macos::rasterize(d,.5,{20,10,150,160},640,240);check(narrow.pixels!=b.pixels,"Width did not reflow glyphs");
  auto shortBox=macos::rasterize(d,.5,{20,10,150,10},640,240);check(shortBox.overflow,"Independent height overflow missing");
+ Document pages;pages.containers.push_back({"pages",false,{{"First.",0,1,true},{"Second.",1,2,true},{"Third.",2,3,true},{"Last.",3,4,true}}});
+ for(auto* s:{&pages.style.current,&pages.style.upcoming,&pages.style.spoken})s->fontSize=32;
+ const auto unchangedPages=encode(pages);
+ const auto oneGroup=macos::rasterize(pages,1.5,{20,10,500,200},640,240,56,.6,1);
+ const auto threeGroups=macos::rasterize(pages,1.5,{20,10,500,200},640,240,56,.6,3);
+ check(count(threeGroups)>count(oneGroup)&&visible(threeGroups).bottom>visible(oneGroup).bottom+32,"Rasterizer did not render three caption groups on separate lines");
+ check(macos::rasterize(pages,1.5,{20,10,500,33},640,240,56,.6,3).overflow,"Multiple caption groups did not report independent height overflow");
+ check(macos::rasterize(pages,3.5,{20,10,500,200},640,240,56,.6,3).pixels==macos::rasterize(pages,3.5,{20,10,500,200},640,240,56,.6,1).pixels,"Last partial page did not reset to the top of the caption box");
+ check(encode(pages)==unchangedPages,"Page grouping changed persisted transcript or styles");
  auto m=macos::measureText("Caption",d.style.current);check(m.width>0&&m.ascent>0,"Missing actual font metrics");
  bool failed=false;try{macos::rasterize(d,.5,box,100000,1);}catch(const std::invalid_argument&){failed=true;}check(failed,"Unbounded bitmap accepted");
  failed=false;try{macos::measureText(std::string("\xff"),d.style.current);}catch(const std::invalid_argument&){failed=true;}check(failed,"Malformed UTF-8 accepted");

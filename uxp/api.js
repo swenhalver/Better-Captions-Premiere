@@ -16,8 +16,8 @@ function sameSavedSequence(a, b) {
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
-const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'readTimelinePlayhead', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionArea', 'readCaptionConsolidation']);
-const SERVICE_READS = new Set(['getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
+const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'readTimelinePlayhead', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'readCaptionArea', 'readCaptionConsolidation']);
+const SERVICE_READS = new Set(['getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 
 function createHostAPI(options = {}) {
   const contexts = new Map();
@@ -59,7 +59,7 @@ function createHostAPI(options = {}) {
     if (disposed) return Promise.reject(transportError('The Better Captions plugin is closed.', 'BC_NATIVE_CLOSED', method, false, false));
     if (unresolved) return Promise.reject(waitingError(method));
     if (waiting.length >= 8) return Promise.reject(transportError('Better Captions is busy. Wait for the current operation before requesting more native work.', 'BC_NATIVE_BUSY', method, true, false));
-    const timeout = READ_METHODS.has(method) ? readTimeout : method === 'transcribeSequence' ? 60 * 60 * 1000 : ['finishCaption','applyCaptionClips','applyConsolidatedCaption'].includes(method) ? 30 * 60 * 1000 : 60000;
+    const timeout = READ_METHODS.has(method) ? readTimeout : ['transcribeSequence','transcribeSequenceRange'].includes(method) ? 60 * 60 * 1000 : ['finishCaption','applyCaptionClips','applyConsolidatedCaption'].includes(method) ? 30 * 60 * 1000 : 60000;
     return new Promise((resolve, reject) => {
       const job = { method, run, context, resolve, reject, timer: null, deadline: Date.now() + timeout };
       job.timer = setTimeout(() => {
@@ -198,6 +198,17 @@ function createHostAPI(options = {}) {
     async saveStylePresets(library) { return presets().save(library); },
     async fetchTranscriptJSON(id = currentId) { const { sequence } = await sequenceContext(id); return native.fetchTranscript(sequence); },
     async transcribeSequence(id = currentId) { const { sequence } = await sequenceContext(id); return native.transcribe(sequence); },
+    async transcribeSequenceRange(beginSeconds,endSeconds,id=currentId) {
+      if(typeof beginSeconds!=='number'||typeof endSeconds!=='number'||!Number.isFinite(beginSeconds)||!Number.isFinite(endSeconds)||beginSeconds<0||endSeconds<=beginSeconds||endSeconds>864000)throw new Error('Use a valid transcript extension range within ten days.');
+      const {project,sequence}=await sequenceContext(id),duration=(await sequence.getEndTime()).seconds;
+      if(!Number.isFinite(duration)||endSeconds>duration+0.000001)throw new Error('The transcript extension range exceeds the current sequence. Refresh Better Captions.');
+      const activeSequence=await project.getActiveSequence();
+      if(!activeSequence||key(activeSequence.guid.toString())!==key(sequence.guid.toString()))throw new Error('The active Premiere sequence changed. Refresh Better Captions.');
+      const result=await native.transcribeRange(sequence,beginSeconds,endSeconds);
+      const after=await sequenceContext(id),activeAfter=await after.project.getActiveSequence();
+      if(!activeAfter||key(activeAfter.guid.toString())!==key(sequence.guid.toString())||(await after.sequence.getEndTime()).seconds!==duration)throw new Error('The Premiere sequence changed during transcription. Extend the captions again from the current timeline.');
+      return result;
+    },
     async loadSession(id = currentId) {
       const context = captured(id);
       if (!context.projectPath) return null;
@@ -267,6 +278,26 @@ function createHostAPI(options = {}) {
       if(!record(request))throw new Error('Invalid native caption creation request.');
       return backend('createNativeCaptionDocument',[JSON.parse(JSON.stringify(request))],id);
     },
+    async readNativeCaptionExtension(snapshot,id=currentId) {
+      if(!record(snapshot)||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024)throw new Error('Invalid native caption extension snapshot.');
+      return backend('readNativeCaptionExtension',[JSON.parse(JSON.stringify(snapshot))],id);
+    },
+    async extendNativeCaptionDocument(snapshot,request,id=currentId) {
+      if(!record(snapshot)||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024||!record(request))throw new Error('Invalid native caption extension request.');
+      return backend('extendNativeCaptionDocument',[JSON.parse(JSON.stringify(snapshot)),JSON.parse(JSON.stringify(request))],id);
+    },
+    async readNativeCaptionControls(snapshot,id=currentId) {
+      if(!record(snapshot)||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024)throw new Error('Invalid native caption control snapshot.');
+      return backend('readNativeCaptionControls',[JSON.parse(JSON.stringify(snapshot))],id);
+    },
+    async seekNativeCaptionKeyframe(snapshot,request,id=currentId) {
+      if(!record(snapshot)||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024||!record(request))throw new Error('Invalid native caption keyframe navigation.');
+      return backend('seekNativeCaptionKeyframe',[JSON.parse(JSON.stringify(snapshot)),JSON.parse(JSON.stringify(request))],id);
+    },
+    async editNativeCaptionControl(snapshot,request,id=currentId) {
+      if(!record(snapshot)||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024||!record(request))throw new Error('Invalid native caption control edit.');
+      return backend('editNativeCaptionControl',[JSON.parse(JSON.stringify(snapshot)),JSON.parse(JSON.stringify(request))],id);
+    },
     async writeNativeCaptionDocument(snapshot,documentText,id=currentId) {
       if(!record(snapshot)||typeof snapshot.revision!=='string'||snapshot.revision.length>16*1024*1024||typeof documentText!=='string'||(documentText.length+1)*2>16*1024*1024)throw new Error('Invalid bounded native caption update.');
       return backend('writeNativeCaptionDocument',[snapshot,documentText],id);
@@ -301,15 +332,17 @@ function createHostAPI(options = {}) {
       // can change currentId. File saves already carry their own identity.
       if (['fetchTranscriptJSON', 'transcribeSequence', 'loadSession', 'readCaptionConnections'].includes(method) && args[0] === undefined) args[0] = currentId;
       if (method==='readCaptionConnections') { args[1]=JSON.parse(JSON.stringify(args[1]??[]));args[2]=JSON.parse(JSON.stringify(args[2]??{})); }
-      if (method==='writeNativeCaptionDocument') { if(args[2]===undefined)args[2]=currentId;args[0]=JSON.parse(JSON.stringify(args[0]??null)); }
-      if(method==='createNativeCaptionDocument'){if(args[1]===undefined)args[1]=currentId;args[0]=JSON.parse(JSON.stringify(args[0]??null));}
+      if(method==='transcribeSequenceRange'&&args[2]===undefined)args[2]=currentId;
+      if (method==='writeNativeCaptionDocument'||method==='editNativeCaptionControl'||method==='seekNativeCaptionKeyframe'||method==='extendNativeCaptionDocument') { if(args[2]===undefined)args[2]=currentId;args[0]=JSON.parse(JSON.stringify(args[0]??null)); }
+      if(method==='editNativeCaptionControl'||method==='seekNativeCaptionKeyframe'||method==='extendNativeCaptionDocument')args[1]=JSON.parse(JSON.stringify(args[1]??null));
+      if(method==='readNativeCaptionControls'||method==='readNativeCaptionExtension'||method==='createNativeCaptionDocument'){if(args[1]===undefined)args[1]=currentId;args[0]=JSON.parse(JSON.stringify(args[0]??null));}
       if (method==='saveSession')args[0]=JSON.parse(JSON.stringify(args[0]??null));
       if (['showInPremiere', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'selectCaptionClip', 'readCaptionArea', 'editCaptionArea'].includes(method) && args[1] === undefined) args[1] = currentId;
       let id=currentId;
       if(['fetchTranscriptJSON','transcribeSequence','loadSession','readCaptionConnections'].includes(method))id=args[0];
       else if(method==='saveSession')id=args[0]?.sequenceId;
-      else if(['showInPremiere','readTimeline','readCaptionMotion','readCaptionGeometry','readCaptionSelection','selectCaptionClip','readCaptionArea','editCaptionArea','beginCaption','readCaptionConsolidation','createNativeCaptionDocument'].includes(method))id=args[1];
-      else if(['preflightCaptionClips','applyCaptionClips','writeNativeCaptionDocument'].includes(method))id=args[2];
+      else if(['showInPremiere','readTimeline','readCaptionMotion','readCaptionGeometry','readCaptionSelection','selectCaptionClip','readCaptionArea','editCaptionArea','beginCaption','readCaptionConsolidation','createNativeCaptionDocument','readNativeCaptionControls','readNativeCaptionExtension'].includes(method))id=args[1];
+      else if(['preflightCaptionClips','applyCaptionClips','writeNativeCaptionDocument','editNativeCaptionControl','seekNativeCaptionKeyframe','extendNativeCaptionDocument','transcribeSequenceRange'].includes(method))id=args[2];
       else if(['saveCaptionFrames','finishCaption','applyConsolidatedCaption'].includes(method))id=args[3];
       const context=['getActiveSequenceInfo','loadStylePresets','saveStylePresets'].includes(method)?null:contexts.get(key(id??currentId));
       return serial(method, () => nativeAPI[method](...args),context);

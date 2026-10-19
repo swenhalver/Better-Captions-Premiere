@@ -12,7 +12,7 @@ resource 'PiPL' (16000) {{
  AE_Effect_Version { 32769 },
  AE_Effect_Info_Flags { 0 },
  AE_Effect_Global_OutFlags {
-#if BC_ENABLE_CUSTOM_UI_PROBE
+#if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
  0x00008004
 #else
  0x00000004

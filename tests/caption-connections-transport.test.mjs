@@ -17,14 +17,16 @@ function system(t){
  const payloads=new Map(),requests=[],nativeWrites=[],cepSaves=[],sidecars=[],ipcFolders=new Map();
  const time=seconds=>({seconds,ticks:String(seconds*254016000000)});
  const documentParam={displayName:'Caption document (experimental)',isTimeVarying:()=>false,getValue:()=>documentText,setValue(value){nativeWrites.push(value);if(setterMode==='ignored')return 0;documentText=value;return 0;}};
- let characterLimit=56;
+ let characterLimit=56,playheadTicks=String(.5*254016000000);const keyframeSeeks=[];
  const groupingParam={displayName:'Characters per caption',isTimeVarying:()=>false,getValue:()=>characterLimit,setValue(value){characterLimit=value;return 0;}};
- const nativeClip={nodeId:'native-node',projectItem:{nodeId:'native-item',getMediaPath:()=>''},start:time(0),end:time(2),inPoint:time(0),outPoint:time(2),isAdjustmentLayer:()=>true,isSelected:()=>true,
-  components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([documentParam,groupingParam])}])};
+ const geometry={};
+ for(const [key,label,value] of [['position','Position',[.5,.9]],['width','Width',1536],['height','Height',150]])geometry[key]={displayName:label,value,animated:false,keys:[],isTimeVarying(){return this.animated;},areKeyframesSupported:()=>true,getValue(){return this.value;},getKeys(){return this.keys.map(k=>({ticks:k.ticks}));},getValueAtKey(t){return this.keys.find(k=>k.ticks===t.ticks).value;},getValueAtTime(t){return this.keys.find(k=>k.ticks===t.ticks)?.value??this.keys[0].value;},setValue(next){nativeWrites.push({parameter:key,value:next});if(setterMode!=='ignored')this.value=next;}};
+ const nativeClip={nodeId:'native-node',projectItem:{nodeId:'native-item',getMediaPath:()=>''},start:time(0),end:time(2),inPoint:time(0),outPoint:time(2),isAdjustmentLayer:()=>true,isSelected:()=>true,getSpeed:()=>1,isSpeedReversed:()=>false,
+  components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([documentParam,groupingParam,...Object.values(geometry)])}])};
  const nativeTrack={clips:collection([nativeClip]),isLocked:()=>false};
- const nativeSequence={sequenceID:'seq-a',name:'Captions',timebase:'10584000000',frameSizeHorizontal:720,frameSizeVertical:1280,end:String(2*254016000000),getPlayerPosition:()=>time(.5),videoTracks:collection([nativeTrack],'numTracks'),audioTracks:collection([],'numTracks')};
+ const nativeSequence={sequenceID:'seq-a',name:'Captions',timebase:'10584000000',frameSizeHorizontal:720,frameSizeVertical:1280,end:String(2*254016000000),getPlayerPosition:()=>({ticks:playheadTicks,seconds:Number(playheadTicks)/254016000000}),setPlayerPosition(t){keyframeSeeks.push(t);playheadTicks=t;},videoTracks:collection([nativeTrack],'numTracks'),audioTracks:collection([],'numTracks')};
  const nativeProject={get path(){return projectPath;},activeSequence:nativeSequence};
- const nativeContext=vm.createContext({app:{project:nativeProject},File:function(file){this.length=(payloads.get(file)??'').length;this.open=()=>payloads.has(file);this.read=()=>payloads.get(file);this.close=()=>{};}});
+ const nativeContext=vm.createContext({app:{project:nativeProject},Time:function(){this.ticks='0';},File:function(file){this.length=(payloads.get(file)??'').length;this.open=()=>payloads.has(file);this.read=()=>payloads.get(file);this.close=()=>{};}});
  vm.runInContext(source('cep/host/bridge.jsx'),nativeContext);nativeContext.$={global:vm.runInContext('this',nativeContext)};
  const runtime={path,directory:info=>info.projectPath.replace(/\/[^/]*$/,'')+'/Better Captions/'+info.id,readJob:data=>{const file='/ipc-'+ ++nextJob+'.json';payloads.set(file,JSON.stringify(data));return file;},disposeReadJob:file=>payloads.delete(file),load:()=>savedSession,save:(folder,data)=>cepSaves.push({folder,data})};
  const cepExports={};vm.runInNewContext(compile('webview-ui/src/cep-api.ts'),{exports:cepExports,console,require:()=>({}),window:{require:name=>name==='node:path'?path:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript(script,callback){callback(vm.runInContext(script,nativeContext));}}}});
@@ -58,7 +60,7 @@ function system(t){
  const uiExports={};vm.runInNewContext(compile('webview-ui/src/webview-setup.ts'),{exports:uiExports,window:uiWindow,setTimeout,clearTimeout,console,require:()=>({createHostAPI(){throw new Error('The visible native editor must use UXP.');}})});
  const api=uiExports.initWebview({}).api,stop=api.startAgentBridge({getState:()=>null,patchStyle:()=>null,setCaptions:()=>null,refresh:()=>null,apply:()=>null});
  t.after(async()=>{await tick();stop();await entrypoints.plugin.destroy();nativeApi.dispose();});
- return{api,nativeApi,cep,service,requests,nativeWrites,cepSaves,sidecars,payloads,
+ return{api,nativeApi,cep,service,requests,nativeWrites,geometry,keyframeSeeks,cepSaves,sidecars,payloads,
   get projectPath(){return projectPath;},set projectPath(value){projectPath=value;},set sequenceId(value){nativeSequence.sequenceID=value;},set savedSession(value){savedSession=value;},set setterMode(value){setterMode=value;},set transcribe(value){transcribe=value;},get document(){return documentText;}};
 }
 test('connection reads and existing native edits round trip through actual webview, UXP, service, CEP and host code',async t=>{
@@ -153,4 +155,22 @@ test('panel character limits cross all installed transport adapters and preserve
  assert.equal(result.readbackVerified,true);assert.equal(result.maxChars,24);assert.equal(result.documentText,entry.documentText);
  assert.equal(h.nativeWrites.length,0,'character regroup alone never calls the document setter');
  const actual=await h.api.readCaptionConnections();assert.equal(actual.native[0].maxChars,24);assert.equal(actual.native[0].documentText,entry.documentText);
+});
+
+test('native controls round trip through webview, UXP, expiring read service and exact host; setter is never retried',async t=>{
+ const h=system(t);await tick();await h.api.getActiveSequenceInfo();const entry=(await h.api.readCaptionConnections()).native[0],snapshot={locator:entry.locator,revision:entry.revision};
+ const controls=await h.api.readNativeCaptionControls(snapshot);assert.equal(controls.width.value,1536);assert.equal(controls.insideClip,true);
+ const after=await h.api.editNativeCaptionControl(snapshot,{revision:controls.revision,parameter:'width',operation:'set',value:600,atTicks:controls.timelineTicks});
+ assert.equal(after.readbackVerified,true);assert.equal(after.width.value,600);assert.deepEqual(h.nativeWrites,[{parameter:'width',value:600}]);
+ const read=h.requests.find(r=>r.action==='readNativeCaptionControls'),write=h.requests.find(r=>r.action==='editNativeCaptionControl');assert.equal(read.expiresAt-read.createdAt,10000);assert.equal(Object.hasOwn(write,'expiresAt'),false);
+ h.setterMode='ignored';await assert.rejects(h.api.editNativeCaptionControl(snapshot,{revision:after.revision,parameter:'width',operation:'set',value:500,atTicks:after.timelineTicks}),e=>e.code==='BC_OUTPUT_UNCONFIRMED'&&e.recoverable===false);
+ assert.equal(h.nativeWrites.length,2);await tick();assert.equal(h.nativeWrites.length,2);assert.equal(h.payloads.size,0);
+});
+
+test('keyframe navigation round trips all adapters as a single exact-tick seek, preserving parameter data',async t=>{
+ const h=system(t);await tick();await h.api.getActiveSequenceInfo();const entry=(await h.api.readCaptionConnections()).native[0],snapshot={locator:entry.locator,revision:entry.revision};
+ h.geometry.position.animated=true;h.geometry.position.keys=[{ticks:'0',value:[.25,.6]},{ticks:String(.75*254016000000),value:[.75,.8]}];
+ const before=await h.api.readNativeCaptionControls(snapshot),next=await h.api.seekNativeCaptionKeyframe(snapshot,{parameter:'position',direction:'next',revision:before.revision,atTicks:before.timelineTicks});
+ assert.equal(next.readbackVerified,true);assert.equal(next.timelineTicks,String(.75*254016000000));assert.equal(JSON.stringify(next.position.value),JSON.stringify([.75,.8]));assert.deepEqual(h.nativeWrites,[]);assert.deepEqual(h.keyframeSeeks,[String(.75*254016000000)]);
+ const request=h.requests.find(r=>r.action==='seekNativeCaptionKeyframe');assert.equal(Object.hasOwn(request,'expiresAt'),false);assert.equal(request.args.length,2);assert.equal(h.payloads.size,0);
 });

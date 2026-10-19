@@ -30,6 +30,13 @@ int main(int argc,char** argv){
  // Verified GPU popup indexing differs from the PF CPU representation.
  for(int value=0;value<=2;++value){param.mType=kPrParamType_Int32;param.mInt32=value;assert(bubbleMode(param)==value+1);}
  for(int value:{-1,3,2147483647}){param.mType=kPrParamType_Int32;param.mInt32=value;rejects([&]{bubbleMode(param);});}
+ // Native integer sliders interpolate floating samples between keyframes.
+ // Extraction shares the exact CPU rounding/clamping policy instead of failing
+ // the GPU callback (and displaying a black Program Monitor frame).
+ param.mType=kPrParamType_Float64;param.mFloat64=1.5;assert(sampledGroupsPerPage(number(param))==2);
+ param.mFloat64=2.49;assert(sampledGroupsPerPage(number(param))==2);
+ param.mFloat64=2.5;assert(sampledGroupsPerPage(number(param))==3);
+ param.mFloat64=101;assert(sampledGroupsPerPage(number(param))==100);
  param.mType=kPrParamType_Int64;param.mInt64=0;rejects([&]{bubbleMode(param);});
  // Host-observed divisor normalization must preserve full/half/quarter caption
  // selection, grouping, wrapping and pixel-sized styles without mutating source.

@@ -42,7 +42,7 @@ resources="$output/BetterCaptionsNativeProbe.plugin/Contents/Resources"
 mkdir -p "$resources"
 xcrun -sdk macosx metal -std=macos-metal2.4 -mmacosx-version-min=12.0 -c "$snapshot/native/adobe/caption_composite.metal" -o "$output/CaptionComposite.air"
 xcrun -sdk macosx metallib "$output/CaptionComposite.air" -o "$resources/CaptionComposite.metallib"
-BC_NATIVE_OUTPUT_DIR="$output" BC_ENABLE_RENDER_TIME_DIAGNOSTICS=0 BC_ENABLE_CUSTOM_UI_PROBE=0 BC_ENABLE_SOURCE_TIME_PROBE=0 BC_ENABLE_ADJUSTMENT_TIME_PROBE=0 bash "$snapshot/native/adobe/build-macos.sh"
+BC_NATIVE_OUTPUT_DIR="$output" BC_ENABLE_RENDER_TIME_DIAGNOSTICS=0 BC_ENABLE_CUSTOM_UI_PROBE=0 BC_ENABLE_CAPTION_BOUNDS_UI=1 BC_ENABLE_SOURCE_TIME_PROBE=0 BC_ENABLE_ADJUSTMENT_TIME_PROBE=0 bash "$snapshot/native/adobe/build-macos.sh"
 codesign --verify --deep --strict "$output/BetterCaptionsNativeProbe.plugin"
 includes=(-I "$PREMIERE_SDK_HEADERS" -I "$AE_SDK_EXAMPLES/Headers" -I "$AE_SDK_EXAMPLES/Headers/SP" -I "$AE_SDK_EXAMPLES/Util" -I "$AE_SDK_EXAMPLES/Resources")
 xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined -DBC_GPU_SCRUB_DIAGNOSTICS="$scrub_diagnostics" "${includes[@]}" \

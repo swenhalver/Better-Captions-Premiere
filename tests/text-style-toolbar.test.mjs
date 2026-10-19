@@ -20,8 +20,12 @@ symlinkSync(fileURLToPath(new URL('../webview-ui/node_modules', import.meta.url)
 const pickerUrl = new URL('../webview-ui/src/components/FontPicker.svelte', import.meta.url);
 const picker = compile(readFileSync(pickerUrl, 'utf8'), { generate: 'server', filename: 'FontPicker.svelte' });
 assert.deepEqual(picker.warnings, [], 'Compile the installed font picker without accessibility warnings');
-const imports = base => (_match, quote, specifier) => `from ${quote}${specifier.endsWith('.svelte') ? './FontPicker.mjs' : new URL(specifier.endsWith('.ts') ? specifier : `${specifier}.ts`, base).href}${quote}`;
+const imports = base => (_match, quote, specifier) => `from ${quote}${specifier.endsWith('.svelte') ? specifier.replace(/\.svelte$/, '.mjs') : new URL(specifier.endsWith('.ts') ? specifier : `${specifier}.ts`, base).href}${quote}`;
 writeFileSync(join(folder, 'FontPicker.mjs'), picker.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(pickerUrl)));
+const numberUrl = new URL('../webview-ui/src/components/ScrubbableNumber.svelte', import.meta.url);
+const number = compile(readFileSync(numberUrl, 'utf8'), { generate: 'server', filename: 'ScrubbableNumber.svelte' });
+assert.deepEqual(number.warnings, [], 'Compile the actual numeric control without accessibility warnings');
+writeFileSync(join(folder, 'ScrubbableNumber.mjs'), number.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(numberUrl)));
 const code = compiled.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(sourceUrl));
 writeFileSync(join(folder, 'TextStyleToolbar.mjs'), code);
 const { default: TextStyleToolbar, textStylePatch, textStyleAppearance, textStyleMixed,
