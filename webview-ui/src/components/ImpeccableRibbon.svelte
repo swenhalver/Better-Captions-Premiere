@@ -4,6 +4,7 @@
   import FontPicker from './FontPicker.svelte';
   import HslaColorPicker from './HslaColorPicker.svelte';
   import LucideIcon from './LucideIcon.svelte';
+  import WordBackgroundPreview from './WordBackgroundPreview.svelte';
   import AlignmentButtons from './AlignmentButtons.svelte';
   import ScrubbableNumber from './ScrubbableNumber.svelte';
   type Scope = 'All words' | 'Past' | 'Current' | 'Next';
@@ -12,12 +13,23 @@
   let scope = $state<Scope>('All words');
   let styles = $state<Record<Scope, Appearance>>({'All words':base(),Past:{...base(),color:'#b3b3b3'},Current:{...base(),color:'#181818',bubble:true,bold:true},Next:base()});
   let active = $derived(styles[scope]);
+  const outlinePreviewEnabled = $derived(active.outlineEnabled && active.outline > 0 && active.outlineOpacity > 0 && !!active.outlineColor);
   let alignment = $state<'left'|'center'|'right'>('center');
   let tab = $state('Spacing');
   let width = $state(674), height = $state(160), x = $state(360), y = $state(640);
   const tabs = ['Spacing','Outline','Layout'];
   const fonts = ['Arial','Avenir Next','Georgia','Helvetica Neue','Menlo','Times New Roman','Verdana'];
   const id = $props.id();
+  let textPopover: HTMLDetailsElement | undefined;
+  let backgroundPopover: HTMLDetailsElement | undefined;
+  let outlinePopover: HTMLDetailsElement | undefined;
+  function closePopovers(except?: HTMLDetailsElement) {
+    for (const dialog of [textPopover, backgroundPopover, outlinePopover]) if (dialog && dialog !== except) dialog.open = false;
+  }
+  function outsidePopovers(event: PointerEvent) {
+    const target = event.target as Node;
+    if (![textPopover, backgroundPopover, outlinePopover].some(dialog => dialog?.contains(target))) closePopovers();
+  }
   function update<K extends keyof Appearance>(key:K,value:Appearance[K]) { styles[scope][key] = value; }
   function appearance(index:number):Appearance {return {...styles['All words'], ...styles[index<2?'Past':index===2?'Current':'Next']};}
   function caseText(text:string,casing:string) { return casing==='upper'?text.toUpperCase():casing==='lower'?text.toLowerCase():casing==='title'?text.replace(/\b\w/g,c=>c.toUpperCase()):text; }
@@ -71,6 +83,8 @@
   function changeTab(event:KeyboardEvent,index:number) { if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return; event.preventDefault(); const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length; tab=tabs[next]; document.getElementById(`${id}-tab-${next}`)?.focus(); }
 </script>
 
+<svelte:window onpointerdown={outsidePopovers}/>
+
 <section class="impeccable-ribbon" aria-label="Mac ribbon design, interactive synthetic sample">
   <div class="impeccable-ribbon__scope" role="group" aria-label="Words to style">
     {#each ['All words','Past','Current','Next'] as name}
@@ -82,23 +96,21 @@
   <div class="impeccable-ribbon__bar" aria-label="Text formatting">
     <div class="impeccable-ribbon__case-wrap">
       <span class="impeccable-ribbon__case-display" aria-hidden="true">Aa<LucideIcon name="chevron-down"/></span>
-      <select class="impeccable-ribbon__case" aria-label="Text case" title="Text case" value={active.casing} onchange={e=>update('casing',e.currentTarget.value)}><option value="none">As typed</option><option value="upper">UPPERCASE</option><option value="lower">lowercase</option><option value="title">Title Case</option></select>
+      <select class="impeccable-ribbon__case" onfocus={() => closePopovers()} aria-label="Text case" title="Text case" value={active.casing} onchange={e=>update('casing',e.currentTarget.value)}><option value="none">As typed</option><option value="upper">UPPERCASE</option><option value="lower">lowercase</option><option value="title">Title Case</option></select>
     </div>
     <div class="impeccable-ribbon__segment" role="group" aria-label="Emphasis">
       <button class="impeccable-ribbon__emphasis" aria-label="One weight bolder" title="One weight bolder" aria-pressed={active.bold} onclick={()=>update('bold',!active.bold)}><LucideIcon name="bold"/></button>
       <button class="impeccable-ribbon__emphasis" aria-label="Italic" title="Italic" aria-pressed={active.italic} onclick={()=>update('italic',!active.italic)}><LucideIcon name="italic"/></button>
       <button class="impeccable-ribbon__emphasis" aria-label="Underline" title="Underline" aria-pressed={active.underline} onclick={()=>update('underline',!active.underline)}><LucideIcon name="underline"/></button>
     </div>
-    <details class="impeccable-ribbon__background">
-      <summary class="impeccable-ribbon__swatch" aria-label="Text color and opacity" title="Text color and opacity" style:background={active.color}></summary>
+    <details class="impeccable-ribbon__background" bind:this={textPopover} name={`${id}-format-popovers`}>
+      <summary class="impeccable-ribbon__swatch" onclick={() => closePopovers(textPopover)} aria-label="Text color and opacity" title="Text color and opacity" style:background={active.color}></summary>
       <div class="impeccable-ribbon__background-popover">
         <HslaColorPicker value={active.color} opacity={active.opacity/100} label="Text color" onChange={({color,opacity})=>{update('color',color);update('opacity',opacity*100);}}/>
       </div>
     </details>
-    <details class="impeccable-ribbon__background">
-      <summary class="impeccable-ribbon__background-trigger" aria-label="Word background color" title={active.bubble?'Word background color':'No word background'} style:background={active.bubble?active.backgroundColor:undefined}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 18 6-13 6 13M8 14h8"/>{#if !active.bubble}<path class="impeccable-ribbon__slash" d="m4 20 16-16"/>{/if}</svg>
-      </summary>
+    <details class="impeccable-ribbon__background" bind:this={backgroundPopover} name={`${id}-format-popovers`}>
+      <summary class="impeccable-ribbon__background-trigger" onclick={() => closePopovers(backgroundPopover)} aria-label="Word background color" title={active.bubble?'Word background color':'No word background'}><WordBackgroundPreview enabled={active.bubble} color={active.backgroundColor} opacity={active.backgroundOpacity/100} textColor={active.color} textOpacity={active.opacity/100} outlined={active.outlineEnabled&&active.outline>0&&active.outlineOpacity>0} outlineColor={active.outlineColor} outlineOpacity={active.outlineOpacity/100}/></summary>
       <div class="impeccable-ribbon__background-popover">
         <label class="impeccable-ribbon__toggle"><input type="checkbox" checked={active.bubble} onchange={e=>update('bubble',e.currentTarget.checked)}/>Word background</label>
         <HslaColorPicker value={active.backgroundColor} opacity={active.backgroundOpacity/100} label="Word background" onChange={({color,opacity})=>{update('backgroundColor',color);update('backgroundOpacity',opacity*100);update('bubble',true);}}/>
@@ -110,16 +122,16 @@
         <label class="impeccable-ribbon__toggle impeccable-ribbon__spaces"><input type="checkbox" checked={active.colorSpaces} onchange={e=>update('colorSpaces',e.currentTarget.checked)}/>Color spaces between words</label>
       </div>
     </details>
-    <details class="impeccable-ribbon__background">
-      <summary class="impeccable-ribbon__outline-trigger" aria-label="Outline settings" title="Outline settings"><LucideIcon name="outline" fill={active.color} stroke={active.outlineColor} fillOpacity={active.opacity/100} strokeOpacity={active.outlineOpacity/100}/></summary>
+    <details class="impeccable-ribbon__background" bind:this={outlinePopover} name={`${id}-format-popovers`}>
+      <summary class="impeccable-ribbon__outline-trigger" onclick={() => closePopovers(outlinePopover)} aria-label="Outline settings" title="Outline settings"><LucideIcon name="outline" fill={outlinePreviewEnabled?active.color:'none'} stroke={outlinePreviewEnabled?active.outlineColor:'currentColor'} fillOpacity={outlinePreviewEnabled?active.opacity/100:1} strokeOpacity={outlinePreviewEnabled?active.outlineOpacity/100:1}/></summary>
       <div class="impeccable-ribbon__background-popover">
         <label class="impeccable-ribbon__toggle"><input type="checkbox" checked={active.outlineEnabled} onchange={event=>update('outlineEnabled',event.currentTarget.checked)}/>Outline</label>
         <label class="impeccable-ribbon__popover-field"><span>Width, px</span><ScrubbableNumber label="Outline width, px" value={active.outline} min={0} max={16} step={.5} onChange={value=>{update('outline',value);update('outlineEnabled',value>0);}}/></label>
         <HslaColorPicker value={active.outlineColor} opacity={active.outlineOpacity/100} label="Outline color" onChange={({color,opacity})=>{update('outlineColor',color);update('outlineOpacity',opacity*100);}}/>
       </div>
     </details>
-    <div class="impeccable-ribbon__family"><FontPicker value={active.font} {fonts} onSelect={font=>update('font',font)}/></div>
-    <select class="impeccable-ribbon__weight" aria-label="Font weight" title="Font weight" value={active.weight} onchange={e=>update('weight',Number(e.currentTarget.value))}>{#each [100,200,300,400,500,600,700,800,900] as weight}<option value={weight}>{weight}</option>{/each}</select>
+    <div class="impeccable-ribbon__family"><FontPicker value={active.font} {fonts} onOpen={() => closePopovers()} onSelect={font=>update('font',font)}/></div>
+    <select class="impeccable-ribbon__weight" onfocus={() => closePopovers()} aria-label="Font weight" title="Font weight" value={active.weight} onchange={e=>update('weight',Number(e.currentTarget.value))}>{#each [100,200,300,400,500,600,700,800,900] as weight}<option value={weight}>{weight}</option>{/each}</select>
     <div class="impeccable-ribbon__size"><button class="impeccable-ribbon__size-step" type="button" aria-label="Decrease font size" title="Decrease font size" disabled={active.size<=8} onclick={()=>update('size',Math.max(8,active.size-1))}><LucideIcon name="a-arrow-down"/></button><ScrubbableNumber label="Font size" value={active.size} min={8} max={240} onChange={value=>update('size',value)}/><button class="impeccable-ribbon__size-step" type="button" aria-label="Increase font size" title="Increase font size" disabled={active.size>=240} onclick={()=>update('size',Math.min(240,active.size+1))}><LucideIcon name="a-arrow-up"/></button></div>
 
     {#if scope==='All words'}<div class="impeccable-ribbon__alignment"><AlignmentButtons value={alignment} onChange={value=>alignment=value}/></div>{/if}
@@ -169,9 +181,8 @@
   .impeccable-ribbon__emphasis {inline-size:2.6rem;block-size:var(--ribbon-height);display:grid;place-items:center;background:transparent;color:var(--color-panel-text);border:0;cursor:pointer;font-size:1.85rem;line-height:1;&+& {border-inline-start:1px solid var(--color-panel-border);}& :global(svg) {inline-size:var(--ribbon-icon-size);block-size:var(--ribbon-icon-size);}&[aria-pressed="true"] {background:var(--color-primary);color:white;}}
   .impeccable-ribbon__swatch {cursor:pointer;list-style:none;box-sizing:border-box;border:1px solid var(--color-panel-border);&::-webkit-details-marker {display:none;}&:focus-visible {outline:2px solid var(--color-accent);outline-offset:2px;}display:block;block-size:var(--ribbon-height);inline-size:var(--ribbon-height);border-radius:var(--ribbon-radius);overflow:hidden;flex-shrink:0;}
   .impeccable-ribbon__background {position:relative;flex-shrink:0;}
-  .impeccable-ribbon__background-trigger {display:grid;place-items:center;block-size:var(--ribbon-height);inline-size:var(--ribbon-height);border-radius:var(--ribbon-radius);border:1px solid var(--color-panel-border);background:var(--ribbon-control);cursor:pointer;list-style:none;box-sizing:border-box;&::-webkit-details-marker {display:none;}& :global(svg) {inline-size:var(--ribbon-icon-size);block-size:var(--ribbon-icon-size);fill:none;stroke:white;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;}&:focus-visible {outline:2px solid var(--color-accent);outline-offset:2px;}}
+  .impeccable-ribbon__background-trigger {--word-background-base:var(--ribbon-control);display:grid;place-items:center;block-size:var(--ribbon-height);inline-size:var(--ribbon-height);border-radius:var(--ribbon-radius);border:1px solid var(--color-panel-border);background:var(--ribbon-control);cursor:pointer;list-style:none;box-sizing:border-box;&::-webkit-details-marker {display:none;}&:focus-visible {outline:2px solid var(--color-accent);outline-offset:2px;}}
   .impeccable-ribbon__outline-trigger {display:grid;place-items:center;inline-size:var(--ribbon-height);block-size:var(--ribbon-height);border:0;border-radius:var(--ribbon-radius);background:var(--ribbon-control);color:var(--color-panel-text);cursor:pointer;list-style:none;&::-webkit-details-marker {display:none;}& :global(svg) {inline-size:var(--ribbon-icon-size);block-size:var(--ribbon-icon-size);}}
-  .impeccable-ribbon__slash {stroke:var(--color-error,#ffb4a9);stroke-width:1.8;}
   .impeccable-ribbon__background-popover {position:absolute;inset-block-start:calc(100% + .4rem);inset-inline-end:0;z-index:12;inline-size:min(17rem,calc(100cqi - 1.5rem));box-sizing:border-box;padding:.85rem;background:var(--color-panel-bg);border:1px solid var(--color-panel-border);border-radius:var(--ribbon-radius);}
   .impeccable-ribbon__popover-field {display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-block-start:.55rem;font-size:.9rem;& :global(.scrubbable-number) {inline-size:4.5rem;}& :global(.scrubbable-number__value),& :global(.scrubbable-number__input) {color:var(--color-accent);min-block-size:1.8rem;padding:.2rem .35rem;}}
   .impeccable-ribbon__popover-grid {display:grid;grid-template-columns:1fr 1fr;gap:.65rem;& label {display:grid;gap:.25rem;}& :global(.scrubbable-number) {inline-size:100%;}}

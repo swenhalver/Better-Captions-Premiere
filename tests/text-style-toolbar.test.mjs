@@ -38,6 +38,10 @@ const iconUrl = new URL('../webview-ui/src/components/LucideIcon.svelte', import
 const icon = compile(readFileSync(iconUrl, 'utf8'), { generate: 'server', filename: 'LucideIcon.svelte' });
 assert.deepEqual(icon.warnings, []);
 writeFileSync(join(folder, 'LucideIcon.mjs'), icon.js.code);
+const backgroundUrl = new URL('../webview-ui/src/components/WordBackgroundPreview.svelte', import.meta.url);
+const background = compile(readFileSync(backgroundUrl, 'utf8'), { generate: 'server', filename: 'WordBackgroundPreview.svelte' });
+assert.deepEqual(background.warnings, []);
+writeFileSync(join(folder, 'WordBackgroundPreview.mjs'), background.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(backgroundUrl)));
 const code = compiled.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(sourceUrl));
 writeFileSync(join(folder, 'TextStyleToolbar.mjs'), code);
 const { default: TextStyleToolbar, textStylePatch, textStyleAppearance, textStyleMixed,
@@ -428,7 +432,7 @@ test('Underline is mixed when scopes differ and All words changes only that deco
 
 
 test('Outline icon previews the selected word text fill and outline stroke with independent alpha',()=>{
-  const style=fresh();style.activeWord={...style.activeWord,color:'#a1b2c3',opacity:.4,strokeColor:'#456789',strokeOpacity:.6};
+  const style=fresh();style.activeWord={...style.activeWord,color:'#a1b2c3',opacity:.4,strokeEnabled:true,strokeWidth:4,strokeColor:'#456789',strokeOpacity:.6};
   const before=structuredClone(style);
   const html=view({style,scope:'current'});
   const trigger=html.match(/<button[^>]*aria-label="Outline settings"[\s\S]*?<\/button>/)?.[0];
@@ -440,5 +444,40 @@ test('Outline icon uses a neutral inherited preview for mixed word colors',()=>{
   const style=fresh();style.activeWord={...style.activeWord,color:'#a1b2c3',strokeColor:'#456789'};
   const html=view({style,scope:'all'});
   const trigger=html.match(/<button[^>]*aria-label="Outline settings"[\s\S]*?<\/button>/)?.[0];
-  assert.match(trigger,/<svg[^>]*fill="currentColor"[^>]*stroke="currentColor"/);
+  assert.match(trigger,/<svg[^>]*fill="none"[^>]*stroke="currentColor"/);
+});
+
+
+const backgroundTrigger=html=>html.match(/<button[^>]*aria-label="Word background and bubble settings"[\s\S]*?<\/button>/)?.[0];
+test('word background preview uses exact selected color and alpha with the effective outlined text style',()=>{
+  const style=fresh();style.activeWord={...style.activeWord,bubble:true,bubbleColor:'#5a35bc',bubbleOpacity:.27,color:'#a1b2c3',opacity:.4,strokeEnabled:true,strokeWidth:4,strokeColor:'#456789',strokeOpacity:.6};
+  const before=structuredClone(style);
+  const html=backgroundTrigger(view({style,scope:'current'}));
+  assert.match(html,/word-background-preview--enabled/);
+  assert.match(html,/background-color:\s*#5a35bc/);
+  assert.match(html,/opacity:\s*0.27/);
+  assert.match(html,/<svg[^>]*fill="#a1b2c3"[^>]*stroke="#456789"[^>]*fill-opacity="0.4"[^>]*stroke-opacity="0.6"/);
+  assert.deepEqual(style,before);
+  style.activeWord.strokeWidth=0;
+  const plain=backgroundTrigger(view({style,scope:'current'}));
+  assert.match(plain,/<svg[^>]*fill="none"[^>]*stroke="#a1b2c3"/,'A zero-width outline uses Lucide Type');
+});
+
+test('unchecked word background shows supplied Type Off on a neutral base without its saved color or checker',()=>{
+  const style=fresh();style.activeWord={...style.activeWord,bubble:false,bubbleColor:'#5a35bc',color:'#a1b2c3',opacity:.4,strokeEnabled:false};
+  const html=backgroundTrigger(view({style,scope:'current'}));
+  assert.doesNotMatch(html,/background-color:\s*#5a35bc/);
+  assert.match(html,/<path[^>]*d="M2,2L22,22"[^>]*stroke="var\(--color-error,#ffb4a9\)"[^>]*stroke-opacity="1"/);
+  assert.doesNotMatch(html,/word-background-preview--enabled/);
+  assert.match(html,/<svg[^>]*stroke="#a1b2c3"[^>]*stroke-opacity="0.4"/);
+});
+
+
+test('inactive or invisible outlines use an unfilled neutral outline-control icon',()=>{
+  for(const inactive of [{strokeEnabled:false,strokeWidth:4,strokeOpacity:1},{strokeEnabled:true,strokeWidth:0,strokeOpacity:1},{strokeEnabled:true,strokeWidth:4,strokeOpacity:0}]){
+    const style=fresh();style.activeWord={...style.activeWord,color:'#a1b2c3',opacity:.4,strokeColor:'#456789',...inactive};
+    const html=view({style,scope:'current'});
+    const trigger=html.match(/<button[^>]*aria-label="Outline settings"[\s\S]*?<\/button>/)?.[0];
+    assert.match(trigger,/<svg[^>]*fill="none"[^>]*stroke="currentColor"[^>]*fill-opacity="1"[^>]*stroke-opacity="1"/);
+  }
 });
