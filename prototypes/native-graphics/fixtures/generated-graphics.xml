@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xmeml version="5">
+  <sequence id="bc-graphics-example-1080p">
+    <name>Better Captions native graphics example</name><duration>180</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+    <timecode><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate><string>00:00:00:00</string><frame>0</frame><displayformat>NDF</displayformat></timecode>
+    <media><video>
+      <format><samplecharacteristics><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate><width>1920</width><height>1080</height><anamorphic>FALSE</anamorphic><pixelaspectratio>square</pixelaspectratio><fielddominance>none</fielddominance></samplecharacteristics></format>
+      <track><enabled>TRUE</enabled><locked>FALSE</locked></track>
+      <track>
+      <generatoritem id="bc-graphics-example-1080p-1">
+        <name>BCG example-1080p 1</name><duration>90</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+        <in>0</in><out>90</out><start>0</start><end>90</end>
+        <enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+        <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+          <parameter><parameterid>str</parameterid><name>Text</name><value>Native titles stay editable</value></parameter>
+          <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+          <parameter><parameterid>fontsize</parameterid><name>Size</name><value>32</value></parameter>
+          <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>2</value></parameter>
+          <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+          <parameter><parameterid>fontcolor</parameterid><name>Font Color</name><value><alpha>255</alpha><red>80</red><green>180</green><blue>255</blue></value></parameter>
+          <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0</horiz><vert>0</vert></value></parameter>
+        </effect>
+        <sourcetrack><mediatype>video</mediatype></sourcetrack>
+      </generatoritem>
+      <generatoritem id="bc-graphics-example-1080p-2">
+        <name>BCG example-1080p 2</name><duration>90</duration><rate><timebase>30</timebase><ntsc>FALSE</ntsc></rate>
+        <in>0</in><out>90</out><start>90</start><end>180</end>
+        <enabled>TRUE</enabled><anamorphic>FALSE</anamorphic><alphatype>black</alphatype>
+        <effect><name>Text</name><effectid>Text</effectid><effectcategory>Text</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype>
+          <parameter><parameterid>str</parameterid><name>Text</name><value>Each phrase is a native graphic</value></parameter>
+          <parameter><parameterid>fontname</parameterid><name>Font</name><value>Arial</value></parameter>
+          <parameter><parameterid>fontsize</parameterid><name>Size</name><value>32</value></parameter>
+          <parameter><parameterid>fontstyle</parameterid><name>Style</name><value>2</value></parameter>
+          <parameter><parameterid>fontalign</parameterid><name>Alignment</name><value>2</value></parameter>
+          <parameter><parameterid>fontcolor</parameterid><name>Font Color</name><value><alpha>255</alpha><red>80</red><green>180</green><blue>255</blue></value></parameter>
+          <parameter><parameterid>origin</parameterid><name>Origin</name><value><horiz>0</horiz><vert>0</vert></value></parameter>
+        </effect>
+        <sourcetrack><mediatype>video</mediatype></sourcetrack>
+      </generatoritem>
+        <enabled>TRUE</enabled><locked>FALSE</locked>
+      </track>
+    </video></media>
+  </sequence>
+</xmeml>
