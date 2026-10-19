@@ -1402,6 +1402,17 @@ var BetterCaptionsHost = (function () {
         var selected = typeof clip.isSelected === 'function' && clip.isSelected() === true;
         var result = { kind: 'native-effect', clipNodeId: clipNodeId, projectItemId: connectionId(clip.projectItem && clip.projectItem.nodeId), trackIndex: trackIndex, clipIndex: clipIndex,
             startTicks: timing.startTicks, endTicks: timing.endTicks, inTicks: timing.inTicks, outTicks: timing.outTicks, selected: selected, disabled: clip.disabled === true, locator: locator, matchName: names[componentIndex] };
+        // Read grouping independently of the embedded transcript. Scalar edits
+        // in Effect Controls must refresh phrase rows without rewriting keys.
+        var groupingParam = null;
+        for (var g = 0; g < propertyCount; g++) if (String(properties[g].displayName) === 'Characters per caption') {
+            if (groupingParam) throw new Error('Ambiguous native caption character limits.');
+            groupingParam = properties[g];
+            if (typeof groupingParam.isTimeVarying !== 'function' || groupingParam.isTimeVarying()) continue;
+            var limit = properties[g].getValue();
+            if (typeof limit !== 'number' || !isFinite(limit) || limit !== Math.floor(limit) || limit < 1 || limit > 500) throw new Error('Invalid native caption character limit.');
+            result.maxChars = limit;
+        }
         var connectionRevision = { locator: locator, timing: timing, components: names, documentIndex: documentIndex, selected: selected };
         if (carrier) {
             result.carrierKind = carrier.carrierKind; result.carrierItemId = carrier.carrierItemId; result.carrierRevision = carrier.carrierRevision;
@@ -1417,7 +1428,7 @@ var BetterCaptionsHost = (function () {
             if (carrier) { revision.carrierKind = carrier.carrierKind; revision.carrierItemId = carrier.carrierItemId; revision.carrierRevision = carrier.carrierRevision; }
             result.revision = stringify(revision);
         }
-        return { record: result, param: properties[documentIndex] };
+        return { record: result, param: properties[documentIndex], groupingParam: groupingParam };
     }
     function nativeProjectItems() {
         var result = [], seen = {};
@@ -1721,12 +1732,21 @@ var BetterCaptionsHost = (function () {
             };
             var before = current();
             if (before.record.locator.documentParamIndex !== target.documentParamIndex || before.record.revision !== snapshot.revision || typeof before.param.setValue !== 'function') throw new Error('The native caption revision changed. Read it again before editing.');
+            var grouping = snapshot.grouping;
+            if (grouping !== undefined) {
+                if (!grouping || typeof grouping !== 'object') throw new Error('Invalid native caption grouping edit.');
+                for (var groupingKey in grouping) if (groupingKey !== 'before' && groupingKey !== 'value') throw new Error('Unknown native caption grouping field.');
+                nativeInteger(grouping.before, 1, 500, 'previous character limit'); nativeInteger(grouping.value, 1, 500, 'character limit');
+                if (before.record.maxChars !== grouping.before || !before.groupingParam || typeof before.groupingParam.setValue !== 'function') throw new Error('The character limit changed or is animated. Reconnect before editing.');
+            }
             attempted = true;
-            var acknowledgement = before.param.setValue(p.documentText, 1);
+            // A regroup alone must leave the embedded transcript bytes untouched.
+            var acknowledgement = before.record.documentText === p.documentText && grouping !== undefined ? null : before.param.setValue(p.documentText, 1);
+            if (grouping !== undefined && grouping.value !== grouping.before) before.groupingParam.setValue(grouping.value, 1);
             var after = current().record, expected = parseJSON(snapshot.revision); expected.documentText = p.documentText;
-            if (after.documentText !== p.documentText || after.revision !== stringify(expected)) throw new Error('Premiere did not confirm the native caption document readback.');
+            if (after.documentText !== p.documentText || after.revision !== stringify(expected) || grouping !== undefined && after.maxChars !== grouping.value) throw new Error('Premiere did not confirm the native caption document readback.');
             verified = true;
-            return reply({ ok: true, revision: after.revision, documentText: after.documentText, readbackVerified: true, renderVerified: false, acknowledgement: typeof acknowledgement === 'number' || typeof acknowledgement === 'boolean' ? acknowledgement : null, retry: 'never' });
+            return reply({ ok: true, revision: after.revision, documentText: after.documentText, maxChars: after.maxChars, readbackVerified: true, renderVerified: false, acknowledgement: typeof acknowledgement === 'number' || typeof acknowledgement === 'boolean' ? acknowledgement : null, retry: 'never' });
         } catch (e) {
             if (attempted) return reply({ error: 'Premiere did not confirm the last native caption update. Inspect it before another write.', code: 'BC_OUTPUT_UNCONFIRMED', recoverable: false, outputApplied: verified, retry: 'never' });
             return reply({ error: e.toString() });

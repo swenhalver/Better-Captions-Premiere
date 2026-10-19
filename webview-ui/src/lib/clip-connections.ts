@@ -20,6 +20,7 @@ export interface LegacyCaptionConnection {
 
 export interface NativeCaptionConnection {
   kind: 'native-effect';
+  maxChars?: number;
   clipNodeId: string;
   projectItemId: string;
   trackIndex: number;
@@ -123,6 +124,7 @@ function validateSnapshot(value: CaptionConnections, expected: SequenceIdentity)
     localPath(entry.path); legacyNodes.add(entry.clipNodeId);
   }
   for (const entry of value.native) {
+    if (entry.maxChars !== undefined && (!Number.isInteger(entry.maxChars) || entry.maxChars < 1 || entry.maxChars > 500)) fail();
     const locator = entry.locator;
     if (entry.kind !== 'native-effect' || !validText(entry.matchName, 512) || !record(locator) || locator.clipNodeId !== entry.clipNodeId || locator.trackIndex !== entry.trackIndex || locator.clipIndex !== entry.clipIndex || !index(locator.componentIndex) || !index(locator.documentParamIndex) || typeof locator.projectPath !== 'string' || !validText(locator.sequenceId)) fail();
     if (connectionKey({ id: locator.sequenceId, projectPath: locator.projectPath }) !== connectionKey(expected)) throw new Error('A native caption connection belongs to another project or sequence.');

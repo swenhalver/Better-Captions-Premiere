@@ -150,3 +150,32 @@ test('new fixed host methods retain ExtendScript ES3 parsing and no nested condi
  function visit(node){if(!node||typeof node!=='object')return;if(node.type==='ConditionalExpression'&&(node.consequent.type==='ConditionalExpression'||node.alternate.type==='ConditionalExpression'))nested.push(node.start);for(const [name,value]of Object.entries(node)){if(name==='loc')continue;if(Array.isArray(value))value.forEach(visit);else if(value&&typeof value==='object')visit(value);}}
  visit(tree);assert.deepEqual(nested,[]);
 });
+
+test('native grouping round trips the effect scalar without rewriting transcript, geometry, keys or clip identity',()=>{
+ const f=fixture(),n=f.native(),changes=[];let limit=56,animated=false;
+ const grouping={displayName:'Characters per caption',isTimeVarying:()=>animated,getValue:()=>limit,setValue(value,refresh){changes.push({value,refresh});limit=value;return 0;}};
+ n.clip.components[1].properties.push(grouping);
+ const first=f.read().native[0],carrier=n.document;
+ assert.equal(first.maxChars,56);
+ assert.equal(f.read({includeDocuments:false}).native[0].maxChars,56);
+ const result=f.write({...snapshot(first),grouping:{before:56,value:24}},carrier);
+ assert.equal(result.readbackVerified,true);assert.equal(result.maxChars,24);assert.equal(n.document,carrier);
+ assert.deepEqual(f.writes,[]);assert.deepEqual(changes,[{value:24,refresh:1}]);assert.deepEqual(f.sideEffects,[]);
+ assert.equal(f.read().native[0].maxChars,24);
+ const stale=f.write({...snapshot(first),grouping:{before:56,value:30}},carrier);
+ assert.match(stale.error,/changed or is animated/);assert.equal(changes.length,1);
+ animated=true;assert.equal(f.read().native[0].maxChars,undefined);
+ const keyed=f.write({...snapshot(first),grouping:{before:24,value:30}},carrier);
+ assert.match(keyed.error,/changed or is animated/);assert.equal(changes.length,1);
+});
+test('invalid or unconfirmed native grouping changes are rejected without automatic retries',()=>{
+ const f=fixture(),n=f.native();let attempts=0;
+ n.clip.components[1].properties.push({displayName:'Characters per caption',isTimeVarying:()=>false,getValue:()=>56,setValue(){attempts++;return 0;}});
+ const entry=f.read().native[0];
+ for(const value of [0,501,12.5,'24']){
+  const result=f.write({...snapshot(entry),grouping:{before:56,value}},n.document);
+  assert.ok(result.error);assert.equal(attempts,0);assert.equal(f.writes.length,0);
+ }
+ const ignored=f.write({...snapshot(entry),grouping:{before:56,value:24}},n.document);
+ assert.equal(ignored.code,'BC_OUTPUT_UNCONFIRMED');assert.equal(ignored.recoverable,false);assert.equal(attempts,1);assert.equal(f.writes.length,0);
+});

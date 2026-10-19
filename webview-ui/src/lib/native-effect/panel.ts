@@ -1,3 +1,5 @@
+import { nativeCaptionPhrases } from './phrases.ts';
+import { validateCharacterLimit } from '../transcript/parser.ts';
 import { validTransparentCarrier } from './carrier.ts';
 import { DEFAULT_ANIMATION, DEFAULT_STYLE, type CaptionItem, type SequenceInfo, type SessionState, type StyleConfig, type WordAppearance } from '../types.ts';
 import { resolveAppearance } from '../appearance.ts';
@@ -6,7 +8,7 @@ import { buildCepNativeReadScript, type CepNativeLocator, type CepNativeSnapshot
 import { encodeNativeTransportText, MAX_NATIVE_CARRIER_BYTES, NATIVE_TRANSPORT_PREFIX } from './encode.ts';
 
 export interface NativePanelEntry {
-  kind: 'native-effect'; clipNodeId: string; projectItemId: string; trackIndex: number; clipIndex: number;
+  kind: 'native-effect'; maxChars?: number; clipNodeId: string; projectItemId: string; trackIndex: number; clipIndex: number;
   startTicks: string; endTicks: string; inTicks: string; outTicks: string; selected: boolean;
   locator: CepNativeLocator; matchName: string; documentText: string; revision: string;
 }
@@ -18,7 +20,7 @@ export interface NativePanelBinding {
 const clone = <T,>(value: T): T => structuredClone(value);
 const pairs = [['upcomingWord', 'upcoming'], ['activeWord', 'current'], ['spokenWord', 'spoken']] as const;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-const unsupportedGlobal = ['backgroundEnabled', 'backgroundColor', 'backgroundOpacity', 'backgroundPadding', 'backgroundRadius', 'positionX', 'positionY', 'textAlign', 'maxWidth', 'maxChars', 'wordSpacing'] as const;
+const unsupportedGlobal = ['backgroundEnabled', 'backgroundColor', 'backgroundOpacity', 'backgroundPadding', 'backgroundRadius', 'positionX', 'positionY', 'textAlign', 'maxWidth', 'wordSpacing'] as const;
 const unsupportedWord = ['letterSpacing', 'strokeEnabled', 'shadowEnabled'] as const;
 export const NATIVE_PANEL_CAPABILITIES = {
   storage: 'embedded-native-document', geometry: 'premiere-effect-controls', animation: 'premiere-effect-controls',
@@ -106,7 +108,7 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
   if (![sequence.frameWidth, sequence.frameHeight, sequence.frameRate, sequence.duration].every(Number.isFinite) || sequence.frameWidth < 1 || sequence.frameHeight < 1 || sequence.frameRate <= 0 || sequence.duration < 0) throw new Error('Invalid active sequence metadata.');
   const document = decodeNativePanelDocument(entry.documentText, snapshot.locator.sequenceId);
   const timelineOffsetSeconds = document.timeOriginSeconds - (tickSeconds(entry.inTicks) - tickSeconds(entry.startTicks));
-  const style: StyleConfig = { ...clone(DEFAULT_STYLE), fontFamily: document.style.upcoming.fontFamily, fontSize: document.style.upcoming.fontSize,
+  const style: StyleConfig = { ...clone(DEFAULT_STYLE), maxChars: validateCharacterLimit(entry.maxChars ?? DEFAULT_STYLE.maxChars), fontFamily: document.style.upcoming.fontFamily, fontSize: document.style.upcoming.fontSize,
     fontWeight: document.style.baseFontWeight??document.style.upcoming.fontWeight??400, textColor: hexColor(document.style.upcoming.color), strokeEnabled: document.style.upcoming.outlineWidth > 0,
     strokeColor: hexColor(document.style.upcoming.outlineColor), strokeOpacity: document.style.upcoming.outlineColor.a, strokeWidth: document.style.upcoming.outlineWidth,
     shadowEnabled: document.style.upcoming.shadowColor.a > 0 && (document.style.upcoming.shadowBlur > 0 || document.style.upcoming.shadowX !== 0 || document.style.upcoming.shadowY !== 0),
@@ -114,14 +116,14 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
     shadowOffsetX: document.style.upcoming.shadowX, shadowOffsetY: document.style.upcoming.shadowY, backgroundEnabled: false, textAlign: 'center',
     lineHeight: document.style.lineHeight, wordSpacing: undefined, textTransform: document.style.titleCase ? 'titlecase' : 'none',
     upcomingWord: panelWord(document.style.upcoming, document.style.titleCase), activeWord: panelWord(document.style.current, document.style.titleCase), spokenWord: panelWord(document.style.spoken, document.style.titleCase) };
-  const captions: CaptionItem[] = document.captions.map(caption => ({ id: caption.id, text: caption.words.map(word => word.text).join(' '),
+  const captions: CaptionItem[] = nativeCaptionPhrases(document.captions.map(caption => ({ id: caption.id, text: caption.words.map(word => word.text).join(' '),
     startTime: caption.start + timelineOffsetSeconds, endTime: caption.end + timelineOffsetSeconds, manualSplit: caption.manualSplit,
-    words: caption.words.map(word => ({ text: word.text, startTime: word.start + timelineOffsetSeconds, endTime: word.end + timelineOffsetSeconds, endOfSentence: word.endOfSentence, isActive: false })) }));
+    words: caption.words.map(word => ({ text: word.text, startTime: word.start + timelineOffsetSeconds, endTime: word.end + timelineOffsetSeconds, endOfSentence: word.endOfSentence, isActive: false })) })), style.maxChars);
   const session: SessionState = { sequenceId: sequence.id, sequenceName: sequence.name, transcriptJson: null, captions, style, animation: { ...clone(DEFAULT_ANIMATION), preset: 'karaoke' },
     hasTranscript: captions.length > 0, isLoading: false, currentTime: sequence.playhead ?? 0, duration: sequence.duration, frameRate: sequence.frameRate, frameWidth: sequence.frameWidth, frameHeight: sequence.frameHeight };
   const binding: NativePanelBinding = { snapshot, document: clone(document), baseline: clone(session), timelineOffsetSeconds, clip: clone(entry) };
   const warnings = [
-    'Native Position, Width, Height, character limit and animated overrides remain in Premiere Effect Controls. Panel edits do not rewrite their keyframes.',
+    'Native Position, Width, Height and animated overrides remain in Premiere Effect Controls. Panel edits do not rewrite their keyframes.',
     'Native typography supports available font weights, relative B and real or synthetic italic. Letter spacing, alignment and whole-caption backgrounds remain unsupported.',
     `Native word spacing is ${document.style.wordSpacing} px; the panel percentage control is unavailable. Outline/shadow enable switches have no separate persisted native flag.`,
   ];
@@ -161,6 +163,8 @@ function updateWord(previous: NativeWordStyle, before: ReturnType<typeof resolve
 export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: SessionState): NativeDocument {
   const before = binding.baseline;
   if (nativePanelSequenceId(edited.sequenceId) !== nativePanelSequenceId(before.sequenceId) || edited.frameWidth !== before.frameWidth || edited.frameHeight !== before.frameHeight || edited.frameRate !== before.frameRate) throw new Error('The native panel sequence context changed. Reconnect before editing.');
+  validateCharacterLimit(edited.style.maxChars);
+  if (edited.style.maxChars !== before.style.maxChars && binding.clip.maxChars === undefined) unsupported('an animated or unavailable character limit');
   for (const key of unsupportedGlobal) if (!same(edited.style[key], before.style[key])) unsupported(`the ${key} setting`);
   if (!same(edited.animation, before.animation)) unsupported('panel animation presets');
   if (!Array.isArray(edited.captions) || edited.captions.length > 10000 || edited.captions.reduce((total, caption) => total + caption.words.length, 0) > 50000) throw new Error('Native panel caption limits exceeded.');
@@ -187,7 +191,7 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
   }
   document.captions = edited.captions.map(caption => {
     const original = before.captions.find(item => item.id === caption.id);
-    for (const field of ['speaker', 'position', 'renderSegments', 'clipNodeId', 'projectItemId', 'mediaPath', 'renderBounds', 'motionProfile'] as const) if (!same(caption[field], original?.[field])) unsupported(`caption ${field}`);
+    for (const field of ['speaker', 'position', 'clipNodeId', 'projectItemId', 'mediaPath', 'renderBounds', 'motionProfile'] as const) if (!same(caption[field], original?.[field])) unsupported(`caption ${field}`);
     const originalNative = binding.document.captions.find(item => item.id === caption.id);
     const orderedEnvelope = Number.isFinite(caption.startTime) && Number.isFinite(caption.endTime) && caption.endTime > caption.startTime;
     const capturedEnvelope = original && originalNative && Number.isFinite(original.startTime) && Number.isFinite(original.endTime) && original.endTime > original.startTime;
@@ -212,11 +216,12 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
   return validateNativeDocument(document);
 }
 
-export function confirmNativePanelUpdate(binding: NativePanelBinding, prepared: NativeDocument, edited: SessionState, response: { revision: string; documentText: string }): NativePanelBinding {
+export function confirmNativePanelUpdate(binding: NativePanelBinding, prepared: NativeDocument, edited: SessionState, response: { revision: string; documentText: string; maxChars?: number }): NativePanelBinding {
   const expected = encodeNativeTransportText(prepared);
   if (encodeNativeTransportText(prepareNativePanelUpdate(binding, edited)) !== expected) throw new Error('Native readback does not match the prepared panel edit.');
   if (response.documentText !== expected) throw new Error('Native document readback differs. Inspect the current layer before another action.');
-  const entry = { ...clone(binding.clip), revision: response.revision, documentText: response.documentText };
+  if (edited.style.maxChars !== binding.baseline.style.maxChars && response.maxChars !== edited.style.maxChars) throw new Error('Premiere did not confirm the character limit.');
+  const entry = { ...clone(binding.clip), ...(response.maxChars === undefined ? {} : { maxChars: response.maxChars }), revision: response.revision, documentText: response.documentText };
   const snapshot = bindingSnapshot(entry);
   return { ...clone(binding), snapshot, document: clone(prepared), baseline: clone(edited), clip: entry };
 }

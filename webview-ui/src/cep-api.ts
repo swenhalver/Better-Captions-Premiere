@@ -17,10 +17,10 @@ function sameSavedSequence(a:unknown,b:string) {
   return canonical(a)===canonical(b);
 }
 export interface NativeCaptionLocator { projectPath:string;sequenceId:string;clipNodeId:string;trackIndex:number;clipIndex:number;componentIndex:number;documentParamIndex:number; }
-export interface NativeCaptionSnapshot { locator:NativeCaptionLocator;revision:string; }
+export interface NativeCaptionSnapshot { locator:NativeCaptionLocator;revision:string;grouping?:{before:number;value:number}; }
 export interface CaptionConnectionTiming { startTicks:string;endTicks:string;inTicks:string;outTicks:string; }
 export interface NativeCaptionConnection extends CaptionConnectionTiming {
-  kind:'native-effect';disabled?:boolean;clipNodeId:string;projectItemId:string;trackIndex:number;clipIndex:number;selected:boolean;
+  kind:'native-effect';maxChars?:number;disabled?:boolean;clipNodeId:string;projectItemId:string;trackIndex:number;clipIndex:number;selected:boolean;
   locator:NativeCaptionLocator;matchName:string;connectionRevision:string;documentText?:string;revision?:string;
 }
 export interface LegacyCaptionConnection extends CaptionConnectionTiming {

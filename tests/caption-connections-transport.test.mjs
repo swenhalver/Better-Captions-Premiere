@@ -17,8 +17,10 @@ function system(t){
  const payloads=new Map(),requests=[],nativeWrites=[],cepSaves=[],sidecars=[],ipcFolders=new Map();
  const time=seconds=>({seconds,ticks:String(seconds*254016000000)});
  const documentParam={displayName:'Caption document (experimental)',isTimeVarying:()=>false,getValue:()=>documentText,setValue(value){nativeWrites.push(value);if(setterMode==='ignored')return 0;documentText=value;return 0;}};
+ let characterLimit=56;
+ const groupingParam={displayName:'Characters per caption',isTimeVarying:()=>false,getValue:()=>characterLimit,setValue(value){characterLimit=value;return 0;}};
  const nativeClip={nodeId:'native-node',projectItem:{nodeId:'native-item',getMediaPath:()=>''},start:time(0),end:time(2),inPoint:time(0),outPoint:time(2),isAdjustmentLayer:()=>true,isSelected:()=>true,
-  components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([documentParam])}])};
+  components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([documentParam,groupingParam])}])};
  const nativeTrack={clips:collection([nativeClip]),isLocked:()=>false};
  const nativeSequence={sequenceID:'seq-a',name:'Captions',timebase:'10584000000',frameSizeHorizontal:720,frameSizeVertical:1280,end:String(2*254016000000),getPlayerPosition:()=>time(.5),videoTracks:collection([nativeTrack],'numTracks'),audioTracks:collection([],'numTracks')};
  const nativeProject={get path(){return projectPath;},activeSequence:nativeSequence};
@@ -143,4 +145,12 @@ test('the actual private service preserves unconfirmed-write metadata and comple
   const before=writes;fs.writeFileSync(input,JSON.stringify(request));await worker.poll();assert.equal(writes,before,'an existing response prevents a second execution, including uncertain writes');
  }
  assert.equal(writes,2);
+});
+test('panel character limits cross all installed transport adapters and preserve native document bytes',async t=>{
+ const h=system(t);await tick();await h.api.getActiveSequenceInfo();
+ const initial=await h.api.readCaptionConnections(),entry=initial.native[0];assert.equal(entry.maxChars,56);
+ const result=await h.api.writeNativeCaptionDocument({locator:entry.locator,revision:entry.revision,grouping:{before:56,value:24}},entry.documentText);
+ assert.equal(result.readbackVerified,true);assert.equal(result.maxChars,24);assert.equal(result.documentText,entry.documentText);
+ assert.equal(h.nativeWrites.length,0,'character regroup alone never calls the document setter');
+ const actual=await h.api.readCaptionConnections();assert.equal(actual.native[0].maxChars,24);assert.equal(actual.native[0].documentText,entry.documentText);
 });

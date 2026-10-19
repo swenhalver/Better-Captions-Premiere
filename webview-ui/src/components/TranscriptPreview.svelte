@@ -13,9 +13,9 @@
     sequenceId: string; captions: CaptionItem[]; currentTime: number; maxChars: number; selectedId?: string | null;
     onSeek: (time: number) => void; onSelect: (id: string) => void;
     onMaxCharsChange: (maxChars: number) => void; onUpdate: (captions: CaptionItem[]) => void;
-    onShowInPremiere?: (time: number) => void; isDemo?: boolean; disabled?: boolean; groupingDisabled?: boolean;
+    onShowInPremiere?: (time: number) => void; isDemo?: boolean; disabled?: boolean; groupingDisabled?: boolean; onRegroup?: () => void;
   }
-  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, disabled = false, groupingDisabled = false }: Props = $props();
+  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, disabled = false, groupingDisabled = false, onRegroup }: Props = $props();
   let activeId = $derived(captions.find((caption) => currentTime >= caption.startTime && currentTime < caption.endTime)?.id ?? null);
   let selectedContainer = $derived(captions.find((caption) => caption.id === selectedId) ?? captions[0]);
   let selectedRowKey = $state<string | null>(null);
@@ -254,6 +254,7 @@
   function regroup() {
     if (disabled) return;
     try {
+      if (onRegroup) { onRegroup(); selectedRowKey = null; return; }
       const next = regroupCaptions(captions, maxChars);
       commit(next, `${captionSentenceCount(next)} caption groups updated.`);
       selectedRowKey = null;

@@ -8,6 +8,7 @@
   import { startCaptionReconnect } from "./lib/reconnect";
   import { connectionKey, reconnectLegacyCaptions, nativeAboveDisabledBackups, sameSequenceId, type CaptionConnections } from "./lib/clip-connections";
   import { rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate } from "./lib/native-effect/panel";
+  import { nativeCaptionPhrases } from "./lib/native-effect/phrases";
   import { prepareNativeCreation, nativeOutputKind } from "./lib/native-effect/create";
   import { encodeNativeTransportText } from "./lib/native-effect/encode";
   import { sessionManager } from "./lib/session/manager.svelte";
@@ -134,7 +135,7 @@
     timelineBusy = true;
     try {
       submitted = true;
-      const result = await api.writeNativeCaptionDocument(plain(binding.snapshot), documentText, session.sequenceId);
+      const result = await api.writeNativeCaptionDocument({ ...plain(binding.snapshot), ...(edited.style.maxChars === binding.baseline.style.maxChars ? {} : { grouping: { before: binding.clip.maxChars!, value: edited.style.maxChars } }) }, documentText, session.sequenceId);
       if (!result?.ok || !result.readbackVerified) throw new Error('Premiere did not confirm the caption document.');
       const confirmed = confirmNativePanelUpdate(binding, prepared, edited, result);
       // Keep newer edits in the editor, while their next write uses the freshly
@@ -229,8 +230,8 @@
     if (native) {
       if (!native.documentText || !native.revision) {
         const bound = nativeBinding?.clip;
-        if (!bound || ['clipNodeId', 'startTicks', 'endTicks', 'inTicks', 'outTicks'].some(key => native[key as keyof typeof native] !== bound[key as keyof typeof bound])) return true;
-      } else if (!nativeBinding || nativeBinding.snapshot.revision !== native.revision) {
+        if (!bound || native.maxChars !== bound.maxChars || ['clipNodeId', 'startTicks', 'endTicks', 'inTicks', 'outTicks'].some(key => native[key as keyof typeof native] !== bound[key as keyof typeof bound])) return true;
+      } else if (!nativeBinding || nativeBinding.snapshot.revision !== native.revision || nativeBinding.clip.maxChars !== native.maxChars) {
         const recovered = rehydrateNativePanel({ ...native, documentText: native.documentText, revision: native.revision }, info);
         if (current && !current.nativeClipId) legacySessions.set(key, plain(current));
         const session = { ...recovered.session, projectPath: info.projectPath, nativeClipId: native.clipNodeId };
@@ -391,7 +392,7 @@
   function outputSignature(session: SessionState): string {
     const { maxChars: _groupingLimit, ...style } = session.style;
     return JSON.stringify({
-      nativeClipId: session.nativeClipId,
+      nativeClipId: session.nativeClipId, ...(session.nativeClipId ? { maxChars: session.style.maxChars } : {}),
       captions: session.captions.map((caption) => ({ id: caption.id, text: caption.text, startTime: caption.startTime, endTime: caption.endTime, position: caption.position, words: caption.words.map((word) => ({ text: word.text, startTime: word.startTime, endTime: word.endTime })), renderSegments: caption.renderSegments })),
       style, animation: session.animation, frameWidth: session.frameWidth, frameHeight: session.frameHeight, frameRate: session.frameRate,
     });
@@ -412,6 +413,7 @@
     const next = { ...updates, ...(updates.activeWord ? { activeWord: { ...session.style.activeWord, ...updates.activeWord } } : {}), ...(updates.spokenWord ? { spokenWord: { ...session.style.spokenWord, ...updates.spokenWord } } : {}), ...(updates.upcomingWord ? { upcomingWord: { ...session.style.upcomingWord, ...updates.upcomingWord } } : {}) };
     if (nativeBinding) prepareNativePanelUpdate(nativeBinding, { ...plain(session), style: { ...plain(session.style), ...next } });
     sessionManager.updateStyle(next);
+    if (nativeBinding && updates.maxChars !== undefined) sessionManager.updateCaptions(nativeCaptionPhrases(plain(session.captions), updates.maxChars));
     if (before !== outputSignature(session)) markOutputEdited(session.sequenceId);
   }
   function handleStyle(patch: Partial<StyleConfig>) { try { updateStyle(patch); } catch (problem) { error = message(problem); } }
@@ -419,7 +421,7 @@
     try {
       updateStyle({ maxChars });
       const session = sessionManager.current;
-      if (session) updateCaptions(refreshCaptionGroups(plain(session.captions), maxChars));
+      if (session) updateCaptions(nativeBinding ? plain(session.captions) : refreshCaptionGroups(plain(session.captions), maxChars));
     } catch (problem) { error = message(problem); }
   }
   async function applyStylePreset(look: PresetLook) {
@@ -439,7 +441,7 @@
   function updateCaptions(captions: CaptionItem[], markEdited = true) {
     if (markEdited && editsLocked) throw new Error("Wait for Premiere to finish placing the captions.");
     if (captions.length) validateCaptions(captions);
-    captions = refreshCaptionGroups(captions);
+    captions = nativeBinding ? nativeCaptionPhrases(captions, sessionManager.current!.style.maxChars) : refreshCaptionGroups(captions);
     if (nativeBinding && markEdited) prepareNativePanelUpdate(nativeBinding, { ...plain(sessionManager.current!), captions });
     sessionManager.updateCaptions(captions);
     if (markEdited && sessionManager.current) markOutputEdited(sessionManager.current.sequenceId);
@@ -885,7 +887,7 @@
         <div id="workspace-panel-transcript" role="tabpanel" aria-labelledby="workspace-tab-transcript" tabindex="0" hidden={activeTab !== "transcript"}>
           {#if session.isLoading}<div class="caption-app__loading" role="status"><p>Transcribing in Premiere…</p><p class="caption-help">Timed words will appear here when Premiere finishes.</p><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div></div>{/if}
           {#if transcriptionBackup && transcriptionBackup.sequenceId === session.sequenceId}<div class="caption-app__backup"><button class="caption-button" onclick={restoreTranscription} disabled={session.captions.some((caption) => caption.clipNodeId)}>Restore previous transcription</button></div>{/if}
-          <TranscriptPreview frameRate={session.frameRate} {selectedWord} onSelectWord={(index) => selectedWord = index} sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxChars={session.style.maxChars} groupingDisabled={!!session.nativeClipId} {selectedId} onSelect={(id) => { selectedId = id; selectedWord = 0; }} onSeek={seekCaption} onMaxCharsChange={changeCharacterLimit} onUpdate={updateCaptions} onShowInPremiere={seekCaption} isDemo={api.isDemo} disabled={editsLocked || isRefreshing || isSyncing || session.isLoading} />
+          <TranscriptPreview frameRate={session.frameRate} {selectedWord} onSelectWord={(index) => selectedWord = index} sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxChars={session.style.maxChars} groupingDisabled={!!session.nativeClipId && nativeBinding?.clip.maxChars === undefined} onRegroup={session.nativeClipId ? () => updateCaptions(plain(session.captions)) : undefined} {selectedId} onSelect={(id) => { selectedId = id; selectedWord = 0; }} onSeek={seekCaption} onMaxCharsChange={changeCharacterLimit} onUpdate={updateCaptions} onShowInPremiere={seekCaption} isDemo={api.isDemo} disabled={editsLocked || isRefreshing || isSyncing || session.isLoading} />
         </div>
         <div id="workspace-panel-style" role="tabpanel" aria-labelledby="workspace-tab-style" tabindex="0" hidden={activeTab !== "style"}>
           {#key session.sequenceId}
