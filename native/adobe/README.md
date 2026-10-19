@@ -8,10 +8,11 @@ vendored. Keep SDK downloads outside this repository and retain their license.
 ## Current experimental Mac status
 
 The opt-in straight-alpha Metal compositor is the installed experimental effect;
-the panel remains 0.7.11. The reduced-preview repair was verified in diagnostic
-candidate `3e425102`; the matching diagnostics-disabled candidate is `8c4ad9b0`.
-Both use metallib prefix `dd6d2a53`. See the acceptance record for installation
-status. This path is experimental and separate from the ordinary CPU build below.
+the panel remains 0.7.11. The installed diagnostics-disabled preview repair is
+`8c4ad9b0`, with metallib prefix `dd6d2a53`. It passed a coordinated Premiere
+restart and fresh active Full/half/quarter scrub checks. Diagnostic candidate
+`3e425102` established the raw-divisor/error trace. This path is experimental and
+separate from the ordinary CPU build below.
 
 Actual SDR Mac host exports now pass 30 fps baseline/UI-Razor/moved-split raw-pixel
 equality and whole-layer movement with captions following their adjustment layer.

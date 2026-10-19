@@ -13,9 +13,9 @@ is an experimental effect, not production-ready.
 
 The separate experimental effect uses the straight-alpha Metal renderer. The
 reduced-preview repair was host-tested in diagnostic candidate `3e425102`;
-the matching diagnostics-disabled candidate is `8c4ad9b0` (metallib `dd6d2a53`).
-The latter is built and signature-verified; its final installation is pending a
-coordinated Premiere restart. The timing/alpha receipts below originally used
+the installed diagnostics-disabled candidate is `8c4ad9b0` (metallib `dd6d2a53`).
+The latter passed a coordinated restart and fresh Full/half/quarter scrub checks.
+The timing/alpha receipts below originally used
 candidate `a5156eda` and do not alone establish reduced-preview acceptance.
 The Better Captions panel remains **0.7.11**. Restoring the failed CPU-only candidate
 would remove this verified fix; it is retained only as historical evidence.
@@ -84,7 +84,7 @@ outline, bubble and shadow dimensions use those scales. Position still uses the
 normalized point and actual requested frame dimensions. Caption bytes and the
 verified `inClipTime` clock are unchanged.
 
-Installed repaired diagnostic executable:
+Earlier host-tested repaired diagnostic executable:
 `3e42510253893417cf6ac13cb1b51375be4fb3319a092b95e876e90c1a5caf1f`.
 Active QE `startScrubbing`/`scrubTo` requests, with screenshots taken before
 `endScrubbing`, passed at Full, 1/2 and 1/4. Fresh half and quarter frames reached
@@ -109,10 +109,26 @@ changes from one to zero. All adapter and compositor checks pass; the metallib
 is unchanged. Extra per-process scrub-logger strings are absent, while the
 pre-existing bounded GPU trace remains.
 
+The diagnostics-disabled build is now installed and loaded after an approved
+Premiere restart. Fresh active scrubs at 1.0667 seconds (Full, “Native”), 5.1667
+seconds (half, “stay”) and 7.1667 seconds (quarter, “editable.”) show footage and
+the expected current-word highlight. No per-process scrub log is created. The
+installed executable/metallib hashes match the built artifact, and the temporary
+MCP startup source was restored byte-for-byte after reconnection.
+
+All 22 sequence graphs match the fresh human-edited checkpoint after both reopen
+and the final scrub tests, including the latest source placement and transparent
+test clip. Full preview and the original 19:05 playhead position were restored,
+and the project was saved. Premiere remained on the other display. This repair
+covers reduced-resolution rendering over footage; an adjustment layer still
+requires underlying rendered coverage over timeline gaps.
+
 Local receipts are in `/tmp/better-captions-scrub-1792368450664/`, including
 `diagnostic-318-half-summary.json`, `diagnostic-318-quarter-summary.json`,
 `fixed-diagnostic-matrix.json`, `fixed-diagnostic-visible-bounds.json` and captured
-Program Monitor frames. Reopen preserved all 22 sequence graphs exactly before
+Program Monitor frames. Final installed acceptance is also preserved under ignored
+`artifacts/host-scratch/preview-scale-repair-2026-10-18/final-install-verification.json`.
+The earlier diagnostic reopen preserved all 22 sequence graphs exactly before
 the user's subsequent base-footage test move. Those user edits are retained;
 old caption fixtures are not restored over them. The production project remained
 closed and retained its previously recorded SHA-256.
@@ -179,8 +195,8 @@ Build hashes identify snapshots, not acceptance:
 | Installed panel-integration/control candidate | `688697ac134ff530f9e02121f4843a53b33346b50c7cba40615631a9c910ec03` |
 | Normal typography candidate restored after timing probes | `6312eaabae8795ca9f4efa20a116cac9bf11f09c299b18e0368518ed7f62f74d` |
 | Earlier straight-alpha Metal timing/alpha candidate | `a5156eda8b80d317fe1d0bedc07b699a4fd17eb7da1b64144e422c394380c9f0` |
-| Installed reduced-preview repair with scrub diagnostics | `3e42510253893417cf6ac13cb1b51375be4fb3319a092b95e876e90c1a5caf1f` |
-| Matching diagnostics-disabled reduced-preview repair | `8c4ad9b0acc11fbec2ef8d3f5b13f01282fce2f6d6891875790e71c348e4dbf4` |
+| Host-tested reduced-preview repair with scrub diagnostics | `3e42510253893417cf6ac13cb1b51375be4fb3319a092b95e876e90c1a5caf1f` |
+| Installed diagnostics-disabled reduced-preview repair | `8c4ad9b0acc11fbec2ef8d3f5b13f01282fce2f6d6891875790e71c348e4dbf4` |
 
 The current `CaptionComposite.metallib` SHA-256 is
 `dd6d2a53a07ec92e8a43dcd9bab97c53f7370c7ea6e53e53a6dfe88827eff5bd`.
