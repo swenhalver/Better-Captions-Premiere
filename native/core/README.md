@@ -57,10 +57,11 @@ retain their existing single empty row per qualifying gap; separate containers
 never acquire connecting silence rows. The layout is derived independently for
 each requested frame, including backward seeks.
 
-## Current BCAP v11 format and line wrapping
+## Current BCAP v12 format, line wrapping and position styles
 
 This section supersedes the historical version-selection descriptions above.
-New documents and every encode write BCAP **v11**; readers accept v1–11. JSON
+Writers emit BCAP **v11** without position styles and **v12** with them; readers
+accept v1–12. Clearing all positions returns to v11 and preserves line wrap. JSON
 panel protocol `version` remains 1. V8 made word boundaries explicit and made
 storage-container edges and `manualSplit` metadata independent of rendered line
 boundaries. V9 added each word's `pauseLinesRemoved` uint32 (0–8), immediately
@@ -103,3 +104,47 @@ Fill `The quick brown fox / jumps over the lazy / dog.`, Balance
 index of each derived line. `tests/line-wrap.test.mjs` compiles a temporary
 standalone core executable and checks the TypeScript mirror against this output
 for all three modes; it does not require an SDK, installed plug-in or Premiere.
+
+BCAP v12 adds line position styles: style overrides for the slots of the
+visible caption window, numbered in screen order (Line 1 is the top line, up to
+eight). It is written only when a document has at least one; every other
+document writes v11 with its wrap footer. `kPositionStylesVersion` is the single constant
+to identify this extension. The exact order is the v10 base (through the v7
+geometry footer), the v11 wrap uint32, then the v12 position block: a uint32
+count (0–8), then per position
+a uint32 position (1–8, strictly increasing), a nonzero uint32 field mask and
+the flagged fields in bit order: font family (string), weight (binary64 weight
+plus uint32 mode 0 absolute/1 shared base/2 next heavier), italic and
+underline (uint32 0/1), effective font size, text RGB, opacity, bubble and
+fill-spaces flags, bubble RGB, bubble opacity, padding top/right/bottom/left,
+radius TL/TR/BR/BL, margin top/right/bottom/left, outline width, outline RGB,
+outline opacity, shadow blur/X/Y, shadow RGB and shadow opacity. RGB fields
+are three binary64 values; alpha always travels in its own opacity field.
+
+Precedence is All words, then Past/Current/Next, then the line position: a
+position's flagged fields replace the word's state values; the rest inherit.
+In scrolling text a line takes the style of the slot it occupies, and each slot
+reserves its own height from the worst metrics of every word under that slot's
+merged styles, so position margins space slots apart (Lines 1 and 4 can sit
+farther out while Lines 2 and 3 keep their normal gap). While a line scrolls
+between slots its style blends between both slots: numbers and colors
+interpolate, a background present on one side fades its alpha, and font
+choices switch halfway. Rows stack on the current-line slot by their restyled
+advances, so their positions follow the uneven spacing smoothly. Sideways
+scrolling and pages use the row within the page; fade, slide and pop
+transitions paint two settled windows, each with its own slot styles, and a
+line present in both glides from its old slot to its new one, blending both
+slot styles (without position styles such a line still moves at once, as before). Pause
+lines take slots like text lines. Slots beyond Visible lines (or beyond the
+rows a page or the box can hold) are kept but unused. With no position styles
+in the visible slots the original layout code runs unchanged. The native
+adapter scales position overrides by Global font size, Global text tint and
+output downsampling; the per-state Word styles percentages modulate state
+styles only.
+
+Case, line height, word spacing and alignment remain global; position overrides
+do not capture them. Sideways motion uses rows within the sliding page, and
+paged rendering uses rows within each page. CEP Extend normalizes pre-v11
+trailers with Fill and pre-v12 trailers with an empty positions block, then
+requires exact normalized trailer equality. Canonical upgrades target v11 or
+v12; the pre-v10 boundary migration stays independent of these footer versions.

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<ExtensionManifest Version="7.0" ExtensionBundleId="ca.swen.bettercaptions" ExtensionBundleVersion="0.7.87" ExtensionBundleName="S-Captions Background Service">
-  <ExtensionList><Extension Id="ca.swen.bettercaptions.service" Version="0.7.87" /></ExtensionList>
+<ExtensionManifest Version="7.0" ExtensionBundleId="ca.swen.bettercaptions" ExtensionBundleVersion="0.7.88" ExtensionBundleName="S-Captions Background Service">
+  <ExtensionList><Extension Id="ca.swen.bettercaptions.service" Version="0.7.88" /></ExtensionList>
   <ExecutionEnvironment>
     <HostList><Host Name="PPRO" Version="[26.3,99.9]" /></HostList>
     <LocaleList><Locale Code="All" /></LocaleList>

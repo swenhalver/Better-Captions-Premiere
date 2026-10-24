@@ -133,6 +133,16 @@ export interface WordAppearance {
 
 /** How native caption words fill the lines between hard breaks; see native-effect/line-wrap.ts. */
 export type LineWrap = 'fill' | 'balance' | 'pretty';
+/** A slot of the visible caption window, in screen order: Line 1 is the top line. */
+export type LinePositionKey = '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8';
+export const LINE_STYLE_FIELDS = ['fontFamily', 'fontWeight', 'fontWeightOffset', 'italic', 'underline', 'fontSize', 'color', 'opacity',
+  'bubble', 'bubbleFillSpaces', 'bubbleColor', 'bubbleOpacity', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+  'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
+  'strokeEnabled', 'strokeWidth', 'strokeColor', 'strokeOpacity', 'shadowEnabled', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'] as const;
+export type LineStyleField = typeof LINE_STYLE_FIELDS[number];
+/** Overrides a line takes while it sits in that slot; unset fields inherit Past/Current/Next. fontSize is in pixels. */
+export type LineAppearance = Partial<Pick<WordAppearance, LineStyleField>>;
+export type LineStyles = Partial<Record<LinePositionKey, LineAppearance>>;
 
 export interface StyleConfig {
   fontFamily: string;
@@ -168,6 +178,8 @@ export interface StyleConfig {
   activeWord: WordAppearance;
   spokenWord: WordAppearance;
   upcomingWord?: Partial<WordAppearance>;
+  /** Native captions only: per line position overrides, winning over the word states. */
+  lineStyles?: LineStyles;
 }
 
 export interface AnimationConfig {

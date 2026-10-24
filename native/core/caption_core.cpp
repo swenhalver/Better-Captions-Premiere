@@ -3,11 +3,13 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 
 namespace better_captions {
 static_assert(sizeof(double)==8&&std::numeric_limits<double>::is_iec559,"BCAP requires IEEE-754 binary64");
@@ -74,9 +76,125 @@ WordStyle readStyle(Reader& r) {
  s.bubbleColor=readColor(r);s.padding=r.d();s.radius=r.d();s.outlineWidth=r.d();s.outlineColor=readColor(r);
  s.shadowBlur=r.d();s.shadowX=r.d();s.shadowY=r.d();s.shadowColor=readColor(r);return s;
 }
+// Line position fields in bit order, which is also their v12 wire order.
+struct PositionFieldRef { enum Kind { Text,Weight,Mode,Flag,Number,Rgb } kind; std::uint32_t bit; void* target; };
+std::array<PositionFieldRef,31> positionFields(WordStyle& v) {
+ using F=PositionFieldRef;
+ return {{{F::Text,PositionFontFamily,&v.fontFamily},{F::Weight,PositionWeight,&v},{F::Mode,PositionItalic,&v.italic},{F::Mode,PositionUnderline,&v.underline},
+  {F::Number,PositionFontSize,&v.fontSize},{F::Rgb,PositionColor,&v.color},{F::Number,PositionOpacity,&v.opacity},{F::Flag,PositionBubble,&v.bubble},
+  {F::Flag,PositionBubbleFillSpaces,&v.bubbleFillSpaces},{F::Rgb,PositionBubbleColor,&v.bubbleColor},{F::Number,PositionBubbleOpacity,&v.bubbleColor.a},
+  {F::Number,PositionPaddingTop,&v.paddingTop},{F::Number,PositionPaddingRight,&v.paddingRight},{F::Number,PositionPaddingBottom,&v.paddingBottom},{F::Number,PositionPaddingLeft,&v.paddingLeft},
+  {F::Number,PositionRadiusTL,&v.radiusTL},{F::Number,PositionRadiusTR,&v.radiusTR},{F::Number,PositionRadiusBR,&v.radiusBR},{F::Number,PositionRadiusBL,&v.radiusBL},
+  {F::Number,PositionMarginTop,&v.marginTop},{F::Number,PositionMarginRight,&v.marginRight},{F::Number,PositionMarginBottom,&v.marginBottom},{F::Number,PositionMarginLeft,&v.marginLeft},
+  {F::Number,PositionOutlineWidth,&v.outlineWidth},{F::Rgb,PositionOutlineColor,&v.outlineColor},{F::Number,PositionOutlineOpacity,&v.outlineColor.a},
+  {F::Number,PositionShadowBlur,&v.shadowBlur},{F::Number,PositionShadowX,&v.shadowX},{F::Number,PositionShadowY,&v.shadowY},
+  {F::Rgb,PositionShadowColor,&v.shadowColor},{F::Number,PositionShadowOpacity,&v.shadowColor.a}}};
+}
+void positionStyle(const PositionStyle& p) {
+ require((p.fields&~kPositionFieldMask)==0,"invalid line position fields");
+ const auto& v=p.value;style(v);require(v.sizeScale==1,"invalid line position size scale");
+ if(p.fields&PositionItalic)require(v.italic==0||v.italic==1,"invalid line position italic");
+ if(p.fields&PositionUnderline)require(v.underline==0||v.underline==1,"invalid line position underline");
+ // Explicit sides and corners only; the -1 inherit sentinel is meaningless here.
+ for(const auto& [bit,value]:std::initializer_list<std::pair<std::uint32_t,double>>{{PositionPaddingTop,v.paddingTop},{PositionPaddingRight,v.paddingRight},{PositionPaddingBottom,v.paddingBottom},{PositionPaddingLeft,v.paddingLeft},{PositionRadiusTL,v.radiusTL},{PositionRadiusTR,v.radiusTR},{PositionRadiusBR,v.radiusBR},{PositionRadiusBL,v.radiusBL}})
+  if(p.fields&bit)require(value>=0,"invalid line position geometry");
+}
+void writePositions(Writer& w,const Style& style) {
+ std::uint32_t count=0;for(const auto& p:style.positions)if(!p.empty())++count;
+ w.u(count);
+ for(std::size_t index=0;index<style.positions.size();++index){const auto& p=style.positions[index];if(p.empty())continue;
+  auto value=p.value;w.u(static_cast<std::uint32_t>(index+1));w.u(p.fields);
+  for(const auto& field:positionFields(value)){if(!(p.fields&field.bit))continue;
+   switch(field.kind){
+    case PositionFieldRef::Text:w.s(*static_cast<std::string*>(field.target));break;
+    case PositionFieldRef::Weight:w.d(value.fontWeight);w.u(value.fontWeightOffset==-1?0:value.fontWeightOffset==0?1:2);break;
+    case PositionFieldRef::Mode:w.u(static_cast<std::uint32_t>(*static_cast<int*>(field.target)));break;
+    case PositionFieldRef::Flag:w.u(*static_cast<bool*>(field.target));break;
+    case PositionFieldRef::Number:w.d(*static_cast<double*>(field.target));break;
+    case PositionFieldRef::Rgb:{const auto& c=*static_cast<Color*>(field.target);w.d(c.r);w.d(c.g);w.d(c.b);break;}
+   }
+  }
+ }
+}
+void readPositions(Reader& r,Style& style) {
+ const auto count=r.u();require(count<=kMaxLinePositions,"too many line positions");std::uint32_t previous=0;
+ for(std::uint32_t entry=0;entry<count;++entry){
+  const auto position=r.u();require(position>previous&&position<=kMaxLinePositions,"invalid line position");previous=position;
+  auto& p=style.positions[position-1];p.fields=r.u();require(p.fields!=0&&(p.fields&~kPositionFieldMask)==0,"invalid line position fields");
+  for(const auto& field:positionFields(p.value)){if(!(p.fields&field.bit))continue;
+   switch(field.kind){
+    case PositionFieldRef::Text:*static_cast<std::string*>(field.target)=r.s(256);break;
+    case PositionFieldRef::Weight:{p.value.fontWeight=r.d();const auto mode=r.u();require(mode<=2,"invalid line position weight mode");p.value.fontWeightOffset=mode==0?-1:mode==1?0:100;break;}
+    case PositionFieldRef::Mode:{const auto mode=r.u();require(mode<=1,"invalid line position mode");*static_cast<int*>(field.target)=static_cast<int>(mode);break;}
+    case PositionFieldRef::Flag:*static_cast<bool*>(field.target)=r.flag();break;
+    case PositionFieldRef::Number:*static_cast<double*>(field.target)=r.d();break;
+    case PositionFieldRef::Rgb:{auto& c=*static_cast<Color*>(field.target);c.r=r.d();c.g=r.d();c.b=r.d();break;}
+   }
+  }
+ }
+}
+}
+bool hasPositionStyles(const Style& style,std::size_t lines) {
+ for(std::size_t index=0;index<std::min(lines,style.positions.size());++index)if(!style.positions[index].empty())return true;
+ return false;
+}
+WordStyle applyPositionStyle(const WordStyle& state,const PositionStyle& position) {
+ if(position.empty())return state;
+ WordStyle result=state,value=position.value;
+ const auto from=positionFields(value),to=positionFields(result);
+ for(std::size_t index=0;index<from.size();++index){if(!(position.fields&from[index].bit))continue;
+  switch(from[index].kind){
+   case PositionFieldRef::Text:*static_cast<std::string*>(to[index].target)=*static_cast<std::string*>(from[index].target);break;
+   case PositionFieldRef::Weight:result.fontWeight=value.fontWeight;result.fontWeightOffset=value.fontWeightOffset;break;
+   case PositionFieldRef::Mode:*static_cast<int*>(to[index].target)=*static_cast<int*>(from[index].target);break;
+   case PositionFieldRef::Flag:*static_cast<bool*>(to[index].target)=*static_cast<bool*>(from[index].target);break;
+   case PositionFieldRef::Number:*static_cast<double*>(to[index].target)=*static_cast<double*>(from[index].target);break;
+   case PositionFieldRef::Rgb:{const auto& c=*static_cast<Color*>(from[index].target);auto& out=*static_cast<Color*>(to[index].target);out.r=c.r;out.g=c.g;out.b=c.b;break;}
+  }
+ }
+ if(position.fields&PositionFontSize)result.sizeScale=1;
+ return result;
+}
+double nominalWeight(const WordStyle& style,double baseWeight) {
+ const double base=baseWeight>0?baseWeight:400;
+ if(style.fontWeightOffset==0)return base;
+ if(style.fontWeightOffset==100)return std::min(1000.0,base+100);
+ return style.fontWeight>0?style.fontWeight:400;
+}
+WordStyle blendWordStyles(const WordStyle& a,const WordStyle& b,double t,const ResolveWeight& resolve) {
+ if(!(t>0))return a;if(t>=1)return b;
+ auto mix=[t](double x,double y){return x==y?x:x+(y-x)*t;};
+ auto mixColor=[&](const Color& x,const Color& y){return Color{mix(x.r,y.r),mix(x.g,y.g),mix(x.b,y.b),mix(x.a,y.a)};};
+ // Font family, italic, underline and space filling switch halfway.
+ WordStyle result=t<.5?a:b;
+ if(a.fontSize!=b.fontSize||a.sizeScale!=b.sizeScale){result.fontSize=mix(a.fontSize*a.sizeScale,b.fontSize*b.sizeScale);result.sizeScale=1;}
+ // Within one family, resolve both weights as rendered (a relative step from
+ // the base included), then interpolate as an absolute weight.
+ if(a.fontFamily==b.fontFamily&&(a.fontWeight!=b.fontWeight||a.fontWeightOffset!=b.fontWeightOffset)){
+  const double from=resolve?resolve(a):nominalWeight(a,0),to=resolve?resolve(b):nominalWeight(b,0);
+  if(finite(from)&&finite(to)&&from>=1&&from<=1000&&to>=1&&to<=1000){result.fontWeight=mix(from,to);result.fontWeightOffset=-1;}
+ }
+ result.opacity=mix(a.opacity,b.opacity);result.color=mixColor(a.color,b.color);
+ result.outlineWidth=mix(a.outlineWidth,b.outlineWidth);result.outlineColor=mixColor(a.outlineColor,b.outlineColor);
+ result.shadowBlur=mix(a.shadowBlur,b.shadowBlur);result.shadowX=mix(a.shadowX,b.shadowX);result.shadowY=mix(a.shadowY,b.shadowY);result.shadowColor=mixColor(a.shadowColor,b.shadowColor);
+ result.padding=mix(a.padding,b.padding);result.radius=mix(a.radius,b.radius);
+ // Inherit sentinels stay only when both sides inherit; otherwise blend the resolved values.
+ auto resolved=[&](double WordStyle::*field,double x,double y){if(a.*field==b.*field)result.*field=a.*field;else result.*field=mix(x,y);};
+ resolved(&WordStyle::bubblePaddingInline,a.inlinePadding(),b.inlinePadding());resolved(&WordStyle::bubblePaddingBlock,a.blockPadding(),b.blockPadding());
+ resolved(&WordStyle::paddingTop,a.topPadding(),b.topPadding());resolved(&WordStyle::paddingRight,a.rightPadding(),b.rightPadding());
+ resolved(&WordStyle::paddingBottom,a.bottomPadding(),b.bottomPadding());resolved(&WordStyle::paddingLeft,a.leftPadding(),b.leftPadding());
+ auto corner=[](const WordStyle& s,double value){return value<0?s.radius:value;};
+ resolved(&WordStyle::radiusTL,corner(a,a.radiusTL),corner(b,b.radiusTL));resolved(&WordStyle::radiusTR,corner(a,a.radiusTR),corner(b,b.radiusTR));
+ resolved(&WordStyle::radiusBR,corner(a,a.radiusBR),corner(b,b.radiusBR));resolved(&WordStyle::radiusBL,corner(a,a.radiusBL),corner(b,b.radiusBL));
+ result.marginTop=mix(a.marginTop,b.marginTop);result.marginRight=mix(a.marginRight,b.marginRight);result.marginBottom=mix(a.marginBottom,b.marginBottom);result.marginLeft=mix(a.marginLeft,b.marginLeft);
+ // A background present on one side only fades its alpha from zero.
+ if(a.bubble==b.bubble)result.bubbleColor=mixColor(a.bubbleColor,b.bubbleColor);
+ else{const auto& shown=a.bubble?a:b;auto hidden=shown.bubbleColor;hidden.a=0;result.bubble=true;result.bubbleFillSpaces=shown.bubbleFillSpaces;
+  result.bubbleColor=a.bubble?mixColor(a.bubbleColor,hidden):mixColor(hidden,b.bubbleColor);}
+ return result;
 }
 void validate(const Document& d) {
- require(d.schemaVersion>=1&&d.schemaVersion<=kSchemaVersion,"unsupported schema version");require(finite(d.timeOriginSeconds)&&std::abs(d.timeOriginSeconds)<=864000,"invalid document time origin");require(d.containers.size()<=10000,"too many containers");
+ require(d.schemaVersion>=1&&d.schemaVersion<=kMaxWireVersion,"unsupported schema version");require(finite(d.timeOriginSeconds)&&std::abs(d.timeOriginSeconds)<=864000,"invalid document time origin");require(d.containers.size()<=10000,"too many containers");
  require(d.style.baseFontWeight==0||(finite(d.style.baseFontWeight)&&d.style.baseFontWeight>=1&&d.style.baseFontWeight<=1000),"invalid base font weight");
  std::size_t total=0,bytes=0;std::vector<std::string> ids;
  for(const auto& c:d.containers) {
@@ -92,6 +210,7 @@ void validate(const Document& d) {
  require(d.style.letterCase>=0&&d.style.letterCase<=2&&!(d.style.letterCase&&d.style.titleCase),"invalid display letter case");
  require(finite(d.style.wordSpacing)&&d.style.wordSpacing>=0&&d.style.wordSpacing<=4096,"invalid word spacing");
  require(finite(d.style.lineHeight)&&d.style.lineHeight>=.6&&d.style.lineHeight<=10,"invalid line height");
+ for(const auto& position:d.style.positions)positionStyle(position);
  require(static_cast<std::uint32_t>(d.style.lineWrap)<=2,"invalid line wrap");
 }
 namespace {
@@ -188,7 +307,7 @@ std::vector<Phrase> regroup(const Document& d,std::size_t maxChars,double pause)
  if(phrase.wordCount)out.push_back(std::move(phrase));return out;
 }
 std::vector<std::uint8_t> encode(const Document& d) {
- validate(d);const auto wireVersion=kSchemaVersion;
+ validate(d);const auto wireVersion=hasPositionStyles(d.style)?kPositionStylesVersion:kSchemaVersion;
  Writer w;w.u(0x50414342);w.u(wireVersion);w.u(static_cast<std::uint32_t>(d.containers.size()));
  for(const auto& c:d.containers){w.s(c.id);w.u(c.manualSplit);w.u(static_cast<std::uint32_t>(c.words.size()));for(const auto& a:c.words){w.s(a.text);w.d(a.start);w.d(a.end);w.u(a.endOfSentence);w.u(static_cast<std::uint32_t>(a.lineBreakBefore));w.u(a.pauseLinesRemoved);}}
  writeStyle(w,d.style.upcoming);writeStyle(w,d.style.current);writeStyle(w,d.style.spoken);w.d(d.style.wordSpacing);w.d(d.style.lineHeight);w.u(d.style.titleCase);
@@ -200,10 +319,11 @@ std::vector<std::uint8_t> encode(const Document& d) {
  if(wireVersion>=6)for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken})w.u(static_cast<std::uint32_t>(s->underline+1));
  if(wireVersion>=7)for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){w.d(s->paddingTop);w.d(s->paddingRight);w.d(s->paddingBottom);w.d(s->paddingLeft);w.d(s->radiusTL);w.d(s->radiusTR);w.d(s->radiusBR);w.d(s->radiusBL);w.d(s->marginTop);w.d(s->marginRight);w.d(s->marginBottom);w.d(s->marginLeft);}
  if(wireVersion>=11)w.u(static_cast<std::uint32_t>(d.style.lineWrap));
+ if(wireVersion>=kPositionStylesVersion)writePositions(w,d.style);
  require(w.b.size()<=kMaxDocumentBytes,"document size exceeded");return w.b;
 }
 Document decode(const std::vector<std::uint8_t>& b) {
- require(b.size()<=kMaxDocumentBytes,"document size exceeded");Reader r{b};require(r.u()==0x50414342,"invalid document magic");Document d;const auto wireVersion=r.u();require(wireVersion>=1&&wireVersion<=kSchemaVersion,"unsupported schema version");
+ require(b.size()<=kMaxDocumentBytes,"document size exceeded");Reader r{b};require(r.u()==0x50414342,"invalid document magic");Document d;const auto wireVersion=r.u();require(wireVersion>=1&&wireVersion<=kMaxWireVersion,"unsupported schema version");
  auto n=r.u();require(n<=10000,"too many containers");std::size_t total=0;
  for(std::uint32_t i=0;i<n;++i){CaptionContainer c;c.id=r.s(256);c.manualSplit=r.flag();auto k=r.u();total+=k;require(total<=kMaxWords,"too many words");
  for(std::uint32_t j=0;j<k;++j){Word w;w.text=r.s(4096);w.start=r.d();w.end=r.d();w.endOfSentence=r.flag();if(wireVersion>=8){const auto mode=r.u();require(mode<=(wireVersion>=10?3u:2u),"invalid line break mode");w.lineBreakBefore=static_cast<LineBreakBefore>(mode);}else if(i>0&&j==0)w.lineBreakBefore=LineBreakBefore::Break;if(wireVersion>=9)w.pauseLinesRemoved=r.u();c.words.push_back(std::move(w));}d.containers.push_back(std::move(c));}
@@ -215,6 +335,7 @@ Document decode(const std::vector<std::uint8_t>& b) {
  if(wireVersion>=6)for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){auto mode=r.u();require(mode<=2,"invalid underline mode");s->underline=static_cast<int>(mode)-1;}
  if(wireVersion>=7)for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){s->paddingTop=r.d();s->paddingRight=r.d();s->paddingBottom=r.d();s->paddingLeft=r.d();s->radiusTL=r.d();s->radiusTR=r.d();s->radiusBR=r.d();s->radiusBL=r.d();s->marginTop=r.d();s->marginRight=r.d();s->marginBottom=r.d();s->marginLeft=r.d();}
  if(wireVersion>=11){const auto wrap=r.u();require(wrap<=2,"invalid line wrap");d.style.lineWrap=static_cast<LineWrap>(wrap);}
+ if(wireVersion>=kPositionStylesVersion)readPositions(r,d.style);
  require(r.p==b.size(),"trailing document bytes");validate(d);return d;
 }
 std::string displayText(const std::string& text,bool title,int letterCase) {
@@ -266,16 +387,22 @@ void validateRollUp(const RollUpSettings& s) {
   require(finite(edge.inset)&&edge.inset>=0&&edge.inset<=1&&finite(edge.thickness)&&edge.thickness>=0&&edge.thickness<=1&&finite(edge.amount)&&edge.amount>=0&&edge.amount<=1&&edge.curve>=1&&edge.curve<=4,"invalid independent roll-up edge");
  }
 }
-Metrics worstMetrics(const std::string& text,const Style& style,const MeasureText& measure) {
+using StateStyles=std::array<const WordStyle*,3>;
+StateStyles stateStyles(const Style& style) { return {{&style.upcoming,&style.current,&style.spoken}}; }
+Metrics worstMetrics(const std::string& text,const StateStyles& states,const MeasureText& measure) {
  Metrics reserved;
- for(const auto* state:{&style.upcoming,&style.current,&style.spoken}){
+ for(const auto* state:states){
   auto metrics=measure(text,*state);require(finite(metrics.width)&&finite(metrics.ascent)&&finite(metrics.descent)&&metrics.width>=0&&metrics.ascent>=0&&metrics.descent>=0&&metrics.width<=1e9&&metrics.ascent<=1e9&&metrics.descent<=1e9,"invalid text metrics");
   reserved.width=std::max(reserved.width,std::max(0.0,metrics.width+state->horizontalPadding()+state->marginLeft+state->marginRight));reserved.ascent=std::max(reserved.ascent,std::max(0.0,metrics.ascent+state->topPadding()+state->marginTop));reserved.descent=std::max(reserved.descent,std::max(0.0,metrics.descent+state->bottomPadding()+state->marginBottom));
  }return reserved;
 }
-std::array<double,4> directionalPaintOutset(const Style& style) {
+// Slots below positions (Line 1 first) add their merged state styles.
+std::array<double,4> directionalPaintOutset(const Style& style,std::size_t positions=0) {
  std::array<double,4> result{};
- for(const auto* s:{&style.upcoming,&style.current,&style.spoken}){
+ std::vector<WordStyle> candidates{style.upcoming,style.current,style.spoken};
+ for(std::size_t index=0;index<std::min(positions,style.positions.size());++index)if(!style.positions[index].empty())
+  for(const auto* state:stateStyles(style))candidates.push_back(applyPositionStyle(*state,style.positions[index]));
+ for(const auto& candidate:candidates){const auto* s=&candidate;
   if(s->opacity<=0)continue;
   const bool glyph=s->color.a>0,outlined=s->outlineWidth>0&&s->outlineColor.a>0;
   const double outline=outlined?s->outlineWidth:0;
@@ -338,11 +465,13 @@ struct ComposedRow {
  double width=0,ascent=0,descent=0,paintAscent=0,paintDescent=0,start=0,end=0;
  double advance(double lineHeight)const{return (ascent+descent)*lineHeight;}
 };
+// Restyles a word's state style for the row (0-based from begin) it sits in.
+using RowStyler=std::function<WordStyle(const WordStyle&,std::size_t row)>;
 // Both presentation modes use the same sampled typography. Scrolling may move
 // a row, but never reserves a different word advance or changes its baseline.
 std::vector<ComposedRow> composeRows(const Document& d,
  const std::vector<Phrase>& phrases,std::size_t begin,std::size_t end,double time,
- const LayoutBox& box,const MeasureText& measure,const TransformText& transform,double originX=0) {
+ const LayoutBox& box,const MeasureText& measure,const TransformText& transform,double originX=0,const RowStyler& styler={}) {
  std::vector<ComposedRow> rows;ComposedRow row;
  auto flush=[&](){
   if(row.words.empty())return;
@@ -360,7 +489,8 @@ std::vector<ComposedRow> composeRows(const Document& d,
  };
  for(std::size_t phraseIndex=begin;phraseIndex<end;++phraseIndex){const auto& phrase=phrases[phraseIndex];
   if(!phrase.wordCount){
-   const auto& style=time<phrase.start?d.style.upcoming:time<phrase.end?d.style.current:d.style.spoken;
+   const auto& state=time<phrase.start?d.style.upcoming:time<phrase.end?d.style.current:d.style.spoken;
+   const auto style=styler?styler(state,phraseIndex-begin):state;
    const auto metrics=measure(" ",style);
    require(finite(metrics.ascent)&&finite(metrics.descent)&&metrics.ascent>=0&&metrics.descent>=0&&metrics.ascent<=1e9&&metrics.descent<=1e9,"invalid text metrics");
    row.start=phrase.start;row.end=phrase.end;
@@ -369,7 +499,8 @@ std::vector<ComposedRow> composeRows(const Document& d,
   }
   for(const auto& ref:phrase.wordRefs){const auto& container=d.containers[ref.containerIndex];const auto index=ref.wordIndex;
    const auto& word=container.words[index];const auto state=time<word.start?WordState::Upcoming:time<word.end?WordState::Current:WordState::Spoken;
-   const auto style=state==WordState::Current?d.style.current:state==WordState::Spoken?d.style.spoken:d.style.upcoming;
+   const auto& stateStyle=state==WordState::Current?d.style.current:state==WordState::Spoken?d.style.spoken:d.style.upcoming;
+   const auto style=styler?styler(stateStyle,phraseIndex-begin):stateStyle;
    const auto text=transform?transform(word.text,d.style):displayText(word.text,d.style.titleCase,d.style.letterCase);const auto metrics=measure(text,style);
    require(finite(metrics.width)&&finite(metrics.ascent)&&finite(metrics.descent)&&metrics.width>=0&&metrics.ascent>=0&&metrics.descent>=0&&metrics.width<=1e9&&metrics.ascent<=1e9&&metrics.descent<=1e9,"invalid text metrics");
    const double width=std::max(0.0,metrics.width+style.horizontalPadding()+style.marginLeft+style.marginRight);
@@ -388,7 +519,16 @@ std::vector<ComposedRow> composeRows(const Document& d,
  }
  return rows;
 }
-Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measure,const TransformText& transform,const std::vector<Phrase>& phrases,const RollUpSettings& settings) {
+// One word between two settled placements: geometry and style blend together.
+DrawWord blendRuns(const DrawWord& a,const DrawWord& b,double t,const ResolveWeight& resolve) {
+ if(!(t>0))return a;if(t>=1)return b;
+ auto mix=[t](double x,double y){return x==y?x:x+(y-x)*t;};
+ DrawWord result=t<.5?a:b;
+ result.x=mix(a.x,b.x);result.baseline=mix(a.baseline,b.baseline);result.width=mix(a.width,b.width);result.height=mix(a.height,b.height);
+ result.bubbleExtraWidth=mix(a.bubbleExtraWidth,b.bubbleExtraWidth);result.style=blendWordStyles(a.style,b.style,t,resolve);
+ return result;
+}
+Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measure,const TransformText& transform,const std::vector<Phrase>& phrases,const RollUpSettings& settings,const ResolveWeight& resolveWeight) {
  Frame result;
  if(phrases.empty())return result;
  double streamStart=phrases.front().start,streamEnd=0;for(const auto& phrase:phrases){streamStart=std::min(streamStart,phrase.start);streamEnd=std::max(streamEnd,phrase.end);}
@@ -397,25 +537,46 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
  // Compose history, pauses and upcoming lines together with their source IDs.
  {
   auto rows=composeRows(d,phrases,0,phrases.size(),time,box,measure,transform);
-  double maxAscent=0,maxDescent=0;std::unordered_map<std::string,Metrics> reservedCache;
-  for(const auto& row:rows){
-   if(row.words.empty()){const auto metrics=worstMetrics(" ",d.style,measure);maxAscent=std::max(maxAscent,metrics.ascent);maxDescent=std::max(maxDescent,metrics.descent);}
-   for(const auto& word:row.words){
-    auto found=reservedCache.find(word.text);if(found==reservedCache.end())found=reservedCache.emplace(word.text,worstMetrics(word.text,d.style,measure)).first;
-    maxAscent=std::max(maxAscent,found->second.ascent);maxDescent=std::max(maxDescent,found->second.descent);
+  // One reserved row height from the worst metrics of every word and pause
+  // row in every state, so the window never changes size as words advance.
+  auto reservedHeight=[&](const StateStyles& states){
+   double maxAscent=0,maxDescent=0;std::unordered_map<std::string,Metrics> reservedCache;
+   for(const auto& row:rows){
+    if(row.words.empty()){const auto metrics=worstMetrics(" ",states,measure);maxAscent=std::max(maxAscent,metrics.ascent);maxDescent=std::max(maxDescent,metrics.descent);}
+    for(const auto& word:row.words){
+     auto found=reservedCache.find(word.text);if(found==reservedCache.end())found=reservedCache.emplace(word.text,worstMetrics(word.text,states,measure)).first;
+     maxAscent=std::max(maxAscent,found->second.ascent);maxDescent=std::max(maxDescent,found->second.descent);
+    }
    }
-  }
+   return std::max(1.0,(maxAscent+maxDescent)*d.style.lineHeight);
+  };
   if(rows.empty())return result;
   // Visible lines limits the window, never the authored font size.
   // Preserve typography and constrain the window to physical box capacity.
-  const double rowHeight=std::max(1.0,(maxAscent+maxDescent)*d.style.lineHeight);
-  const auto capacity=static_cast<std::size_t>(std::max(1.0,std::floor(box.height/rowHeight)));
-  const auto lines=std::min(settings.visibleLines,capacity);
+  const double rowHeight=reservedHeight(stateStyles(d.style));
+  // Line position styles give each slot its own reserved height (Line 1 is
+  // the top slot). Without them every slot is rowHeight, the legacy layout.
+  const bool positioned=hasPositionStyles(d.style,settings.visibleLines);
+  std::vector<double> slotTop;std::size_t lines=0;
+  if(!positioned){
+   const auto capacity=static_cast<std::size_t>(std::max(1.0,std::floor(box.height/rowHeight)));
+   lines=std::min(settings.visibleLines,capacity);
+  }else{
+   std::vector<double> heights;
+   for(std::size_t slot=0;slot<settings.visibleLines;++slot){const auto& position=d.style.positions[slot];
+    if(position.empty()){heights.push_back(rowHeight);continue;}
+    const std::array<WordStyle,3> merged{{applyPositionStyle(d.style.upcoming,position),applyPositionStyle(d.style.current,position),applyPositionStyle(d.style.spoken,position)}};
+    heights.push_back(reservedHeight({{&merged[0],&merged[1],&merged[2]}}));
+   }
+   slotTop.push_back(0);
+   for(std::size_t slot=0;slot<heights.size()&&(slot==0||slotTop.back()+heights[slot]<=box.height);++slot)slotTop.push_back(slotTop.back()+heights[slot]);
+   lines=slotTop.size()-1;
+  }
   for(const auto& line:rows)if(line.width>box.width)result.overflow=true;
-  const double viewportHeight=std::min(box.height,lines*rowHeight),viewportTop=box.y+(box.height-viewportHeight)/2;
+  const double viewportHeight=positioned?std::min(box.height,slotTop[lines]):std::min(box.height,lines*rowHeight),viewportTop=box.y+(box.height-viewportHeight)/2;
   result.rolling=true;result.viewport={box.x,viewportTop,box.width,viewportHeight};result.rollUp=settings;
-  result.directionalPaintOutset=directionalPaintOutset(d.style);
-  if(rowHeight>box.height)result.overflow=true;
+  result.directionalPaintOutset=directionalPaintOutset(d.style,positioned?lines:0);
+  if((positioned?slotTop[1]:rowHeight)>box.height)result.overflow=true;
 
   std::vector<double> rowTops(rows.size()+1,0);
   for(std::size_t index=0;index<rows.size();++index)rowTops[index+1]=rowTops[index]+rows[index].advance(d.style.lineHeight);
@@ -459,16 +620,11 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    const double progress=duration>0?rollCurve((time-trigger)/duration,2):(time>=trigger?1:0);
    steps+=progress;
   }
-  // Crossfade neighbouring settled windows for creative transitions. Reusing
-  // the cumulative smooth progress also handles overlapping short-line events
-  // deterministically, without animation state or an unbounded layer stack.
-  using WordId=std::pair<std::string,std::size_t>;
-  auto wordId=[](const DrawWord& word){return WordId{word.containerId,word.wordIndex};};
-  auto paint=[&](double progress,double alpha,double scale,double shiftX,double shiftY,std::map<WordId,DrawWord>* settled=nullptr){
-   if(alpha<=0)return;
+  // Each drawn row at one scroll progress, with its left/top in the frame.
+  using Visit=std::function<void(const ComposedRow&,double left,double top)>;
+  auto legacyRows=[&](double progress,const Visit& visit){
    const double offset=initialOffset+(horizontal?distance*progress:authoredOffset(progress));
    const double legacyOffset=initialOffset+distance*progress;
-   const double centerX=box.x+box.width/2,centerY=viewportTop+viewportHeight/2;
    for(std::size_t index=0;index<rows.size();++index){
     const auto& line=rows[index];
     double left=box.x,top=viewportTop,eligibilityTop=viewportTop;
@@ -483,40 +639,127 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
     // Keep the slot window and capacity, including upcoming rows reserved by
     // currentLine. Active style metrics position rows without adding slots.
     if(left+box.width<=box.x+edgeTolerance||left>=box.x+box.width-edgeTolerance||eligibilityTop+rowHeight<=viewportTop+edgeTolerance||eligibilityTop>=viewportTop+viewportHeight-edgeTolerance)continue;
+    visit(line,left,top);
+   }
+  };
+  // A row restyled for the fractional slot it occupies (0 is Line 1). Between
+  // two slots it blends both slot styles; outside the window it keeps the edge slot's.
+  auto positionedRow=[&](std::size_t index,double slot){
+   const double clamped=std::max(0.0,std::min(double(lines-1),slot));
+   const auto low=static_cast<std::size_t>(std::floor(clamped)),high=std::min(low+1,lines-1);const double t=clamped-double(low);
+   const auto& from=d.style.positions[low];const auto& to=d.style.positions[high];
+   const RowStyler styler=[&](const WordStyle& state,std::size_t){
+    auto style=applyPositionStyle(state,from);
+    return t>0&&high!=low?blendWordStyles(style,applyPositionStyle(state,to),t,resolveWeight):style;
+   };
+   auto composed=composeRows(d,phrases,index,index+1,time,box,measure,transform,0,styler);
+   if(composed.front().width>box.width)result.overflow=true;
+   return std::move(composed.front());
+  };
+  // Fractional slot to its top: inside the window it follows the slot heights;
+  // beyond either edge it continues at that edge slot's height.
+  auto slotY=[&](double slot){
+   const auto index=static_cast<std::size_t>(std::max(0.0,std::min(double(lines-1),std::floor(slot))));
+   return slotTop[index]+(slot-double(index))*(slotTop[index+1]-slotTop[index]);
+  };
+  auto positionedRows=[&](double progress,const Visit& visit){
+   const auto count=rows.size();
+   if(horizontal){
+    // Pages slide sideways whole; a row keeps the slot it has in its page.
+    const double offset=distance*progress;
+    const auto page=static_cast<std::size_t>(std::max(0.0,std::floor(progress)));
+    for(std::size_t block=page>0?page-1:0;block<=page+1&&block*lines<count;++block){
+     const double shift=block*box.width-offset,left=box.x+(settings.direction==3?shift:-shift);
+     const double edgeTolerance=std::numeric_limits<double>::epsilon()*64*std::max({1.0,std::abs(viewportTop),std::abs(left),box.width,viewportHeight});
+     if(left+box.width<=box.x+edgeTolerance||left>=box.x+box.width-edgeTolerance)continue;
+     double top=viewportTop;
+     for(std::size_t index=block*lines;index<std::min(count,(block+1)*lines);++index){
+      const auto row=positionedRow(index,double(index%lines));visit(row,left,top);top+=row.advance(d.style.lineHeight);
+     }
+    }
+    return;
+   }
+   // The anchor row sits in the current-line slot once its scroll settles;
+   // its neighbours stack on it by their own restyled advances, so spacing
+   // follows each slot and changes smoothly while a row moves between slots.
+   const bool up=settings.direction==1;
+   const double anchorSlot=double(up?lines-lead:lead-1);
+   auto slotOf=[&](std::size_t index){return up?anchorSlot+double(index)-progress:anchorSlot-double(index)+progress;};
+   auto drawn=[&](std::size_t index){const double slot=slotOf(index);return slot>-1+1e-9&&slot<double(lines)-1e-9;};
+   const auto anchor=progress<0?0:std::min(static_cast<std::size_t>(std::floor(progress)),count-1);
+   const double fraction=progress-double(anchor);
+   std::size_t first=anchor,last=anchor;
+   while(first>0&&drawn(first-1))--first;
+   while(last+1<count&&drawn(last+1))++last;
+   const auto next=std::min(anchor+1,count-1);
+   if(!up)last=std::max(last,next);
+   std::vector<ComposedRow> composed;composed.reserve(last-first+1);
+   for(auto index=first;index<=last;++index)composed.push_back(positionedRow(index,slotOf(index)));
+   auto advance=[&](std::size_t index){return composed[index-first].advance(d.style.lineHeight);};
+   std::vector<double> tops(composed.size());auto& anchorTop=tops[anchor-first];
+   if(up){
+    anchorTop=progress<0?slotY(anchorSlot-progress):slotTop[lines-lead]-fraction*advance(anchor);
+    for(auto index=anchor+1;index<=last;++index)tops[index-first]=tops[index-1-first]+advance(index-1);
+    for(auto index=anchor;index>first;--index)tops[index-1-first]=tops[index-first]-advance(index-1);
+   }else{
+    anchorTop=progress<0?slotY(anchorSlot+progress):slotTop[lead-1]+fraction*advance(next);
+    for(auto index=anchor+1;index<=last;++index)tops[index-first]=tops[index-1-first]-advance(index);
+    for(auto index=anchor;index>first;--index)tops[index-1-first]=tops[index-first]+advance(index);
+   }
+   for(auto index=first;index<=last;++index)if(drawn(index))visit(composed[index-first],box.x,viewportTop+tops[index-first]);
+  };
+  // Crossfade neighbouring settled windows for creative transitions. Reusing
+  // the cumulative smooth progress also handles overlapping short-line events
+  // deterministically, without animation state or an unbounded layer stack.
+  using WordId=std::pair<std::string,std::size_t>;
+  auto wordId=[](const DrawWord& word){return WordId{word.containerId,word.wordIndex};};
+  // Authored (pre-fade) opacity of every pushed run, index-aligned with result.words.
+  std::vector<double> authoredOpacity;
+  auto paint=[&](double progress,double alpha,double scale,double shiftX,double shiftY,std::map<WordId,DrawWord>* settled=nullptr){
+   if(alpha<=0)return;
+   const double centerX=box.x+box.width/2,centerY=viewportTop+viewportHeight/2;
+   const Visit visit=[&](const ComposedRow& line,double left,double top){
     for(const auto& composed:line.words){
      auto run=composed;run.x+=left;run.baseline+=top;
      const double x=run.x,baseline=run.baseline;
      if(settled)settled->emplace(wordId(run),run);
+     authoredOpacity.push_back(run.style.opacity);
      run.style.opacity*=alpha;
      run.style.fontSize*=scale;run.style.padding*=scale;if(run.style.bubblePaddingInline>=0)run.style.bubblePaddingInline*=scale;if(run.style.bubblePaddingBlock>=0)run.style.bubblePaddingBlock*=scale;run.style.scaleGeometry(scale,scale);run.style.radius*=scale;run.style.outlineWidth*=scale;run.style.shadowBlur*=scale;run.style.shadowX*=scale;run.style.shadowY*=scale;
      run.x=centerX+(x-centerX)*scale+shiftX;run.baseline=centerY+(baseline-centerY)*scale+shiftY;run.width*=scale;run.height*=scale;run.bubbleExtraWidth*=scale;
      result.words.push_back(std::move(run));
     }
-   }
+   };
+   if(positioned)positionedRows(progress,visit);else legacyRows(progress,visit);
   };
   if(settings.transition==1)paint(steps,1,1,0,0);
   else{
    if(std::abs(steps-std::round(steps))<1e-9)steps=std::round(steps);
    const double previous=std::floor(steps),progress=steps-previous;
    const double beforeOffset=previous,afterOffset=previous+1;
-   const auto firstLayer=result.words.size();std::map<WordId,DrawWord> settledIncoming;
+   const auto firstLayer=result.words.size();std::map<WordId,DrawWord> settledIncoming,settledOutgoing;
+   auto* outgoing=positioned?&settledOutgoing:nullptr;
    std::size_t secondLayer=firstLayer;
-   if(settings.transition==2){paint(beforeOffset,1-progress,1,0,0);secondLayer=result.words.size();paint(afterOffset,progress,1,0,0,&settledIncoming);}
+   if(settings.transition==2){paint(beforeOffset,1-progress,1,0,0,outgoing);secondLayer=result.words.size();paint(afterOffset,progress,1,0,0,&settledIncoming);}
    else if(settings.transition==3){
     const double extent=horizontal?box.width:viewportHeight;
     const double sign=settings.direction==1||settings.direction==3?-1:1;
-    paint(beforeOffset,1-progress,1,horizontal?sign*progress*extent:0,horizontal?0:sign*progress*extent);
+    paint(beforeOffset,1-progress,1,horizontal?sign*progress*extent:0,horizontal?0:sign*progress*extent,outgoing);
     secondLayer=result.words.size();paint(afterOffset,progress,1,horizontal?-sign*(1-progress)*extent:0,horizontal?0:-sign*(1-progress)*extent,&settledIncoming);
-   }else{paint(beforeOffset,1-progress,1-.15*progress,0,0);secondLayer=result.words.size();paint(afterOffset,progress,.8+.2*progress,0,0,&settledIncoming);}
+   }else{paint(beforeOffset,1-progress,1-.15*progress,0,0,outgoing);secondLayer=result.words.size();paint(afterOffset,progress,.8+.2*progress,0,0,&settledIncoming);}
    // History shared by both settled windows is one unchanged word, not two
    // crossfading copies. Keep it once at the incoming settled position. The
    // currently spoken word retains its authored opacity even while entering;
    // creative motion/scale is retained for genuinely incoming-only words.
+   // With line position styles the shared word instead glides from its
+   // outgoing to its incoming settled slot, blending both slot styles.
    std::set<WordId> outgoingIds;
    for(auto index=firstLayer;index<secondLayer;++index)outgoingIds.insert(wordId(result.words[index]));
    std::vector<DrawWord> merged;merged.reserve(result.words.size()-firstLayer);
-   for(auto index=firstLayer;index<secondLayer;++index){auto& run=result.words[index];if(settledIncoming.find(wordId(run))!=settledIncoming.end())continue;if(run.state==WordState::Current)run.style.opacity=d.style.current.opacity;merged.push_back(std::move(run));}
-   for(auto index=secondLayer;index<result.words.size();++index){auto& run=result.words[index];if(outgoingIds.find(wordId(run))!=outgoingIds.end())run=settledIncoming.at(wordId(run));else if(run.state==WordState::Current)run.style.opacity=d.style.current.opacity;merged.push_back(std::move(run));}
+   for(auto index=firstLayer;index<secondLayer;++index){auto& run=result.words[index];if(settledIncoming.find(wordId(run))!=settledIncoming.end())continue;if(run.state==WordState::Current)run.style.opacity=authoredOpacity[index];merged.push_back(std::move(run));}
+   for(auto index=secondLayer;index<result.words.size();++index){auto& run=result.words[index];
+    if(outgoingIds.find(wordId(run))!=outgoingIds.end()){const auto id=wordId(run);run=settledIncoming.at(id);if(positioned)run=blendRuns(settledOutgoing.at(id),run,progress,resolveWeight);}
+    else if(run.state==WordState::Current)run.style.opacity=authoredOpacity[index];merged.push_back(std::move(run));}
    result.words.resize(firstLayer);for(auto& run:merged)result.words.push_back(std::move(run));
   }
  }return result;
@@ -556,30 +799,36 @@ double rollUpAlpha(double x,double y,const Frame& frame) {
  const double strength=rollCurve(feather>0?1-(position-start)/feather:(position<=start?1:0),settings.transitionCurve);
  return 1-settings.fadeAmount*strength;
 }
-Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measureInput,std::size_t maxChars,double pause,const TransformText& transform,std::size_t groupsPerPage,const RollUpSettings& rollUp) {
+Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measureInput,std::size_t maxChars,double pause,const TransformText& transform,std::size_t groupsPerPage,const RollUpSettings& rollUp,const ResolveWeight& resolveInput) {
  require(finite(time),"invalid time");require(finite(box.x)&&finite(box.y)&&finite(box.width)&&finite(box.height)&&box.width>0&&box.height>0,"invalid layout box");require(bool(measureInput),"missing text measurer");
  require(std::abs(box.x)<=1e7&&std::abs(box.y)<=1e7&&box.width<=1e7&&box.height<=1e7,"layout geometry exceeds bounds");
  require(box.alignment>=1&&box.alignment<=3,"invalid text alignment");
  require(groupsPerPage>=1&&groupsPerPage<=kMaxGroupsPerPage,"invalid groups per page");
  require(maxChars>=1&&maxChars<=500,"invalid character count");
  validateRollUp(rollUp);
- std::array<std::unordered_map<std::string,Metrics>,3> metricsCache;
- const std::array<const WordStyle*,3> styles{{&d.style.upcoming,&d.style.current,&d.style.spoken}};
+ // One shaped metric read per distinct font and text in a render. Line
+ // position styles add fonts; blends between slots add in-between sizes.
+ struct FontMetrics { WordStyle font; std::unordered_map<std::string,Metrics> metrics; };
+ std::vector<FontMetrics> metricsCache;
  const MeasureText measure=[&](const std::string& text,const WordStyle& style){
-  for(std::size_t index=0;index<styles.size();++index){const auto& candidate=*styles[index];
-   if(style.fontFamily!=candidate.fontFamily||style.fontSize!=candidate.fontSize||style.sizeScale!=candidate.sizeScale||style.fontWeight!=candidate.fontWeight||style.italic!=candidate.italic||style.fontWeightOffset!=candidate.fontWeightOffset)continue;
-   auto found=metricsCache[index].find(text);if(found==metricsCache[index].end())found=metricsCache[index].emplace(text,measureInput(text,style)).first;return found->second;
-  }return measureInput(text,style);
+  auto entry=std::find_if(metricsCache.begin(),metricsCache.end(),[&](const FontMetrics& candidate){const auto& f=candidate.font;
+   return style.fontSize==f.fontSize&&style.sizeScale==f.sizeScale&&style.fontWeight==f.fontWeight&&style.italic==f.italic&&style.fontWeightOffset==f.fontWeightOffset&&style.fontFamily==f.fontFamily;});
+  if(entry==metricsCache.end())entry=metricsCache.insert(metricsCache.end(),FontMetrics{style,{}});
+  auto found=entry->metrics.find(text);if(found==entry->metrics.end())found=entry->metrics.emplace(text,measureInput(text,style)).first;return found->second;
  };
  Frame result;auto phrases=regroup(d,maxChars,pause);
  phrases=withSilenceRows(d,phrases,pause,rollUp);
- if(rollUp.enabled)return rollingFrame(d,time,box,measure,transform,phrases,rollUp);
+ const ResolveWeight resolveWeight=resolveInput?resolveInput:ResolveWeight([&](const WordStyle& style){return nominalWeight(style,d.style.baseFontWeight);});
+ if(rollUp.enabled)return rollingFrame(d,time,box,measure,transform,phrases,rollUp,resolveWeight);
+ // On a page, a line position is the row within the page (Line 1 on top).
+ RowStyler pageStyler;
+ if(hasPositionStyles(d.style,groupsPerPage))pageStyler=[&](const WordStyle& state,std::size_t row){return row<d.style.positions.size()?applyPositionStyle(state,d.style.positions[row]):state;};
  for(std::size_t first=0;first<phrases.size();){
   std::size_t last=first+1;double pageEnd=phrases[first].end;
   while(last<phrases.size()&&last-first<groupsPerPage){pageEnd=std::max(pageEnd,phrases[last].end);++last;}
   const auto begin=first;first=last;
   if(time<phrases[begin].start||time>=pageEnd)continue;
-  const auto rows=composeRows(d,phrases,begin,last,time,box,measure,transform,box.x);double y=box.y;
+  const auto rows=composeRows(d,phrases,begin,last,time,box,measure,transform,box.x,pageStyler);double y=box.y;
   for(const auto& row:rows){
    const double height=row.ascent+row.descent;
    if(row.width>box.width||y+height>box.y+box.height||y+row.ascent-row.paintAscent<box.y||y+row.ascent+row.paintDescent>box.y+box.height)result.overflow=true;

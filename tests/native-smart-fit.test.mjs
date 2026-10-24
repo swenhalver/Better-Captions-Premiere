@@ -6,6 +6,7 @@ import { DEFAULT_STYLE } from '../webview-ui/src/lib/types.ts';
 import { resolveAppearance } from '../webview-ui/src/lib/appearance.ts';
 import { defaultNativeStyle, NATIVE_EFFECT_MATCH_NAME } from '../webview-ui/src/lib/native-effect/contract.ts';
 import { encodeNativeTransportText } from '../webview-ui/src/lib/native-effect/encode.ts';
+import { confirmLineControls } from '../webview-ui/src/lib/native-effect/line-controls.ts';
 const appearances=()=>['upcomingWord','activeWord','spokenWord'].map(key=>({...resolveAppearance(DEFAULT_STYLE,key),fontSize:10,bubble:false,padding:8}));
 function caption(text,id='one'){const words=text.split(' ').map((text,i)=>({text,startTime:i,endTime:i+.5,isActive:false,endOfSentence:false}));return{id,text,words,startTime:0,endTime:words.at(-1).endTime};}
 const rows=caption=>caption.renderSegments.map(s=>s.words.map(w=>w.text));
@@ -96,4 +97,62 @@ test('background visibility never changes line fit capacity with asymmetric padd
  const input=[caption('one two three four five six')],options={width:170,wordSpacing:12,appearances:states},measure=text=>text.length*7;
  const capacity=smartFitCharacterCapacity(input,options,measure);
  for(let mask=1;mask<8;mask++){states.forEach((state,i)=>state.bubble=!!(mask&(1<<i)));assert.equal(smartFitCharacterCapacity(input,options,measure),capacity);}
+});
+
+test('smaller fonts on all active positions increase fitted characters without inactive or unpositioned fonts', () => {
+ const { session, binding } = bound();
+ binding.clip.lineFitWidth = 200;
+ const measure = (text, state) => text.length * state.fontSize;
+ const plain = nativeLineFitCharacterCapacity(binding, session, measure, 2);
+ session.style.lineStyles = { '1': { fontSize: 4 }, '2': { fontSize: 6 }, '8': { fontSize: 400 } };
+ const small = nativeLineFitCharacterCapacity(binding, session, measure, 2);
+ assert.ok(small > plain, `${small} characters with smaller active fonts must exceed ${plain}`);
+ assert.equal(nativeLineFitCharacterCapacity(binding, session, measure, 3), plain, 'an unstyled active position inherits the larger state font');
+ assert.ok(nativeLineFitCharacterCapacity(binding, session, measure, 8) < plain, 'the large stored position only matters when active');
+});
+
+test('fit candidates are active positions crossed with each resolved state, with position fields taking precedence', () => {
+ const { session, binding } = bound();
+ session.style.upcomingWord.fontSize = 10;
+ session.style.activeWord.fontSize = 20;
+ session.style.spokenWord.fontSize = 30;
+ session.style.activeWord.italic = true;
+ session.style.lineStyles = {
+  '1': { fontSize: 4, paddingLeft: 0, italic: false },
+  '2': { fontFamily: 'Georgia', paddingRight: 3, marginRight: -1 },
+ };
+ binding.clip.lineFitFontScale = 1.5;
+ binding.clip.lineFitStates = {
+  upcoming: { sizeScale: 1, paddingScale: 1, bubbleMode: 1 },
+  current: { sizeScale: 2, paddingScale: 2, bubbleMode: 2 },
+  spoken: { sizeScale: 3, paddingScale: .5, bubbleMode: 1 },
+ };
+ const before = structuredClone(session), seen = [];
+ nativeLineFitCharacterCapacity(binding, session, (_text, s) => {
+  seen.push([s.fontSize, s.paddingLeft, s.paddingRight, s.italic, s.fontFamily, s.marginRight]);
+  return s.fontSize;
+ }, 2);
+ const family = resolveAppearance(session.style, 'upcomingWord').fontFamily;
+ const expected = [
+  [6, 0, 8, false, family, 0], [6, 0, 16, false, family, 0], [6, 0, 4, false, family, 0],
+  [15, 8, 3, false, 'Georgia', -1], [60, 16, 3, true, 'Georgia', -1], [135, 4, 3, false, 'Georgia', -1],
+ ];
+ assert.deepEqual(seen.slice(0, 6), expected);
+ assert.equal(seen.length, session.captions[0].words.length * 6, 'exactly three state candidates per active position');
+ assert.deepEqual(session, before, 'measuring resolved positions never changes saved styles');
+});
+
+test('transient control reads preserve the active fit count; unknown counts never measure hidden positions', () => {
+ const { session, binding } = bound();
+ session.style.lineStyles = { '1': { fontSize: 4 }, '2': { fontSize: 4 }, '8': { fontSize: 400 } };
+ const measure = (text, s) => text.length * s.fontSize;
+ const confirmed = confirmLineControls({ clipKey: null, count: null }, 'clip', { rollUp: { value: 1 }, rollUpLines: { value: 2 } });
+ const capacity = nativeLineFitCharacterCapacity(binding, session, measure, confirmed.count);
+ const refreshed = confirmLineControls(confirmed, 'clip', null);
+ assert.equal(refreshed.count, 2);
+ assert.equal(nativeLineFitCharacterCapacity(binding, session, measure, refreshed.count), capacity);
+ const changed = confirmLineControls(refreshed, 'other-clip', null);
+ for (const count of [changed.count, 0]) {
+  assert.equal(nativeLineFitCharacterCapacity(binding, session, () => assert.fail('unconfirmed slots must not be measured'), count), null);
+ }
 });

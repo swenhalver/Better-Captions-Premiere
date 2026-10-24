@@ -7,6 +7,11 @@
 
 namespace better_captions {
 constexpr std::uint32_t kSchemaVersion = 11;
+// BCAP v12 appends line position styles. Only documents that have one are
+// written as v12; all others keep kSchemaVersion bytes. Renumber here only.
+constexpr std::uint32_t kPositionStylesVersion = 12;
+constexpr std::uint32_t kMaxWireVersion = kPositionStylesVersion;
+constexpr std::size_t kMaxLinePositions = 8;
 constexpr std::size_t kMaxWords = 100000;
 constexpr std::size_t kMaxDocumentBytes = 16 * 1024 * 1024;
 constexpr std::size_t kMaxGroupsPerPage = 100;
@@ -50,7 +55,41 @@ struct WordStyle {
 // Balance keeps Fill's line count with even lengths; Pretty is Fill unless the
 // last line is short or a single word, then the last two lines are split again.
 enum class LineWrap : std::uint32_t { Fill=0,Balance=1,Pretty=2 };
-struct Style { WordStyle upcoming,current,spoken; double wordSpacing=12,lineHeight=1.3; bool titleCase=false; double baseFontWeight=0; int letterCase=0; LineWrap lineWrap=LineWrap::Fill; }; // letterCase 0 legacy/as typed/title, 1 upper, 2 lower
+// One slot of the visible caption window, in screen order: Line 1 is the top
+// line. A line takes its slot's overrides on top of each word's
+// Past/Current/Next style while it sits there. Only flagged fields apply.
+enum PositionField : std::uint32_t {
+ PositionFontFamily=1u<<0,PositionWeight=1u<<1,PositionItalic=1u<<2,PositionUnderline=1u<<3,PositionFontSize=1u<<4,
+ PositionColor=1u<<5,PositionOpacity=1u<<6,PositionBubble=1u<<7,PositionBubbleFillSpaces=1u<<8,PositionBubbleColor=1u<<9,PositionBubbleOpacity=1u<<10,
+ PositionPaddingTop=1u<<11,PositionPaddingRight=1u<<12,PositionPaddingBottom=1u<<13,PositionPaddingLeft=1u<<14,
+ PositionRadiusTL=1u<<15,PositionRadiusTR=1u<<16,PositionRadiusBR=1u<<17,PositionRadiusBL=1u<<18,
+ PositionMarginTop=1u<<19,PositionMarginRight=1u<<20,PositionMarginBottom=1u<<21,PositionMarginLeft=1u<<22,
+ PositionOutlineWidth=1u<<23,PositionOutlineColor=1u<<24,PositionOutlineOpacity=1u<<25,
+ PositionShadowBlur=1u<<26,PositionShadowX=1u<<27,PositionShadowY=1u<<28,PositionShadowColor=1u<<29,PositionShadowOpacity=1u<<30,
+};
+constexpr std::uint32_t kPositionFieldMask=(1u<<31)-1;
+// fontSize is the effective size (sizeScale 1). Colors set RGB only; their
+// alpha is the separate *Opacity field. Italic/underline are explicit 0/1.
+struct PositionStyle { std::uint32_t fields=0; WordStyle value; bool empty()const{return fields==0;} };
+struct Style { WordStyle upcoming,current,spoken; double wordSpacing=12,lineHeight=1.3; bool titleCase=false; double baseFontWeight=0; int letterCase=0; LineWrap lineWrap=LineWrap::Fill; // 0 legacy/as typed/title, 1 upper, 2 lower
+ // Index 0 is Line 1. Slots beyond Visible lines are kept but unused.
+ std::array<PositionStyle,kMaxLinePositions> positions{};
+};
+bool hasPositionStyles(const Style&,std::size_t lines=kMaxLinePositions);
+// Precedence: a position's set fields win over the word's state style.
+WordStyle applyPositionStyle(const WordStyle& state,const PositionStyle& position);
+// The weight a style actually renders with: its absolute weight, or the
+// document base weight plus its relative step, resolved against the faces the
+// font engine has. Hosts supply their engine's resolution; nominalWeight is
+// the fallback without one (base or 400, a relative step adding 100).
+using ResolveWeight=std::function<double(const WordStyle&)>;
+double nominalWeight(const WordStyle&,double baseWeight);
+// A line moving between slots blends both slot styles. t<=0 returns a and
+// t>=1 returns b exactly. Numbers and colors interpolate; a background or
+// font choice switches halfway, a background fading in from zero alpha.
+// Weights in one family interpolate between their resolved weights, so a
+// relative bold step blends numerically too.
+WordStyle blendWordStyles(const WordStyle& a,const WordStyle& b,double t,const ResolveWeight& resolve={});
 struct CaptionContainer { std::string id; bool manualSplit=false; std::vector<Word> words; };
 struct Document { std::uint32_t schemaVersion=kSchemaVersion; std::vector<CaptionContainer> containers; Style style; double timeOriginSeconds=0; };
 struct WordRef { std::size_t containerIndex=0,wordIndex=0; };
@@ -139,7 +178,9 @@ double rollUpAlpha(double x,double y,const Frame&);
 // Consecutive phrase groups share one page; every group starts a new line.
 // Pages consume consecutive lines across storage containers. Source documents
 // and word times stay unchanged; pause lines occupy ordinary line slots.
+// resolveWeight resolves weights for blends between line position styles;
+// without it nominalWeight with the document base weight is used.
 Frame layoutFrame(const Document&, double time, const LayoutBox&, const MeasureText&,
                   std::size_t maxChars=56,double pauseSeconds=0.6,const TransformText& transform={},
-                  std::size_t groupsPerPage=1,const RollUpSettings& rollUp={});
+                  std::size_t groupsPerPage=1,const RollUpSettings& rollUp={},const ResolveWeight& resolveWeight={});
 } // namespace better_captions

@@ -9,6 +9,7 @@
   import { connectionKey, reconnectLegacyCaptions, chooseNativeCaptionConnection, sameSequenceId, type CaptionConnections } from "./lib/clip-connections";
   import { rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate, deriveNativePanelPhrases, nativeLineFitCharacterCapacity, nativeDocumentWriteSnapshot } from "./lib/native-effect/panel";
   import { extendNativeCaptions } from "./lib/native-effect/extension-workflow";
+  import { confirmLineControls, confirmedLineScope, type ConfirmedLineControls } from './lib/native-effect/line-controls';
   import NativeEffectControls from './components/NativeEffectControls.svelte';
   import NativePauseLineControl from './components/NativePauseLineControl.svelte';
   import NativeRollUpControls from './components/NativeRollUpControls.svelte';
@@ -29,7 +30,7 @@
   import PanelTabs from "./components/PanelTabs.svelte";
   import SequenceStatus from "./components/SequenceStatus.svelte";
   import TranscriptPreview from "./components/TranscriptPreview.svelte";
-  import TextStyleToolbar from "./components/TextStyleToolbar.svelte";
+  import TextStyleToolbar, { type TextStyleScope } from "./components/TextStyleToolbar.svelte";
   import { registerFontCatalog, type InstalledFont } from './lib/font-catalog.ts';
   import AnimationPanel from "./components/AnimationPanel.svelte";
   import StylePresets from "./components/StylePresets.svelte";
@@ -38,7 +39,7 @@
 
   const { api } = initWebview(webviewAPI);
   let activeTab = $state("transcript");
-  let wordState = $state<'all' | 'spoken' | 'current' | 'upcoming'>("all");
+  let wordState = $state<TextStyleScope>("all");
   let selectedWord = $state(0);
   let contentEl: HTMLDivElement | undefined = $state();
   async function changeWorkspace(value: string) { activeTab = value; selectionHint = null; await tick(); if (contentEl) contentEl.scrollTop = 0; }
@@ -62,6 +63,13 @@
   let transcriptDraftActive = $state(false);
   let nativeGeometryInteracting = $state(false);
   let pauseControls = $state.raw<{blankLineSeconds:number;visibleLines:number}|null>(null);
+  // Line positions offered as style scopes: Visible lines while scrolling, lines per page otherwise.
+  let lineControls = $state.raw<ConfirmedLineControls>({clipKey:null,count:null});
+  function noteLineControls(controls:{rollUp?:{value:unknown};rollUpLines?:{value:unknown};groups?:{value:unknown}}|null){
+    const next=confirmLineControls(lineControls,lineClipKey,controls);
+    wordState=confirmedLineScope(wordState,lineControls,next);
+    lineControls=next;
+  }
   let timelineBusy = $state(false);
   let exportBusy = $state(false);
   let areaBusy = $state(false);
@@ -86,7 +94,10 @@
   let reconnect: ReturnType<typeof startCaptionReconnect> | null = null;
   let nativeBinding = $state.raw<ReturnType<typeof rehydrateNativePanel>['binding'] | null>(null);
   let pauseSettings = $derived(nativeBinding ? pauseControls : null);
-  const lineFitCapacity=$derived.by(()=>{const session=sessionManager.current;return nativeBinding&&session?nativeLineFitCharacterCapacity(nativeBinding,session):null;});
+  const lineClipKey = $derived(nativeBinding ? JSON.stringify([nativeBinding.snapshot.locator.projectPath,nativeBinding.snapshot.locator.sequenceId,nativeBinding.snapshot.locator.clipNodeId]) : null);
+  const lineCount = $derived(lineControls.clipKey===lineClipKey ? lineControls.count??0 : 0);
+  $effect(() => { noteLineControls(null); });
+  const lineFitCapacity=$derived.by(()=>{const session=sessionManager.current;return nativeBinding&&session?nativeLineFitCharacterCapacity(nativeBinding,session,undefined,lineCount):null;});
   let connectionStatus = $state("");
   let connectionRevision = "";
   let lastDocumentRead = 0;
@@ -598,7 +609,7 @@
     if(editsLocked||isSyncing||isRefreshing||session.isLoading){error='Wait for the current caption operation to finish.';return;}
     if(!session.nativeClipId||!binding){error='Smart line fit measures the native caption layer. Connect or create one first.';return;}
     if(binding.clip.maxChars===undefined){error='The character limit is animated in Effect Controls. Remove its keyframes to use Smart line fit.';return;}
-    const capacity=nativeLineFitCharacterCapacity(binding,session);
+    const capacity=nativeLineFitCharacterCapacity(binding,session,undefined,lineCount);
     if(capacity===null){error='Smart line fit measurement is unavailable in this editor.';return;}
     error='';
     changeCharacterLimit(capacity, 'Smart line fit');
@@ -1209,7 +1220,7 @@
         <div id="workspace-panel-transcript" role="tabpanel" aria-labelledby="workspace-tab-transcript" tabindex="0" hidden={activeTab !== "transcript"}>
           {#if session.isLoading}<div class="caption-app__loading" role="status"><p>Transcribing in Premiere…</p><p class="caption-help">Timed words will appear here when Premiere finishes.</p><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div></div>{/if}
           {#if transcriptionBackup && transcriptionBackup.sequenceId === session.sequenceId}<div class="caption-app__backup"><button class="caption-button" onclick={restoreTranscription} disabled={session.captions.some((caption) => caption.clipNodeId)}>Restore previous transcription</button></div>{/if}
-          {#snippet nativeGrouping()}{#if session.nativeClipId && nativeBinding}<NativePauseLineControl onControlsChange={controls=>{const seconds=controls?.rollUpBlankLineSeconds?.value,lines=controls?.rollUpLines?.value;pauseControls=typeof seconds==='number'&&typeof lines==='number'?{blankLineSeconds:seconds,visibleLines:lines}:null;}} onInteracting={active=>{nativeGeometryInteracting=active;if(!active){reconnect?.notify();liveOutput?.notify();}}} snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} currentTime={session.currentTime} visible={activeTab==='transcript'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}{/snippet}
+          {#snippet nativeGrouping()}{#if session.nativeClipId && nativeBinding}<NativePauseLineControl onControlsChange={controls=>{const seconds=controls?.rollUpBlankLineSeconds?.value,lines=controls?.rollUpLines?.value;pauseControls=typeof seconds==='number'&&typeof lines==='number'?{blankLineSeconds:seconds,visibleLines:lines}:null;noteLineControls(controls);}} onInteracting={active=>{nativeGeometryInteracting=active;if(!active){reconnect?.notify();liveOutput?.notify();}}} snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} currentTime={session.currentTime} visible={activeTab==='transcript'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}{/snippet}
           <TranscriptPreview {pauseSettings} {nativeGrouping} {lineFitCapacity} typing={session.nativeClipId && nativeBinding && !api.isDemo ? transcriptTyping : null} onEditingChange={(active)=>transcriptDraftActive=active} onSmartLineFit={fitCharacterLimit} onCharacterLimitGesture={setCharacterLimitGesture} frameRate={session.frameRate} {selectedWord} onSelectWord={(index) => selectedWord = index} sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxChars={session.style.maxChars} lineWrap={session.nativeClipId && nativeBinding ? session.style.lineWrap ?? 'fill' : null} onLineWrapChange={changeLineWrap} groupingDisabled={!!session.nativeClipId && nativeBinding?.clip.maxChars === undefined} {selectedId} onSelect={(id) => { selectedId = id; selectedWord = 0; }} onSeek={seekCaption} onMaxCharsChange={changeCharacterLimit} onUpdate={(captions,label)=>updateCaptions(captions,true,label)} onShowInPremiere={seekCaption} isDemo={api.isDemo} disabled={editsLocked || isRefreshing || isSyncing || session.isLoading} />
         </div>
         <div id="workspace-panel-style" role="tabpanel" aria-labelledby="workspace-tab-style" tabindex="0" hidden={activeTab !== "style"}>
@@ -1217,8 +1228,8 @@
             <StylePresets nativeMode={!!session.nativeClipId} style={session.style} animation={session.animation} load={api.loadStylePresets} save={api.saveStylePresets} onApply={applyStylePreset} isDemo={api.isDemo} disabled={editsLocked || isRefreshing || isSyncing || session.isLoading} />
           {/key}
           {#snippet nativeAlignment()}{#if session.nativeClipId && nativeBinding}<NativeAlignmentControls snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}{/snippet}
-          {#snippet nativeLayout()}{#if session.nativeClipId && nativeBinding}<NativeEffectControls onInteracting={active=>{nativeGeometryInteracting=active;if(!active){reconnect?.notify();liveOutput?.notify();}}} snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}{/snippet}
-          <TextStyleToolbar style={session.style} {fonts} {fontCatalog} {fontsLoading} {fontsError} onRefreshFonts={() => { void refreshFonts(); }} scope={wordState} nativeMode={!!session.nativeClipId} {nativeLayout} {nativeAlignment} onScopeChange={changeWordState} onUpdate={handleStyle} />
+          {#snippet nativeLayout()}{#if session.nativeClipId && nativeBinding}<NativeEffectControls onControlsChange={noteLineControls} onInteracting={active=>{nativeGeometryInteracting=active;if(!active){reconnect?.notify();liveOutput?.notify();}}} snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}{/snippet}
+          <TextStyleToolbar style={session.style} {fonts} {fontCatalog} {fontsLoading} {fontsError} onRefreshFonts={() => { void refreshFonts(); }} scope={wordState} nativeMode={!!session.nativeClipId} {lineCount} {nativeLayout} {nativeAlignment} onScopeChange={changeWordState} onUpdate={handleStyle} />
           {#if session.nativeClipId && nativeBinding}<NativeRollUpControls snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}
           {#if selected && !session.nativeClipId}
             <TextAreaControls caption={selected} sequenceId={session.sequenceId} frameRate={session.frameRate} frameWidth={session.frameWidth} frameHeight={session.frameHeight} currentTime={session.currentTime} refreshRevision={areaControlRevision} visible={activeTab==='style'&&hostPanelVisible&&documentVisible} disabled={exportBusy||agentAreaBusy||isRefreshing||isSyncing||session.isLoading} isDemo={api.isDemo} read={api.readCaptionArea} edit={api.editCaptionArea} getCurrentTime={async()=>{if(api.isDemo)return session.currentTime;const info=await api.getActiveSequenceInfo();if(!info||info.id!==session.sequenceId)throw new Error("The active sequence changed. Refresh Position & size before editing.");return info.playhead??session.currentTime;}} onSeek={async(time)=>{const result=!api.isDemo?await api.showInPremiere(time,session.sequenceId):null;if(sessionManager.current?.sequenceId!==session.sequenceId)throw new Error("The active sequence changed while seeking.");sessionManager.setCurrentTime(typeof result?.time==='number'?result.time:time);}} onSelect={selectSelectedCaption} onBusy={setAreaBusy} onChanged={areaChanged}/>

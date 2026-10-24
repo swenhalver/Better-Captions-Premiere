@@ -49,6 +49,20 @@ test('native creation keeps upper/lower display modes separate from source words
  }
 });
 
+test('native creation carries every wrap mode with and without position overrides', () => {
+ for (const mode of ['fill', 'balance', 'pretty']) for (const positions of [undefined, { '1': { marginTop: 12 }, '4': { color: '#ff0000', fontWeightOffset: 100 } }]) {
+  const input = session(); input.style.lineWrap = mode;
+  if (positions) input.style.lineStyles = structuredClone(positions);
+  const before = structuredClone(input), plan = prepareNativeCreation(input, 16);
+  const decoded = decodeNativePanelDocument(plan.documentText, sequenceId);
+  assert.equal(Buffer.from(plan.documentText.slice(7), 'hex').readUInt32LE(4), positions ? 12 : 11);
+  assert.equal(plan.document.binaryVersion, positions ? 12 : 11);
+  assert.equal(decoded.style.lineWrap ?? 'fill', mode);
+  assert.deepEqual(decoded.style.lineStyles, positions ? { '1': { marginTop: 12 }, '4': { color: { r: 1, g: 0, b: 0 }, fontWeight: 0, fontWeightOffset: 100 } } : undefined);
+  assert.deepEqual(input, before);
+ }
+});
+
 
 test('native creation retains explicit independent bubble padding and underline in the v9 document',()=>{
  const legacy=prepareNativeCreation(session(),16);assert.equal(decodeNativePanelDocument(legacy.documentText,sequenceId).binaryVersion,11);

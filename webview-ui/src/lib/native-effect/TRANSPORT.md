@@ -87,11 +87,12 @@ axis/uniform values; explicit values are finite 0–4096. Margins default to zer
 and accept finite -4096–4096. Values participate in layout and native render
 scaling. Unedited v1–6 documents retain their byte representation.
 
-## Current authoritative codec: BCAP v11
+## Current authoritative codec: BCAP v12
 
 The earlier codec/version-selection sections describe historical formats.
-Every current encoder writes **BCAP v11**, including edits to older documents;
-readers accept v1–11. JSON panel protocol `version` remains 1. V8 added an
+Current encoders write **BCAP v11** without position styles and **BCAP v12**
+with them, including edits to older documents; readers accept v1–12. Clearing
+all position styles writes v11 and retains the selected wrap. JSON panel protocol `version` remains 1. V8 added an
 explicit per-word boundary uint32 after `endOfSentence`; v9 added a
 `pauseLinesRemoved` uint32 (0–8) immediately after it. Storage-container edges
 and `manualSplit` flags no longer create rendered line boundaries in v8+.
@@ -129,3 +130,9 @@ merges while preserving the wrapping mode. Mode is grouping configuration and
 is excluded from captured style presets; applying a preset preserves it.
 Offline codec/parity, controller and mock-host Undo tests are separate from
 installed-host rendering and persistence acceptance.
+
+BCAP binary v12 (`POSITION_STYLES_VERSION` in `line-styles.ts`; `kPositionStylesVersion` natively; `nativePositionStylesVersion` in the CEP bridge) appends line position styles after the v11 wrap uint32: overrides for the slots of the visible caption window, Line 1 being the top line. JSON carries them as optional `style.lineStyles`, keyed `"1"`–`"8"`, with RGB colors and separate opacities. Only documents that have line styles are written as v12; every other write uses v11. The exact byte order is the v10 base (through the v7 geometry footer), then the v11 wrap uint32, then the v12 positions block. Both panel readers walk and validate the block, and the CEP extension check compares it byte for byte, so an extension can neither drop nor change line styles or wrap. CEP normalization appends Fill for versions below 11 and empty positions for versions below 12 before requiring exact trailer equality. Append-only canonical upgrades target 11 or 12; the old.version < 10 boundary migration is independent. See `native/core/README.md` for the field layout.
+
+Case, line height, word spacing and alignment remain global. Horizontal scrolling
+assigns positions by rows within the sliding page; paged rendering assigns them
+by rows within each page. Editing either wrap or positions preserves the other.

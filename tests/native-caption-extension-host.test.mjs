@@ -40,7 +40,11 @@ function fixture(options = {}) {
     // Spoken omits underline to retain document/default fallback.
   }
   options.prepareDocument?.(document);
-  const originalText = options.binaryVersion < 8 ? nativeCarrier(legacyNativeDocumentBytes(document, options.binaryVersion)) : encodeNativeTransportText(document);
+  let originalText = options.binaryVersion < 8 ? nativeCarrier(legacyNativeDocumentBytes(document, options.binaryVersion)) : encodeNativeTransportText(document);
+  if (options.binaryVersion === 9 || options.binaryVersion === 10) {
+    const bytes = Buffer.from(originalText.slice(7), 'hex').subarray(0, -4); // pre-wrap base
+    bytes.writeUInt32LE(options.binaryVersion, 4); originalText = nativeCarrier(bytes);
+  }
   // Extension starts with the real decoder's one-time boundary/default migration.
   const next = decodeNativePanelDocument(originalText, 'seq-a'); next.captions[1].words.push(word('New tail', 6, 7)); next.captions[1].end = 7;
   const appendedText = encodeNativeTransportText(next);
@@ -233,7 +237,7 @@ test('v5 extension preserves background space flags, all styles/manual splits, n
  assert.equal(result.connection.startTicks,tick(10));assert.equal(result.connection.inTicks,tick(3600));
 });
 
-test('v1 through v7 extension migrates boundaries and defaults to v10 without changing previous content',()=>{
+test('v1 through v7 extension migrates boundaries and defaults to v11 without changing previous content',()=>{
  for(const binaryVersion of [1,2,3,4,5,6,7]){
   const h=fixture({binaryVersion}),before=decodeNativePanelDocument(h.originalText,'seq-a'),result=h.extend(h.read());
   assert.equal(result.ok,true,result.error);assert.equal(result.connection.documentText,h.appendedText);
@@ -357,4 +361,76 @@ test('v9 extension preserves deletion counts and refuses changing an existing ga
  const decoded=decodeNativePanelDocument(result.connection.documentText,'seq-a');assert.equal(decoded.captions[0].words[0].pauseLinesRemoved,2);
  const bad=fixture({prepareDocument(document){document.captions[0].words[0].pauseLinesRemoved=2;}}),next=structuredClone(bad.next);next.captions[0].words[0].pauseLinesRemoved=1;
  const refused=bad.extend(bad.read(),{documentText:encodeNativeTransportText(next)});assert.ok(refused.error);assert.deepEqual(bad.writes,[]);
+});
+
+test('line position styles survive an extension unchanged and cannot be changed by one',()=>{
+ const lines={'1':{marginTop:12,marginBottom:12,color:{r:1,g:0,b:0}},'4':{fontWeight:0,fontWeightOffset:100,italic:true}};
+ const prepareDocument=document=>{document.style.lineStyles=structuredClone(lines);};
+ const h=fixture({prepareDocument});assert.equal(Buffer.from(h.originalText.slice(7),'hex').readUInt32LE(4),12);
+ const result=h.extend(h.read());assert.equal(result.ok,true,result.error);
+ assert.deepEqual(decodeNativePanelDocument(result.connection.documentText,'seq-a').style.lineStyles,lines);
+ for(const mutate of [doc=>{doc.style.lineStyles['1'].marginTop=13;},doc=>{delete doc.style.lineStyles;},doc=>{doc.style.lineStyles['2']={opacity:.5};}]){
+  const bad=fixture({prepareDocument}),next=structuredClone(bad.next);mutate(next);
+  assert.ok(bad.extend(bad.read(),{documentText:encodeNativeTransportText(next)}).error);assert.deepEqual(bad.writes,[]);
+ }
+ const plain=fixture(),added=structuredClone(plain.next);added.style.lineStyles={'2':{marginTop:4}};
+ assert.ok(plain.extend(plain.read(),{documentText:encodeNativeTransportText(added)}).error);assert.deepEqual(plain.writes,[]);
+ // Malformed position blocks refuse before any setter, even when old and new match.
+ // The block is 76 bytes: count, Line 1 (position, mask, RGB, two margins), Line 4 (position, mask, weight, italic).
+ for(const mutate of [bytes=>{bytes.writeUInt32LE(9,bytes.length-76);return bytes;},bytes=>{bytes.writeUInt32LE(0,bytes.length-72);return bytes;},bytes=>{bytes.writeUInt32LE(2,bytes.length-4);return bytes;},bytes=>bytes.subarray(0,bytes.length-4)]){
+  const h=fixture({prepareDocument}),bytes=mutate(Buffer.from(h.originalText.slice(7),'hex'));
+  h.params[4].value='BCDOC1:'+bytes.toString('hex');const fresh=h.connection();h.snapshot.locator=fresh.locator;h.snapshot.revision=fresh.revision;
+  const result=h.extend(h.read(),{documentText:h.params[4].value});assert.match(result.error,/line|Truncated|Trailing/i);assert.deepEqual(h.writes,[]);
+ }
+});
+
+test('CEP Extend preserves wrap and positions together in all six v11/v12 combinations', () => {
+ for (const mode of ['fill', 'balance', 'pretty']) for (const positions of [undefined, { '1': { color: { r: .1, g: .2, b: .3 }, marginTop: 12 }, '4': { fontWeight: 0, fontWeightOffset: 100 } }]) {
+  const prepareDocument = doc => {
+    if (mode !== 'fill') doc.style.lineWrap = mode;
+    if (positions) doc.style.lineStyles = structuredClone(positions);
+  };
+  const h = fixture({ prepareDocument }), before = decodeNativePanelDocument(h.originalText, 'seq-a');
+  assert.equal(Buffer.from(h.originalText.slice(7), 'hex').readUInt32LE(4), positions ? 12 : 11);
+  const result = h.extend(h.read()); assert.equal(result.ok, true, result.error);
+  const after = decodeNativePanelDocument(result.connection.documentText, 'seq-a');
+  assert.deepEqual(after.style, before.style);
+  assert.equal(after.style.lineWrap ?? 'fill', mode);
+  assert.deepEqual(after.style.lineStyles, positions);
+  assert.deepEqual(after.captions[0], before.captions[0]);
+  for (const mutate of [
+    doc => { if (mode === 'pretty') delete doc.style.lineWrap; else doc.style.lineWrap = 'pretty'; },
+    doc => { if (positions) delete doc.style.lineStyles; else doc.style.lineStyles = { '2': { opacity: .5 } }; },
+    doc => { doc.style.lineStyles = { ...doc.style.lineStyles, '2': { opacity: .5 } }; },
+  ]) {
+    const bad = fixture({ prepareDocument }), next = structuredClone(bad.next); mutate(next);
+    assert.match(bad.extend(bad.read(), { documentText: encodeNativeTransportText(next) }).error, /preserve/);
+    assert.deepEqual(bad.writes, []);
+  }
+ }
+});
+
+test('CEP normalizes v9/v10 defaults independently of the pre-v10 boundary migration', () => {
+ const prepareDocument = doc => {
+  const caption = doc.captions[0]; caption.words[0].lineBreakBefore = 'break';
+  caption.words.push({ ...word('joined', 2, 2.1), lineBreakBefore: 'join' }); caption.end = 2.1;
+ };
+ for (const binaryVersion of [9, 10]) {
+  const h = fixture({ binaryVersion, prepareDocument });
+  assert.equal(Buffer.from(h.originalText.slice(7), 'hex').readUInt32LE(4), binaryVersion);
+  assert.equal(h.next.captions[0].words[0].lineBreakBefore, binaryVersion < 10 ? 'edge' : 'break');
+  assert.equal(h.next.style.lineWrap, undefined); assert.equal(h.next.style.lineStyles, undefined);
+  const result = h.extend(h.read()); assert.equal(result.ok, true, result.error);
+  assert.equal(Buffer.from(result.connection.documentText.slice(7), 'hex').readUInt32LE(4), 11);
+  assert.deepEqual(decodeNativePanelDocument(result.connection.documentText, 'seq-a').style, h.next.style);
+  // A canonical v12 with zero positions has exactly the same normalized trailer.
+  const empty = fixture({ binaryVersion, prepareDocument });
+  const bytes = Buffer.concat([Buffer.from(empty.appendedText.slice(7), 'hex'), Buffer.alloc(4)]); bytes.writeUInt32LE(12, 4);
+  const upgraded = empty.extend(empty.read(), { documentText: nativeCarrier(bytes) });
+  assert.equal(upgraded.ok, true, upgraded.error);
+  // Fill cannot become Balance during a legacy upgrade.
+  const changed = fixture({ binaryVersion, prepareDocument }), next = structuredClone(changed.next); next.style.lineWrap = 'balance';
+  assert.match(changed.extend(changed.read(), { documentText: encodeNativeTransportText(next) }).error, /preserve/);
+  assert.deepEqual(changed.writes, []);
+ }
 });
