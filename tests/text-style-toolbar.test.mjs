@@ -526,3 +526,35 @@ test('All words reset uses known factory values only for the requested fields',(
     assert.equal(next[key].color,style[key].color);
   }
 });
+
+test('line positions: one button per visible line, an overrides strip and inherited-looking controls',()=>{
+  const style=fresh();
+  assert.doesNotMatch(view({style}),/Line positions/);
+  assert.equal((view({style,nativeMode:true,lineCount:4}).match(/class="text-style__line-button/g)??[]).length,4);
+  const styled={...style,lineStyles:{'1':{marginTop:8,marginBottom:8},'6':{opacity:.5}}};
+  const html=view({style:styled,nativeMode:true,lineCount:4,scope:'line-1'});
+  assert.match(html.match(/<button[^>]*aria-label="Line 1, has its own style"[^>]*>/)[0],/aria-pressed="true"/);
+  assert.match(html,/Reset Line 1 margin to inherit/);
+  // Line 6 keeps its settings but has no button while four lines show.
+  assert.doesNotMatch(html,/Line 6/);
+  assert.match(html.match(/<button[^>]*aria-label="Italic"[^>]*>/)[0],/data-inherited/);
+  assert.doesNotMatch(html.match(/<button[^>]*aria-label="Padding and margin"[^>]*>/)[0],/data-inherited/);
+  assert.doesNotMatch(view({style:styled,nativeMode:true,lineCount:4}).match(/<button[^>]*aria-label="Italic"[^>]*>/)[0],/data-inherited/);
+  assert.match(view({style,nativeMode:true,lineCount:4,scope:'line-2'}),/Line 2 inherits Past, Current and Next/);
+});
+
+test('line scope edits set only that line; it shows its own values and resets to inherit',()=>{
+  const style=fresh();style.activeWord={...style.activeWord,color:'#ff0000'};
+  assert.equal(textStyleMixed(style,'line-2','color'),textStyleMixed(style,'all','color'));
+  let next=apply(style,textStylePatch(style,'line-2',{color:'#00ff00',fontSize:90}));
+  assert.deepEqual(next.lineStyles,{'2':{color:'#00ff00',fontSize:90}});
+  assert.equal(textStyleMixed(next,'line-2','color'),false);
+  assert.equal(textStyleAppearance(next,'line-2').color,'#00ff00');assert.equal(textStyleAppearance(next,'line-2').fontSize,90);
+  for(const scope of ['all','spoken','current','upcoming'])assert.deepEqual(textStyleAppearance(next,scope),textStyleAppearance(style,scope));
+  next=apply(next,textStyleSizeStep(next,'line-2',1));assert.equal(next.lineStyles['2'].fontSize,91);
+  next=apply(next,textStyleBoldPatch(next,'line-2'));assert.equal(next.lineStyles['2'].fontWeightOffset,100);assert.equal(textStyleBoldState(next,'line-2'),true);
+  assert.equal(textStyleBoldState(next,'all'),textStyleBoldState(style,'all'));
+  next=apply(next,textStyleResetPatch(next,'line-2',['color']));assert.equal(next.lineStyles['2'].color,undefined);
+  assert.equal(textStyleAppearance(next,'line-2').color,textStyleAppearance(style,'all').color);
+  next=apply(next,textStyleResetPatch(next,'line-2',['fontSize','fontWeightOffset']));assert.equal(next.lineStyles,undefined);
+});

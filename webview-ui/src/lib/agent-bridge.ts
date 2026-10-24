@@ -1,4 +1,4 @@
-import type {SessionState,StyleConfig,CaptionItem,AnimationConfig} from './types';
+import {LINE_STYLE_FIELDS,type SessionState,type StyleConfig,type CaptionItem,type AnimationConfig} from './types.ts';
 import {validateCaptions} from './transcript/edit.ts';
 import {refreshCaptionGroups,validateCharacterLimit} from './transcript/parser.ts';
 import type {TextAreaEdit} from './text-area';
@@ -52,12 +52,20 @@ export function validateAreaEdit(value:unknown,current:CaptionItem[]):{captionId
   if(edit.operation==='interpolation'&&edit.interpolation===undefined)throw new Error('Choose an interpolation preset.');
   return {captionId,edit:JSON.parse(JSON.stringify(edit)) as TextAreaEdit};
 }
+function wordStyle(v:unknown,fields?:readonly string[]){
+  object(v);for(const [k,n] of Object.entries(v)){if(fields&&!fields.includes(k))throw new Error('Unknown line style: '+k);if(k==='fontWeightOffset'){if(n!==null&&n!==0&&n!==100)throw new Error('Word weight offset must be null, 0 or 100.');}else if(k in stateNumbers)number(n,...stateNumbers[k]);else if(k==='fontFamily')font(n);else if(['color','bubbleColor','strokeColor','shadowColor'].includes(k))color(n);else if(['bubble','bubbleFillSpaces','underline','italic','strokeEnabled','shadowEnabled'].includes(k))bool(n);else if(k==='textTransform'){if(!['none','uppercase','lowercase','titlecase'].includes(String(n)))throw new Error('Invalid word text transform.');}else throw new Error('Unknown word style: '+k);}
+}
+/** Line position overrides: positions 1–8, each holding only fields a line can set. */
+export function validateLineStyles(v:unknown){
+  if(v===undefined)return;
+  object(v);for(const [position,line] of Object.entries(v)){if(!/^[1-8]$/.test(position))throw new Error('Line positions are 1 to 8.');wordStyle(line,LINE_STYLE_FIELDS);}
+}
 export function validateStylePatch(value:unknown):Partial<StyleConfig>{
   object(value);
   for(const [key,v] of Object.entries(value)){
-    if(key==='activeWord'||key==='spokenWord'||key==='upcomingWord'){
-      object(v);for(const [k,n] of Object.entries(v)){if(k==='fontWeightOffset'){if(n!==null&&n!==0&&n!==100)throw new Error('Word weight offset must be null, 0 or 100.');}else if(k in stateNumbers)number(n,...stateNumbers[k]);else if(k==='fontFamily')font(n);else if(['color','bubbleColor','strokeColor','shadowColor'].includes(k))color(n);else if(['bubble','bubbleFillSpaces','underline','italic','strokeEnabled','shadowEnabled'].includes(k))bool(n);else if(k==='textTransform'){if(!['none','uppercase','lowercase','titlecase'].includes(String(n)))throw new Error('Invalid word text transform.');}else throw new Error('Unknown word style: '+k);}
-    }else if(key==='maxChars')validateCharacterLimit(v);
+    if(key==='activeWord'||key==='spokenWord'||key==='upcomingWord')wordStyle(v);
+    else if(key==='lineStyles')validateLineStyles(v);
+    else if(key==='maxChars')validateCharacterLimit(v);
     else if(key in styleNumbers)number(v,...styleNumbers[key]);
     else if(key==='fontFamily')font(v);
     else if(['textColor','strokeColor','shadowColor','backgroundColor'].includes(key))color(v);

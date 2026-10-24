@@ -54,10 +54,10 @@ export function smartFitCharacterCapacity(captions: CaptionItem[], options: Smar
   return Math.max(1,Math.min(MAX_CAPTION_CHARS,Math.floor(usableWidth*characters/pixels)));
 }
 
-/** Per-word advance (widest word state, inline bubble padding and margins) and the usable line width. */
+/** Per-word advance (widest word state or line position style, inline bubble padding and margins) and the usable line width. */
 function smartFitMetrics(options: SmartFitOptions, measure: SmartFitMeasure) {
   const { width, wordSpacing, appearances } = options;
-  if (!Number.isFinite(width) || width <= 0 || width > 8192 || !Number.isFinite(wordSpacing) || wordSpacing < 0 || wordSpacing > 4096 || appearances.length !== 3 || typeof measure !== 'function') throw new Error('Invalid native line fit configuration.');
+  if (!Number.isFinite(width) || width <= 0 || width > 8192 || !Number.isFinite(wordSpacing) || wordSpacing < 0 || wordSpacing > 4096 || appearances.length < 3 || typeof measure !== 'function') throw new Error('Invalid native line fit configuration.');
   const usableWidth = width * .95;
   const cache = new Map<string, number>();
   const advance = (text: string) => {

@@ -3,7 +3,8 @@
   import ScrubbableNumber from './ScrubbableNumber.svelte';
   import LucideIcon from './LucideIcon.svelte';
   interface Values { inline:number; block:number; lineHeight?:number; top:number; right:number; bottom:number; left:number; paddingTop?:number; paddingRight?:number; paddingBottom?:number; paddingLeft?:number; radiusTL?:number; radiusTR?:number; radiusBR?:number; radiusBL?:number; }
-  let { variant='box', value, defaults, onReset, onChange }: {variant?:'box'|'neutral'|'cross'|'cross-leading'|'grid'|'rows'; value:Values; defaults?:Partial<Values>; onReset?:(key:keyof Values)=>void; onChange:(key:keyof Values,value:number)=>void} = $props();
+  // inherited: values a line position does not set yet show as inherited.
+  let { variant='box', value, defaults, inherited, onReset, onChange }: {variant?:'box'|'neutral'|'cross'|'cross-leading'|'grid'|'rows'; value:Values; defaults?:Partial<Values>; inherited?:(key:keyof Values)=>boolean; onReset?:(key:keyof Values)=>void; onChange:(key:keyof Values,value:number)=>void} = $props();
   const initialDefaults = untrack(() => ({...value}));
   type LinkMode='all'|'opposites'|'none';
   let paddingMode=$state<LinkMode>('opposites'), marginMode=$state<LinkMode>('opposites'), radiusMode=$state<LinkMode>('all');
@@ -47,7 +48,7 @@
 
 </script>
 {#snippet number(key:keyof Values,label:string)}
-  <ScrubbableNumber defaultValue={defaultFor(key)} onReset={() => reset(key)} label={label} value={get(key)} min={key==='top'||key==='right'||key==='bottom'||key==='left'?-100:0} max={100} onChange={next=>change(key,next)}/>
+  <span class="spacing-inspector__value" class:spacing-inspector__value--inherited={inherited?.(key)}><ScrubbableNumber defaultValue={defaultFor(key)} onReset={() => reset(key)} label={label} value={get(key)} min={key==='top'||key==='right'||key==='bottom'||key==='left'?-100:0} max={100} onChange={next=>change(key,next)}/></span>
 {/snippet}
 {#snippet field(key:keyof Values,label:string)}
   <label class="spacing-inspector__field"><span>{label}</span>{@render number(key,`${key.startsWith('radius')?'Radius':key.startsWith('padding')||key==='inline'||key==='block'?'Padding':'Margin'} ${label.toLowerCase()}, px`)}</label>
@@ -97,6 +98,8 @@
   {/if}
 </div>
 <style>
+  .spacing-inspector__value {display:contents;}
+  .spacing-inspector__value--inherited :global(.scrubbable-number) {opacity:.55;}
   .spacing-inspector {color:var(--color-panel-text);font-size:.9rem;min-inline-size:0;}
   .spacing-inspector__locks {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;box-sizing:border-box;block-size:var(--ribbon-height,2.65rem);padding:0;margin:0 0 .75rem;border:1px solid var(--color-panel-border);border-radius:.4rem;background:var(--color-surface-raised);&>span {display:flex;align-items:center;justify-content:space-between;gap:0;min-inline-size:0;padding:0 calc(.1rem + 4px) 0 calc(.35rem + 4px);font-size:.8rem;}&>span+span {border-inline-start:1px solid var(--color-panel-border);}}
   .spacing-inspector__link {display:grid;place-items:center;inline-size:1.8rem;block-size:1.8rem;padding:.25rem;border:0;border-radius:.3rem;background:transparent;color:var(--color-panel-secondary);cursor:pointer;&.spacing-inspector__link--linked {background:transparent;color:var(--color-accent);}&:focus-visible {outline:2px solid var(--color-accent);outline-offset:2px;}& :global(svg) {inline-size:1.1rem;block-size:1.1rem;}}

@@ -9,11 +9,12 @@
     read:(snapshot:NativeCaptionSnapshot,id:string)=>Promise<NativeCaptionControls>;
     edit:(snapshot:NativeCaptionSnapshot,request:NativeCaptionControlEdit,id:string)=>Promise<NativeCaptionControls>;
     seek:(snapshot:NativeCaptionSnapshot,request:NativeCaptionKeyframeSeek,id:string)=>Promise<NativeCaptionControls>;onTimeChange?:(seconds:number)=>void;onInteracting?:(active:boolean)=>void;
+    onControlsChange?:(controls:NativeCaptionControls|null)=>void;
   }
-  let {snapshot,sequenceId,frameWidth,frameHeight,currentTime,visible,disabled=false,read,edit,seek,onTimeChange=()=>{},onInteracting=()=>{}}:Props=$props();
+  let {snapshot,sequenceId,frameWidth,frameHeight,currentTime,visible,disabled=false,read,edit,seek,onTimeChange=()=>{},onInteracting=()=>{},onControlsChange=()=>{}}:Props=$props();
   let controls=$state.raw<NativeCaptionControls|null>(null),error=$state(''),dragging=$state(false);
   const identity=()=>JSON.stringify([sequenceId,snapshot.locator,snapshot.revision]);
-  const controller=createNativeGeometryController({current:()=>({key:identity(),sequenceId,snapshot,visible,disabled}),read:(s,id)=>read(s,id),edit:(s,r,id)=>edit(s,r,id),seek:(s,r,id)=>seek(s,r,id),state:value=>controls=value,error:message=>error=message,interacting:active=>onInteracting(active)});
+  const controller=createNativeGeometryController({current:()=>({key:identity(),sequenceId,snapshot,visible,disabled}),read:(s,id)=>read(s,id),edit:(s,r,id)=>edit(s,r,id),seek:(s,r,id)=>seek(s,r,id),state:value=>{controls=value;onControlsChange(value);},error:message=>error=message,interacting:active=>onInteracting(active)});
   let readTimer:ReturnType<typeof setTimeout>|undefined;
   $effect(()=>{void currentTime;void snapshot;void visible;void disabled;
     if(!visible||disabled){if(readTimer!==undefined)clearTimeout(readTimer);readTimer=undefined;return;}

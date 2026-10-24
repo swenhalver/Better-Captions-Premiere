@@ -358,3 +358,24 @@ test('v9 extension preserves deletion counts and refuses changing an existing ga
  const bad=fixture({prepareDocument(document){document.captions[0].words[0].pauseLinesRemoved=2;}}),next=structuredClone(bad.next);next.captions[0].words[0].pauseLinesRemoved=1;
  const refused=bad.extend(bad.read(),{documentText:encodeNativeTransportText(next)});assert.ok(refused.error);assert.deepEqual(bad.writes,[]);
 });
+
+test('line position styles survive an extension unchanged and cannot be changed by one',()=>{
+ const lines={'1':{marginTop:12,marginBottom:12,color:{r:1,g:0,b:0}},'4':{fontWeight:0,fontWeightOffset:100,italic:true}};
+ const prepareDocument=document=>{document.style.lineStyles=structuredClone(lines);};
+ const h=fixture({prepareDocument});assert.equal(Buffer.from(h.originalText.slice(7),'hex').readUInt32LE(4),11);
+ const result=h.extend(h.read());assert.equal(result.ok,true,result.error);
+ assert.deepEqual(decodeNativePanelDocument(result.connection.documentText,'seq-a').style.lineStyles,lines);
+ for(const mutate of [doc=>{doc.style.lineStyles['1'].marginTop=13;},doc=>{delete doc.style.lineStyles;},doc=>{doc.style.lineStyles['2']={opacity:.5};}]){
+  const bad=fixture({prepareDocument}),next=structuredClone(bad.next);mutate(next);
+  assert.ok(bad.extend(bad.read(),{documentText:encodeNativeTransportText(next)}).error);assert.deepEqual(bad.writes,[]);
+ }
+ const plain=fixture(),added=structuredClone(plain.next);added.style.lineStyles={'2':{marginTop:4}};
+ assert.ok(plain.extend(plain.read(),{documentText:encodeNativeTransportText(added)}).error);assert.deepEqual(plain.writes,[]);
+ // Malformed position blocks refuse before any setter, even when old and new match.
+ // The block is 76 bytes: count, Line 1 (position, mask, RGB, two margins), Line 4 (position, mask, weight, italic).
+ for(const mutate of [bytes=>{bytes.writeUInt32LE(9,bytes.length-76);return bytes;},bytes=>{bytes.writeUInt32LE(0,bytes.length-72);return bytes;},bytes=>{bytes.writeUInt32LE(2,bytes.length-4);return bytes;},bytes=>bytes.subarray(0,bytes.length-4)]){
+  const h=fixture({prepareDocument}),bytes=mutate(Buffer.from(h.originalText.slice(7),'hex'));
+  h.params[4].value='BCDOC1:'+bytes.toString('hex');const fresh=h.connection();h.snapshot.locator=fresh.locator;h.snapshot.revision=fresh.revision;
+  const result=h.extend(h.read(),{documentText:h.params[4].value});assert.match(result.error,/line|Truncated|Trailing/i);assert.deepEqual(h.writes,[]);
+ }
+});

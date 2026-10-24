@@ -23,7 +23,7 @@ export function presetName(value: string): string {
 }
 export function validatePresetLook(value: unknown): PresetLook {
   exact(value, ['style', 'animation'], 'preset');
-  exact(value.style, styleKeys, 'preset style', ['wordSpacing']);
+  exact(value.style, styleKeys, 'preset style', ['wordSpacing', 'lineStyles']);
   for (const state of ['spokenWord', 'activeWord', 'upcomingWord']) exact(value.style[state], wordKeys, 'word style', ['fontWeightOffset', 'bubbleFillSpaces', 'bubblePaddingInline', 'bubblePaddingBlock', 'underline', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft']);
   validateStylePatch(value.style);
   exact(value.animation, ['preset', 'fadeInDuration', 'fadeOutDuration', 'highlightColor'], 'preset animation');
@@ -33,7 +33,8 @@ export function validatePresetLook(value: unknown): PresetLook {
       [a.fadeInDuration, a.fadeOutDuration].some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 5)) throw new Error('Invalid saved animation settings.');
   return clone(value) as unknown as PresetLook;
 }
-/** Resolve inheritance so a saved look fully replaces all three word appearances. */
+/** Resolve inheritance so a saved look fully replaces all three word appearances.
+ * Line position styles stay sparse overrides, so they keep inheriting from them. */
 export function capturePresetLook(style: StyleConfig, animation: AnimationConfig): PresetLook {
   const { positionX: _x, positionY: _y, maxChars: _count, ...look } = style;
   return validatePresetLook({ style: { ...look, spokenWord: resolveAppearance(style, 'spokenWord'), activeWord: resolveAppearance(style, 'activeWord'), upcomingWord: resolveAppearance(style, 'upcomingWord') }, animation });
@@ -63,6 +64,7 @@ export function changeStylePreset(library: PresetLibrary, id: string, change: { 
 }
 export function applyPresetLook(style: StyleConfig, look: PresetLook): { style: StyleConfig; animation: AnimationConfig } {
   const validated = validatePresetLook(look);
-  const { wordSpacing: _previousSpacing, ...current } = style;
+  // A look replaces the line position styles too, clearing them when it has none.
+  const { wordSpacing: _previousSpacing, lineStyles: _previousLines, ...current } = style;
   return { style: { ...current, ...validated.style }, animation: validated.animation };
 }

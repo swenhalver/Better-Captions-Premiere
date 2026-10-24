@@ -86,3 +86,5 @@ marginRight, marginBottom, marginLeft. Padding/radius use -1 to inherit legacy
 axis/uniform values; explicit values are finite 0–4096. Margins default to zero
 and accept finite -4096–4096. Values participate in layout and native render
 scaling. Unedited v1–6 documents retain their byte representation.
+
+BCAP binary v11 (`POSITION_STYLES_VERSION` in `line-styles.ts`; `kPositionStylesVersion` natively; `nativePositionStylesVersion` in the CEP bridge) appends line position styles after the v7 geometry footer: overrides for the slots of the visible caption window, Line 1 being the top line. JSON carries them as optional `style.lineStyles`, keyed `"1"`–`"8"`, with RGB colors and separate opacities. Only documents that have line styles are written as v11; every other write stays v10, so existing carriers keep their bytes. Both panel readers walk and validate the block, and the CEP extension check compares it byte for byte, so an extension can neither drop nor change line styles. See `native/core/README.md` for the field layout.

@@ -3,6 +3,7 @@ import { resolveAppearance } from '../appearance.ts';
 import { validateNativeDocument, type NativeColor, type NativeWordStyle } from './contract.ts';
 import { encodeNativeTransportText } from './encode.ts';
 import { nativePanelSequenceId } from './panel.ts';
+import { nativeLineStyles } from './line-styles.ts';
 
 function color(hex: string, alpha = 1): NativeColor {
   if (!/^#[0-9a-f]{6}$/i.test(hex)) throw new Error('Native captions need six-digit colors.');
@@ -31,6 +32,7 @@ export function prepareNativeCreation(session: SessionState, measuredSpace: numb
       outlineWidth: a.strokeEnabled ? a.strokeWidth : 0, outlineColor: color(a.strokeColor, a.strokeOpacity),
       shadowBlur: a.shadowBlur, shadowX: a.shadowOffsetX, shadowY: a.shadowOffsetY, shadowColor: color(a.shadowColor, a.shadowEnabled ? a.shadowOpacity : 0) };
   };
+  const lineStyles = nativeLineStyles(style.lineStyles);
   const captions = session.captions.map((caption, captionIndex) => {
     if (!caption.words.length) throw new Error('A caption has no timed words.');
     return { id: caption.id, manualSplit: !!caption.manualSplit,
@@ -44,7 +46,7 @@ export function prepareNativeCreation(session: SessionState, measuredSpace: numb
   });
   const document = validateNativeDocument({ version: 1, binaryVersion: 10, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(session.sequenceId), timeOriginSeconds: 0,
     captions, style: { upcoming: wordStyle(0), current: wordStyle(1), spoken: wordStyle(2), baseFontWeight: style.fontWeight,
-      wordSpacing: measuredSpace * (style.wordSpacing ?? 100) / 100, lineHeight: style.lineHeight, titleCase: appearances[0].textTransform === 'titlecase', ...(['uppercase','lowercase'].includes(appearances[0].textTransform) ? {letterCase:appearances[0].textTransform} : {}) } });
+      wordSpacing: measuredSpace * (style.wordSpacing ?? 100) / 100, lineHeight: style.lineHeight, titleCase: appearances[0].textTransform === 'titlecase', ...(['uppercase','lowercase'].includes(appearances[0].textTransform) ? {letterCase:appearances[0].textTransform} : {}), ...(lineStyles ? {lineStyles} : {}) } });
   const endFrame = Math.ceil(Math.max(...captions.map(c => c.end)) * session.frameRate - 1e-7);
   if (endFrame < 1 || endFrame > 1000000) throw new Error('This caption duration exceeds native creation limits.');
   const width = Math.round(session.frameWidth * style.maxWidth);

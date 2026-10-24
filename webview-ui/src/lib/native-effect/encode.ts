@@ -1,12 +1,15 @@
 import { validateNativeDocument, validateNativeStyle, type NativeColor, type NativeWordStyle, type NativeStyle } from './contract.ts';
-/** BCAP little-endian v10 payload matching native/core/caption_core.cpp.
+import { hasNativeLineStyles, POSITION_STYLES_VERSION, readNativeLineStyles, writeNativeLineStyles } from './line-styles.ts';
+/** BCAP little-endian v10 payload matching native/core/caption_core.cpp, or the
+ * line position styles version when the document has any.
  * Sequence/clip bounds stay in the panel envelope; the renderer receives source words,
  * manual container identities and styles. No path, code, animation or host mutation. */
 export function encodeNativeDocument(input: unknown): Uint8Array {
   const doc = validateNativeDocument(input), bytes: number[] = [];
   const states = [doc.style.upcoming, doc.style.current, doc.style.spoken];
-  // Every write upgrades to v10. Only readers retain the legacy layouts.
-  const version = 10;
+  // Every write upgrades to v10, or to the line position styles version when
+  // the document has any. Only readers retain the legacy layouts.
+  const version = hasNativeLineStyles(doc.style.lineStyles) ? POSITION_STYLES_VERSION : 10;
   const u = (n: number) => { for (let i = 0; i < 4; i++) bytes.push((n >>> (8 * i)) & 255); };
   const d = (n: number) => { const b = new Uint8Array(8); new DataView(b.buffer).setFloat64(0, n, true); bytes.push(...b); };
   const s = (text: string) => { const b = new TextEncoder().encode(text); u(b.length); for (const n of b) bytes.push(n); };
@@ -30,6 +33,7 @@ export function encodeNativeDocument(input: unknown): Uint8Array {
   if(version>=6)for(const state of states){d(state.bubblePaddingInline??-1);d(state.bubblePaddingBlock??-1);}
   if(version>=6)for(const state of states)u(state.underline===undefined?0:state.underline?2:1);
   if(version>=7)for(const state of states)for(const key of ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const)d(state[key]??(key.startsWith('margin')?0:-1));
+  if(version>=POSITION_STYLES_VERSION)writeNativeLineStyles({u,d,s},doc.style.lineStyles);
   if (bytes.length > 16 * 1024 * 1024) throw new Error('Native payload exceeds 16 MiB.');
   return Uint8Array.from(bytes);
 }
@@ -72,7 +76,7 @@ export function decodeNativeTransportTimeOrigin(text: unknown): number {
     return value;
   };
   if (u() !== 0x50414342) throw new Error('Invalid native document magic.');
-  const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10) throw new Error('Unsupported native binary version.');
+  const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10 && version !== POSITION_STYLES_VERSION) throw new Error('Unsupported native binary version.');
   const containers = u(); if (containers > 10000) throw new Error('Too many native containers.');
   const identities = new Set<string>(); let count = 0;
   for (let i = 0; i < containers; i++) {
@@ -92,6 +96,7 @@ export function decodeNativeTransportTimeOrigin(text: unknown): number {
   if(version>=6)for(const word of [nativeStyle.upcoming,nativeStyle.current,nativeStyle.spoken])for(const axis of ['bubblePaddingInline','bubblePaddingBlock'] as const){const value=d();if(value!==-1)word[axis]=value;}
   if(version>=6)for(const word of [nativeStyle.upcoming,nativeStyle.current,nativeStyle.spoken]){const mode=u();if(mode>2)throw new Error('Invalid native underline mode.');if(mode)word.underline=mode===2;}
   if(version>=7)for(const word of [nativeStyle.upcoming,nativeStyle.current,nativeStyle.spoken])for(const key of ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const){const value=d();if(!key.startsWith('margin')?value!==-1:value!==0)word[key]=value;}
+  if(version>=POSITION_STYLES_VERSION){const lines=readNativeLineStyles({u,d,flag,string});if(lines)nativeStyle.lineStyles=lines;}
   validateNativeStyle(nativeStyle);
   if (Math.abs(origin) > 864000 || offset !== bytes.length) throw new Error('Invalid native document origin or trailing bytes.');
   return origin;

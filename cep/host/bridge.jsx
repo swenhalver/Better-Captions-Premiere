@@ -2299,6 +2299,8 @@ var BetterCaptionsHost = (function () {
         try { return reply(nativeExtensionContext(readPayload(file)).receipt); }
         catch (e) { return reply({ error: e.toString() }); }
     }
+    // BCAP version that appends line position styles; renumber only here.
+    var nativePositionStylesVersion = 11;
     function nativeExtensionBinary(text, edgesAsBreaks) {
         boundedNativeCarrier(text);
         var offset = 7, count = 0;
@@ -2311,7 +2313,7 @@ var BetterCaptionsHost = (function () {
         function skip(bytes) { if (offset + bytes * 2 > text.length) throw new Error('Truncated caption extension words.'); offset += bytes * 2; }
         if (u() !== 1346454338) throw new Error('Invalid caption extension document magic.');
         var version = u(), n = u(), captions = [];
-        if (version < 1 || version > 10 || n > 10000) throw new Error('Invalid caption extension document version or size.');
+        if (version < 1 || version > nativePositionStylesVersion || n > 10000) throw new Error('Invalid caption extension document version or size.');
         for (var c = 0; c < n; c++) {
             var identityStart = offset, length = u();
             if (!length || length > 256) throw new Error('Invalid caption extension identity.');
@@ -2375,6 +2377,25 @@ var BetterCaptionsHost = (function () {
         }
         if (version >= 6) for (var underline = 0; underline < 3; underline++) if (u() > 2) throw new Error('Invalid caption extension underline flag.');
         if(version>=7)for(var geometry=0;geometry<36;geometry++){var lo=u(),hi=u(),absHi=hi&2147483647;var margin=(geometry%12)>=8;if(!((margin?absHi:hi)<1085276160||(margin?absHi:hi)===1085276160&&lo===0||!margin&&hi===3220176896&&lo===0))throw new Error('Invalid caption geometry.');}
+        if (version >= nativePositionStylesVersion) {
+            // Line position styles: count, then position, field mask and the
+            // flagged fields in bit order (see native/core/README.md).
+            var positions = u(), previousPosition = 0;
+            if (positions > 8) throw new Error('Invalid caption extension line positions.');
+            for (var entry = 0; entry < positions; entry++) {
+                var position = u(), fields = u();
+                if (position <= previousPosition || position > 8 || !fields || fields >= 2147483648) throw new Error('Invalid caption extension line position.');
+                previousPosition = position;
+                for (var bit = 0; bit < 31; bit++) {
+                    if (!((fields >>> bit) & 1)) continue;
+                    if (bit === 0) { var fontLength = u(); if (!fontLength || fontLength > 256) throw new Error('Invalid caption extension line font.'); skip(fontLength); }
+                    else if (bit === 1) { skip(8); if (u() > 2) throw new Error('Invalid caption extension line weight.'); }
+                    else if (bit === 2 || bit === 3 || bit === 7 || bit === 8) { if (u() > 1) throw new Error('Invalid caption extension line flag.'); }
+                    else if (bit === 5 || bit === 9 || bit === 24 || bit === 29) skip(24);
+                    else skip(8);
+                }
+            }
+        }
         if (offset !== text.length) throw new Error('Trailing caption extension document bytes.');
         // Compare old layouts as v9 without rewriting the stored document.
         // Only fields absent in that layout get their exact decode defaults;
@@ -2392,11 +2413,14 @@ var BetterCaptionsHost = (function () {
             trailer += '000000000000000000000000';
         }
         if (version < 7) for (var stateGeometry = 0; stateGeometry < 36; stateGeometry++) trailer += stateGeometry % 12 < 8 ? absent : zero;
+        if (version < nativePositionStylesVersion) trailer += '00000000'; // no line position styles
         return { version: version, captions: captions, trailer: trailer };
     }
     function nativeExtensionAppendOnly(before, after) {
         var old = nativeExtensionBinary(before, false), next = nativeExtensionBinary(after, old.version < 10), changed = 0;
-        if ((old.version !== next.version && next.version !== 10) || old.captions.length !== next.captions.length || old.trailer !== next.trailer) throw new Error('Caption extension must preserve every previous style and manual container.');
+        // The panel writes v10, or the line position styles version when the
+        // document has them; the trailer comparison keeps those styles unchanged.
+        if ((old.version !== next.version && next.version !== 10 && next.version !== nativePositionStylesVersion) || old.captions.length !== next.captions.length || old.trailer !== next.trailer) throw new Error('Caption extension must preserve every previous style and manual container.');
         for (var i = 0; i < old.captions.length; i++) {
             var a = old.captions[i], b = next.captions[i];
             if (a.identity !== b.identity || b.count < a.count || b.words.slice(0, a.words.length) !== a.words) throw new Error('Caption extension cannot replace previous caption text or timings.');
