@@ -62,6 +62,10 @@ echo "Opened Premiere on S-Space with: $project"
 # Fill S-Space with the project window (same as double-clicking its title bar).
 swift "$root/scripts/maximize-premiere-sspace.swift" || echo "Could not maximize Premiere on S-Space; double-click its title bar." >&2
 fi
+# The window size changes during launch, and Premiere spreads that change
+# across its panels, squeezing S-Captions. Swen's saved workspace holds the
+# layout he wants (docs/testing/panel-layout-good-full.png), so restore it.
+swift "$(cd "$(dirname "$0")/.." && pwd)/scripts/reset-premiere-layout.swift" || echo "Could not reset Premiere's layout; use Window > Workspaces > Reset to Saved Layout." >&2
 
 # The Premiere Pro MCP bridge (MCPBridgeCEP) starts itself in the background
 # when Premiere launches and refreshes bridge-owner.json while running. Only the
