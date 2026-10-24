@@ -9,7 +9,7 @@
 {:else}
 <div class="browser-preview">
   <header class="browser-preview__toolbar">
-    <div><strong>Better Captions</strong><p>Interactive interface review</p></div>
+    <div><strong>S-Captions</strong><p>Interactive interface review</p></div>
     <label class="browser-preview__size"><span>Panel width</span><select bind:value={width}><option value="280">280 px</option><option value="360">360 px</option><option value="480">480 px</option><option value="wide">Expanded</option></select></label>
   </header>
   <div class="browser-preview__stage"><div class="browser-preview__panel" style:max-inline-size={width === "wide" ? "100%" : `${Number(width) / 13}rem`}><App /></div></div>

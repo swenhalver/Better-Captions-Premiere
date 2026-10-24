@@ -1,12 +1,12 @@
 import { createHostAPI } from '../webview-ui/src/cep-api';
 
-/** Local-only transport for the single visible UXP Better Captions panel. */
+/** Local-only transport for the single visible UXP S-Captions panel. */
 export const SERVICE_ACTIONS = [
   'readCaptionConsolidation', 'stageCaptionConsolidation', 'verifyCaptionConsolidation', 'rollbackCaptionConsolidation',
   'getFonts', 'getFontCatalog', 'beginCaption', 'saveCaptionFrames', 'finishCaption',
   'preflightCaptionClips', 'prepareCaptionTrack', 'applyCaptionClips', 'readTimeline', 'showInPremiere',
   'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionAreaDescriptor', 'patchCaptionKeyValues',
-  'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'extendNativeCaptionDocument', 'editNativeCaptionControl', 'seekNativeCaptionKeyframe', 'writeNativeCaptionDocument', 'createNativeCaptionDocument',
+  'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'extendNativeCaptionDocument', 'editNativeCaptionControl', 'seekNativeCaptionKeyframe', 'writeNativeCaptionDocument', 'restoreNativeCaptionDocument', 'undoNativeCaptionSteps', 'stepNativeHistoryForTest', 'createNativeCaptionDocument',
 ] as const;
 const READ_ACTIONS = new Set(['getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'readCaptionAreaDescriptor', 'readCaptionConsolidation', 'verifyCaptionConsolidation']);
 const ARG_COUNTS: Record<string, number[]> = {
@@ -14,7 +14,7 @@ const ARG_COUNTS: Record<string, number[]> = {
   getFonts: [0], getFontCatalog: [0], beginCaption: [1], saveCaptionFrames: [3], finishCaption: [3, 4],
   preflightCaptionClips: [2, 3], prepareCaptionTrack: [2, 3, 4], applyCaptionClips: [2, 3, 4], readTimeline: [1], showInPremiere: [1],
   selectCaptionClip: [1], readCaptionMotion: [1, 2], readCaptionGeometry: [1], readCaptionSelection: [1], readCaptionAreaDescriptor: [1], patchCaptionKeyValues: [2],
-  readNativeCaptionExtension:[1],extendNativeCaptionDocument:[2],readNativeCaptionControls:[1],editNativeCaptionControl:[2],seekNativeCaptionKeyframe:[2],readCaptionConnections:[2],writeNativeCaptionDocument:[2],createNativeCaptionDocument:[1],
+  readNativeCaptionExtension:[1],extendNativeCaptionDocument:[2],readNativeCaptionControls:[1],editNativeCaptionControl:[2],seekNativeCaptionKeyframe:[2],readCaptionConnections:[2],writeNativeCaptionDocument:[2],restoreNativeCaptionDocument:[3],undoNativeCaptionSteps:[3],stepNativeHistoryForTest:[1],createNativeCaptionDocument:[1],
 };
 interface Request { version: number; id: string; createdAt: number; expiresAt?: number; sequenceId: string; projectPath: string; action: string; args: any[]; }
 interface ServiceOptions { api?: any; fs?: any; path?: any; os?: any; crypto?: any; process?: any; platform?: any; root?: string; intervalMs?: number; maxRequestsPerPoll?: number; }
@@ -54,7 +54,7 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
     return api.dispatchNativeCaptionControlRequest({action:request.action,sequenceId:request.sequenceId,projectPath:request.projectPath,args:request.args});
   }
   const info = await api.getActiveSequenceInfo(request.sequenceId);
-  if (!info || info.id !== request.sequenceId || info.projectPath !== request.projectPath) throw new Error('The active Premiere sequence or project changed. Refresh Better Captions.');
+  if (!info || info.id !== request.sequenceId || info.projectPath !== request.projectPath) throw new Error('The active Premiere sequence or project changed. Refresh S-Captions.');
   const [a, b, c, d] = request.args, id = info.id;
   switch (request.action) {
     case 'readCaptionConsolidation': return api.readCaptionConsolidation(a,id);
@@ -85,6 +85,9 @@ export async function dispatchServiceRequest(api: any, request: Request): Promis
     case 'seekNativeCaptionKeyframe': return api.seekNativeCaptionKeyframe(a,b,id);
     case 'editNativeCaptionControl': return api.editNativeCaptionControl(a,b,id);
     case 'writeNativeCaptionDocument': return api.writeNativeCaptionDocument(a,b,id);
+    case 'restoreNativeCaptionDocument': return api.restoreNativeCaptionDocument(a,b,c,id);
+    case 'undoNativeCaptionSteps': return api.undoNativeCaptionSteps(a,b,c,id);
+    case 'stepNativeHistoryForTest': return api.stepNativeHistoryForTest(a,id);
     default: throw new Error('Unsupported caption service action.');
   }
 }
@@ -109,6 +112,10 @@ export function startBackendService(options: ServiceOptions = {}) {
   const lock = path.join(base, 'worker.lock.json'), recoveryLock = path.join(base, 'worker-recovery.lock.json');
   const owner = { version: 1, instanceId, pid: processAPI.pid };
   let busy = false, alive = true, ownsLock = false, currentRequest: string | null = null;
+  // The hidden CEP worker survives visible-panel close/blur. Clearing the
+  // lease is a real parameter update, so the Program Monitor cache refreshes.
+  // Startup also reclaims any lease retained in Premiere's host namespace.
+  let guideSweepPending = typeof api.clearExpiredNativeCaptionGuides === 'function', guideSweepAt = Date.now();
   let watcher:any=null,wakeTimer:ReturnType<typeof setTimeout>|undefined,wakePending=false;
   function wake(){
     if(!alive)return;wakePending=true;if(busy||wakeTimer!==undefined)return;
@@ -188,6 +195,9 @@ export function startBackendService(options: ServiceOptions = {}) {
           if (fs.existsSync(output)) continue; // Completed request IDs are idempotent.
           if (stat.size > 40 * 1024 * 1024) throw new Error('Caption service request is too large.');
           request = validateServiceRequest(JSON.parse(fs.readFileSync(claimed, 'utf8')), name);
+          if (request.action === 'editNativeCaptionControl' && ['position','width','height'].includes(request.args[1]?.parameter)) {
+            guideSweepPending = typeof api.clearExpiredNativeCaptionGuides === 'function'; guideSweepAt = Date.now() + 800;
+          }
           const result = await dispatchServiceRequest(api, request);
           atomic(output, { version: 1, id, sequenceId: request.sequenceId, projectPath: request.projectPath, result: result ?? null });
         } catch (failure) {
@@ -196,6 +206,11 @@ export function startBackendService(options: ServiceOptions = {}) {
             ? {code:'BC_OUTPUT_UNCONFIRMED',recoverable:false,outputApplied:nativeFailure.outputApplied}:{};
           atomic(output, { version: 1, id, sequenceId: request?.sequenceId ?? null, projectPath: request?.projectPath ?? null, error: failure instanceof Error ? failure.message : String(failure),...metadata });
         } finally { currentRequest = null; try { fs.unlinkSync(claimed); } catch {} }
+      }
+      if (guideSweepPending && Date.now() >= guideSweepAt) {
+        guideSweepAt = Date.now() + 250;
+        try { const result = await api.clearExpiredNativeCaptionGuides(); guideSweepPending = result?.pending > 0; }
+        catch { /* Keep trying after a busy host/project switch; native TTL still expires. */ }
       }
     } finally { busy = false; if (alive) { announce(); if(wakePending)wake(); } else release(); }
   }

@@ -23,26 +23,28 @@
   onMount(()=>{const timer=setInterval(()=>{void controller.read();},1200);return()=>{clearInterval(timer);if(readTimer!==undefined)clearTimeout(readTimer);controller.dispose();};});
   function drag(value:boolean){dragging=value;controller.setDragging(value);}
   function axis(index:0|1,value:number){if(!controls)return;controller.queuePositionAxis(index,value/(index===0?frameWidth:frameHeight));}
-  function scalar(parameter:'width'|'height'|'groups',value:number){controller.queue(parameter,parameter==='groups'?Math.round(value):value);}
+  function resetAxis(index:0|1){if(!controls)return;controller.queuePositionAxis(index,(controls.position.defaultValue as [number,number])[index]);}
+  function scalar(parameter:'width'|'height'|'rollUpLines'|'rollUpCurrentLine',value:number){controller.queue(parameter,parameter==='rollUpLines'||parameter==='rollUpCurrentLine'?Math.round(value):value);}
   async function navigate(parameter:GeometryParameter,direction:'previous'|'next'){const next=await controller.seek(parameter,direction);if(next)onTimeChange(Number(next.timelineTicks)/254016000000);}
-  const rows=['position','width','height','groups'] as const;
-  const labels={position:'Position',width:'Width',height:'Height',groups:'Groups per page'};
+  const rows=['position','width','height','rollUpLines','rollUpCurrentLine'] as const;
+  const labels={position:'Position',width:'Width',height:'Height',rollUpLines:'Visible lines',rollUpCurrentLine:'Current line'};
 </script>
 
 <section class="native-geometry" aria-label="Native caption position and size">
   {#each rows as parameter}
     {@const descriptor=controls?.[parameter]}
-    <div class="native-geometry__row">
+    {#if parameter!=='rollUpCurrentLine'||descriptor}
+    <div class="native-geometry__row" title={parameter==='rollUpCurrentLine' ? "Which visible line holds the line being spoken, counted from where new lines appear. 1 keeps today's behaviour; higher numbers show upcoming lines ahead of it." : undefined}>
       <span class="native-geometry__animation" class:native-geometry__animation--enabled={descriptor?.animated} role="img" aria-label={descriptor?.animated ? `${labels[parameter]} keyframing enabled in Effect Controls` : `${labels[parameter]} keyframing off`} title={descriptor?.animated ? 'Keyframing enabled in Effect Controls. Edits change the value at the playhead.' : 'Keyframing is off. Enable it in Effect Controls.'}>
         <LucideIcon name="timer"/>
       </span>
       <span class="native-geometry__label">{labels[parameter]}</span>
       <div class="native-geometry__values">
         {#if parameter==='position'}
-          <ScrubbableNumber label="Caption Position X" value={descriptor ? (descriptor.value as [number,number])[0]*frameWidth : null} min={-frameWidth*10} max={frameWidth*10} step={1} decimals={1} variant="hot" disabled={disabled||!controls?.insideClip||!descriptor} onChange={value=>axis(0,value)} onDragState={drag}/>
-          <ScrubbableNumber label="Caption Position Y" value={descriptor ? (descriptor.value as [number,number])[1]*frameHeight : null} min={-frameHeight*10} max={frameHeight*10} step={1} decimals={1} variant="hot" disabled={disabled||!controls?.insideClip||!descriptor} onChange={value=>axis(1,value)} onDragState={drag}/>
+          <ScrubbableNumber label="Caption Position X" value={descriptor ? (descriptor.value as [number,number])[0]*frameWidth : null} min={-frameWidth*10} max={frameWidth*10} step={1} decimals={1} variant="hot" disabled={disabled||!controls?.insideClip||!descriptor} onChange={value=>axis(0,value)} onReset={()=>resetAxis(0)} onDragState={drag}/>
+          <ScrubbableNumber label="Caption Position Y" value={descriptor ? (descriptor.value as [number,number])[1]*frameHeight : null} min={-frameHeight*10} max={frameHeight*10} step={1} decimals={1} variant="hot" disabled={disabled||!controls?.insideClip||!descriptor} onChange={value=>axis(1,value)} onReset={()=>resetAxis(1)} onDragState={drag}/>
         {:else}
-          <ScrubbableNumber label={`Caption ${labels[parameter]}`} value={descriptor?.value as number ?? null} min={1} max={parameter==='groups'?100:8192} step={1} decimals={parameter==='groups'?0:1} variant="hot" disabled={disabled||!controls?.insideClip||!descriptor} onChange={value=>scalar(parameter,value)} onDragState={drag}/>
+          <ScrubbableNumber label={`Caption ${labels[parameter]}`} value={descriptor?.value as number ?? null} min={1} max={parameter==='rollUpCurrentLine'?(controls?.rollUpLines?.value as number ?? 8):parameter==='rollUpLines'?8:8192} step={1} decimals={parameter==='rollUpLines'||parameter==='rollUpCurrentLine'?0:1} variant="hot" disabled={disabled||!controls?.insideClip||!descriptor} onChange={value=>scalar(parameter,value)} onReset={()=>controller.queue(parameter)} onDragState={drag}/>
         {/if}
       </div>
       <div class="native-geometry__navigation">
@@ -53,6 +55,7 @@
       </div>
       <button class="native-geometry__reset" aria-label={`Reset caption ${labels[parameter]}`} title={`Reset ${labels[parameter]}${descriptor?.animated ? ' at playhead; keeps keyframing' : ''}`} disabled={disabled||!controls?.insideClip||!descriptor||dragging} onclick={()=>controller.queue(parameter as GeometryParameter)}><LucideIcon name="reset"/></button>
     </div>
+    {/if}
   {/each}
   {#if error}<p class="native-geometry__error" role="alert">{error}</p>{:else if controls&&!controls.insideClip}<p class="native-geometry__hint">Move the playhead inside this caption clip to edit.</p>{/if}
 </section>

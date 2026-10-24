@@ -84,3 +84,71 @@ test('stopping cancels scheduled work and a superseded render is not shown as an
   h.controller.notify(); h.context = { ...h.context, needed: false }; await h.advance(400);
   assert.equal(h.calls.length, 0); h.context = { ...h.context, needed: true }; h.controller.notify(); h.controller.stop(); await h.advance(5000); assert.equal(h.calls.length, 0);
 });
+
+test('verified current readback settles an uncertain write without replay and permits a later fresh edit', async () => {
+  let attempts = 0;
+  const h = fixture(() => { if (++attempts === 1) throw Object.assign(new Error('Readback was uncertain'), { code: 'BC_OUTPUT_UNCONFIRMED' }); });
+  h.controller.notify(); await h.advance(400);
+  assert.equal(h.controller.diagnostics().blocked, true);
+  // The caller has adopted the document independently read from the host.
+  h.context = { ...h.context, signature: 'host-confirmed', needed: false };
+  assert.equal(h.controller.confirmReadback('one', 'host-confirmed'), true);
+  await h.advance(10000);
+  assert.deepEqual(h.calls, ['first']);
+  assert.equal(h.controller.diagnostics().blocked, false);
+  assert.equal(h.statuses.at(-1).phase, 'idle');
+  h.context = { ...h.context, signature: 'fresh edit', needed: true }; h.controller.notify();
+  await h.advance(400); await h.advance(5000);
+  assert.deepEqual(h.calls, ['first', 'fresh edit']); h.controller.stop();
+});
+
+test('readback for another sequence, obsolete signature or unapplied edits cannot release a blocked write', async () => {
+  const h = fixture(() => { throw Object.assign(new Error('uncertain'), { code: 'BC_OUTPUT_UNCONFIRMED' }); });
+  h.controller.notify(); await h.advance(400);
+  h.context = { ...h.context, needed: false };
+  assert.equal(h.controller.confirmReadback('other', 'first'), false);
+  assert.equal(h.controller.confirmReadback('one', 'obsolete'), false);
+  h.context = { ...h.context, signature: 'unsaved edit', needed: true };
+  assert.equal(h.controller.confirmReadback('one', 'unsaved edit'), false);
+  h.controller.notify(); await h.advance(10000);
+  assert.equal(h.controller.diagnostics().blocked, true);
+  assert.deepEqual(h.calls, ['first']); h.controller.stop();
+});
+
+test('readback cannot settle an operation still running or suppress its later uncertainty', async () => {
+  let reject;
+  const h = fixture(() => new Promise((_, no) => { reject = no; }));
+  h.controller.notify(); await h.advance(400);
+  h.context = { ...h.context, needed: false };
+  assert.equal(h.controller.confirmReadback('one', 'first'), false);
+  reject(Object.assign(new Error('late uncertain response'), { code: 'BC_OUTPUT_UNCONFIRMED' }));
+  await h.advance(0);
+  assert.equal(h.controller.diagnostics().blocked, true);
+  assert.equal(h.statuses.at(-1).phase, 'error');
+  assert.equal(h.controller.confirmReadback('one', 'first'), true);
+  await h.advance(10000); assert.deepEqual(h.calls, ['first']); h.controller.stop();
+});
+
+test('verified readback clears only its own sequence and cannot unblock another project context', async () => {
+  const h = fixture();
+  h.controller.block('one', 'First sequence requires verification');
+  h.controller.block('two', 'Other sequence requires verification');
+  h.context = { ...h.context, needed: false };
+  assert.equal(h.controller.confirmReadback('one', 'first'), true);
+  assert.equal(h.statuses.at(-1).phase, 'idle');
+  assert.equal(h.controller.diagnostics().blocked, true);
+  h.context = { sequenceId: 'two', signature: 'other edit', needed: true, ready: true };
+  h.controller.notify(); await h.advance(10000);
+  assert.deepEqual(h.calls, []); assert.match(h.statuses.at(-1).message, /Other sequence/);
+  assert.equal(h.controller.confirmReadback('one', 'first'), false); h.controller.stop();
+});
+test('after the layer is read back (Premiere Undo), returning to an earlier written state writes it again', async () => {
+  const h = fixture(); h.controller.notify(); await h.advance(400);
+  assert.deepEqual(h.calls, ['first']);
+  // Premiere Undo: the editor adopts the older layer, so nothing is needed.
+  h.context = { ...h.context, signature: 'older', needed: false }; h.controller.forget(); await h.advance(400);
+  // The user (or a typing restore) brings back exactly the state written before.
+  h.context = { ...h.context, signature: 'first', needed: true }; h.controller.notify(); await h.advance(400);
+  assert.deepEqual(h.calls, ['first', 'first']);
+  h.controller.stop();
+});

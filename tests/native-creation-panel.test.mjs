@@ -5,6 +5,7 @@ import { validTransparentCarrier } from '../webview-ui/src/lib/native-effect/car
 import { decodeNativePanelDocument, rehydrateNativePanel, prepareNativePanelUpdate } from '../webview-ui/src/lib/native-effect/panel.ts';
 import { DEFAULT_STYLE, DEFAULT_ANIMATION } from '../webview-ui/src/lib/types.ts';
 import { NATIVE_EFFECT_MATCH_NAME } from '../webview-ui/src/lib/native-effect/contract.ts';
+import { nativeCaptionPhrases } from '../webview-ui/src/lib/native-effect/phrases.ts';
 
 const sequenceId = '12345678-1234-5678-abcd-123456789abc';
 function session() {return {sequenceId,projectPath:'/project/test.prproj',sequenceName:'Native',frameWidth:720,frameHeight:1280,frameRate:24,duration:10,currentTime:0,style:structuredClone(DEFAULT_STYLE),animation:structuredClone(DEFAULT_ANIMATION),hasTranscript:true,isLoading:false,transcriptJson:null,
@@ -44,13 +45,46 @@ test('native creation keeps upper/lower display modes separate from source words
  for(const mode of ['uppercase','lowercase']){
   const input=session();input.style.textTransform=mode;const before=structuredClone(input);
   const plan=prepareNativeCreation(input,16),decoded=decodeNativePanelDocument(plan.documentText,sequenceId);
-  assert.equal(decoded.style.letterCase,mode);assert.equal(decoded.binaryVersion,4);assert.equal(decoded.captions[0].words[0].text,'Hello');assert.deepEqual(input,before);
+  assert.equal(decoded.style.letterCase,mode);assert.equal(decoded.binaryVersion,10);assert.equal(decoded.captions[0].words[0].text,'Hello');assert.deepEqual(input,before);
  }
 });
 
 
-test('native creation retains explicit independent bubble padding and underline without upgrading untouched defaults',()=>{
- const legacy=prepareNativeCreation(session(),16);assert.equal(decodeNativePanelDocument(legacy.documentText,sequenceId).binaryVersion,3);
+test('native creation retains explicit independent bubble padding and underline in the v9 document',()=>{
+ const legacy=prepareNativeCreation(session(),16);assert.equal(decodeNativePanelDocument(legacy.documentText,sequenceId).binaryVersion,10);
  const input=session();Object.assign(input.style.activeWord,{bubblePaddingInline:22,bubblePaddingBlock:3,underline:true});input.style.spokenWord.underline=false;
- const plan=prepareNativeCreation(input,16),decoded=decodeNativePanelDocument(plan.documentText,sequenceId);assert.equal(decoded.binaryVersion,6);assert.equal(decoded.style.current.bubblePaddingInline,22);assert.equal(decoded.style.current.bubblePaddingBlock,3);assert.equal(decoded.style.current.padding,input.style.activeWord.padding);assert.equal(decoded.style.current.underline,true);assert.equal(decoded.style.spoken.underline,false);assert.equal(decoded.style.upcoming.bubblePaddingInline,undefined);assert.equal(decoded.style.upcoming.underline,undefined);
+ const plan=prepareNativeCreation(input,16),decoded=decodeNativePanelDocument(plan.documentText,sequenceId);assert.equal(decoded.binaryVersion,10);assert.equal(decoded.style.current.bubblePaddingInline,22);assert.equal(decoded.style.current.bubblePaddingBlock,3);assert.equal(decoded.style.current.padding,input.style.activeWord.padding);assert.equal(decoded.style.current.underline,true);assert.equal(decoded.style.spoken.underline,false);assert.equal(decoded.style.upcoming.bubblePaddingInline,undefined);assert.equal(decoded.style.upcoming.underline,undefined);
+});
+
+test('native creation writes explicit row boundaries without changing words or their storage', () => {
+  const input = session();
+  input.captions[0].words[0].lineBreakBefore = 'break';
+  input.captions[0].words[1].lineBreakBefore = 'join';
+  input.captions[0].words[0].pauseLinesRemoved = 3;
+  input.captions[0].words[1].pauseLinesRemoved = 8;
+  const before = structuredClone(input), plan = prepareNativeCreation(input, 16);
+  assert.equal(plan.document.binaryVersion, 10);
+  assert.deepEqual(decodeNativePanelDocument(plan.documentText, sequenceId).captions[0].words.map(word => word.lineBreakBefore), ['break', 'join']);
+  assert.deepEqual(decodeNativePanelDocument(plan.documentText, sequenceId).captions[0].words.map(word => word.pauseLinesRemoved), [3, 8]);
+  assert.deepEqual(input, before);
+});
+
+test('native creation seeds deliberate session splits once while preserving explicit joins and continuous automatic containers', () => {
+  const input = session();
+  input.captions = ['One', 'Two', 'Three', 'Four', 'Five'].map((text, index) => {
+    const startTime = 1 + index * .2, endTime = startTime + .1;
+    return { id: `caption-${index}`, text, startTime, endTime, manualSplit: index !== 2,
+      words: [{ text, startTime, endTime, isActive: false, ...(index === 3 ? { lineBreakBefore: 'join' } : index === 4 ? { lineBreakBefore: 'break' } : {}) }] };
+  });
+  const before = structuredClone(input), plan = prepareNativeCreation(input, 16);
+  const decoded = decodeNativePanelDocument(plan.documentText, sequenceId);
+  assert.deepEqual(decoded.captions.map(caption => caption.manualSplit), [true, true, false, true, true]);
+  assert.deepEqual(decoded.captions.map(caption => caption.words[0].lineBreakBefore), [undefined, 'break', undefined, 'join', 'break']);
+  assert.deepEqual(decoded.captions.map(caption => [caption.id, caption.words[0].text, caption.words[0].start, caption.words[0].end]),
+    input.captions.map(caption => [caption.id, caption.text, caption.startTime, caption.endTime]));
+  const captions = decoded.captions.map(caption => ({ id: caption.id, manualSplit: caption.manualSplit,
+    words: caption.words.map(word => ({ text: word.text, startTime: word.start, endTime: word.end, endOfSentence: word.endOfSentence, lineBreakBefore: word.lineBreakBefore })) }));
+  const rows = nativeCaptionPhrases(captions, 56).flatMap(caption => caption.renderSegments);
+  assert.deepEqual([...new Map(rows.map(row => [row.id, row.text])).values()], ['One', 'Two Three Four', 'Five']);
+  assert.deepEqual(input, before);
 });

@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { defaultNativeStyle } from '../webview-ui/src/lib/native-effect/contract.ts';
 import { encodeNativeTransportText } from '../webview-ui/src/lib/native-effect/encode.ts';
 import { decodeNativePanelDocument } from '../webview-ui/src/lib/native-effect/panel.ts';
+import { legacyNativeDocumentBytes, nativeCarrier } from './helpers/native-document.mjs';
 
 const source = fs.readFileSync(new URL('../cep/host/bridge.jsx', import.meta.url), 'utf8');
 const MATCH = 'AE.com.swen.bettercaptions.native.experimental', NS = 'http://ns.adobe.com/premierePrivateProjectMetaData/1.0/', FIELD = 'BetterCaptionsNativeCarrier';
@@ -15,7 +16,7 @@ const word = (text, start, end) => ({ text, start, end, endOfSentence: false });
 
 function fixture(options = {}) {
   const files = new Map(), writes = [];
-  const document = { version: 1, binaryVersion: 4, animationAuthority: 'premiere-effect', sequenceId: 'seq-a', timeOriginSeconds: 3600, style: { ...defaultNativeStyle(), letterCase: 'uppercase' },
+  const document = { version: 1, binaryVersion: 8, animationAuthority: 'premiere-effect', sequenceId: 'seq-a', timeOriginSeconds: 3600, style: { ...defaultNativeStyle(), letterCase: 'uppercase' },
     captions: [{ id: 'manual-first', start: 1, end: 2, manualSplit: true, words: [word('My correction!', 1, 2)] }, { id: 'manual-last', start: 3, end: 4, manualSplit: true, words: [word('Keep edited timings.', 3, 4)] }] };
   if (options.binaryVersion !== undefined) {
     document.binaryVersion = options.binaryVersion;
@@ -38,15 +39,18 @@ function fixture(options = {}) {
     document.style.current.underline=false;
     // Spoken omits underline to retain document/default fallback.
   }
-  const next = structuredClone(document); next.captions[1].words.push(word('New tail', 6, 7)); next.captions[1].end = 7;
-  const originalText = encodeNativeTransportText(document), appendedText = encodeNativeTransportText(next);
+  options.prepareDocument?.(document);
+  const originalText = options.binaryVersion < 8 ? nativeCarrier(legacyNativeDocumentBytes(document, options.binaryVersion)) : encodeNativeTransportText(document);
+  // Extension starts with the real decoder's one-time boundary/default migration.
+  const next = decodeNativePanelDocument(originalText, 'seq-a'); next.captions[1].words.push(word('New tail', 6, 7)); next.captions[1].end = 7;
+  const appendedText = encodeNativeTransportText(next);
   const marker = JSON.stringify({ version: 1, owner: 'com.swen.bettercaptions', kind: 'transparent-video', projectItemId: 'carrier-item', creationId: '12345678-1234-1234-abcd-123456789abc', width: 720, height: 1280 });
   const carrierItem = { type: 1, nodeId: 'carrier-item', getMediaPath: () => '', getProjectMetadata: () => JSON.stringify({ [NS + FIELD]: marker }) };
   const item = (id, path) => ({ nodeId: id, getMediaPath: () => path });
   function parameter(name, value, animated = false) {
     return { displayName: name, value, animated, keys: animated ? [{ ticks: tick(3601), value, interpolation: 5 }, { ticks: tick(3604), value, interpolation: 0 }] : [],
       isTimeVarying() { return this.animated; }, getValue() { return this.value; }, getKeys() { return this.keys.map(key => ({ ticks: key.ticks })); },
-      getValueAtKey(at) { return this.keys.find(key => key.ticks === at.ticks).value; }, getInterpolationTypeAtKey(at) { return this.keys.find(key => key.ticks === at.ticks).interpolation; },
+      getValueAtKey(at) { return this.keys.find(key => key.ticks === at.ticks).value; }, getValueAtTime() { return this.value; }, getInterpolationTypeAtKey(at) { return this.keys.find(key => key.ticks === at.ticks).interpolation; },
       setValue(value) { writes.push(['document', name, value]); if (!options.ignoreDocument) this.value = value; options.hook?.('document', h); if (options.throwDocument) throw new Error('Unconfirmed document setter'); } };
   }
   function clip(id, projectItem, start, end) {
@@ -58,7 +62,7 @@ function fixture(options = {}) {
     writes.push(['timing', name, value.ticks]); if (options.ignoreTiming !== name) fields[name] = value; options.hook?.(name, h);
     if (options.throwTiming === name) throw new Error('Unconfirmed duration setter');
   } });
-  const params = collection([parameter('Position', [.5, .8], true), parameter('Width', 576, true), parameter('Height', 415), parameter('Characters per caption', 56), parameter('Caption document (experimental)', originalText)]);
+  const params = collection([parameter('Position', [.5, .8], true), parameter('Width', 576, true), parameter('Height', 415), parameter('Characters per line', 56), parameter('Caption document (experimental)', originalText), parameter('Global font size (64 = 1x)', 64)]);
   caption.components.push({ matchName: 'AE.ADBE Motion', properties: collection([parameter('Scale', 100)]) }, { matchName: MATCH, properties: params });
   const footage = clip('footage', item('footage-item', '/media/base.mp4'), 0, 20);
   const audio = clip('audio', item('audio-item', '/media/dialogue.wav'), 0, 20);
@@ -108,6 +112,61 @@ test('old text, timing, style and manual-split changes are refused before any du
     const h = fixture(), receipt = h.read(), changed = structuredClone(h.next); mutate(changed);
     const result = h.extend(receipt, { documentText: encodeNativeTransportText(changed) });
     assert.ok(result.error); assert.equal(result.code, undefined); assert.deepEqual(h.writes, []);
+  }
+});
+
+test('v8 extension preserves every automatic, break and join boundary while accepting new tail boundaries', () => {
+  for (const lineBreakBefore of [undefined, 'break', 'join']) {
+    const h = fixture({ prepareDocument(document) {
+      document.captions[0].words = [word('Automatic', 1, 1.2), { ...word('Break', 1.2, 1.5), lineBreakBefore: 'break' }, { ...word('Join', 1.5, 2), lineBreakBefore: 'join' }];
+    } });
+    const next = structuredClone(h.next); if (lineBreakBefore) next.captions[1].words[1].lineBreakBefore = lineBreakBefore;
+    const result = h.extend(h.read(), { documentText: encodeNativeTransportText(next) });
+    assert.equal(result.ok, true, result.error);
+    const after = decodeNativePanelDocument(result.connection.documentText, 'seq-a');
+    assert.deepEqual(after.captions[0], decodeNativePanelDocument(h.originalText, 'seq-a').captions[0]);
+    assert.equal(after.captions[1].words[1].lineBreakBefore, lineBreakBefore);
+  }
+  for (const [before, after] of [[undefined, 'break'], ['break', 'join'], ['join', undefined]]) {
+    const h = fixture({ prepareDocument(document) { if (before) document.captions[0].words[0].lineBreakBefore = before; } });
+    const next = structuredClone(h.next);
+    if (after) next.captions[0].words[0].lineBreakBefore = after; else delete next.captions[0].words[0].lineBreakBefore;
+    assert.match(h.extend(h.read(), { documentText: encodeNativeTransportText(next) }).error, /previous caption/);
+    assert.deepEqual(h.writes, []);
+  }
+});
+
+test('invalid or missing v8 word boundaries refuse before any setter, including matching old and new carriers', () => {
+  for (const mutate of [
+    (bytes, offset) => { bytes.writeUInt32LE(4, offset); return bytes; },
+    (bytes, offset) => { bytes.writeUInt32LE(0xffffffff, offset); return bytes; },
+    (bytes, offset) => Buffer.concat([bytes.subarray(0, offset), bytes.subarray(offset + 4)]),
+  ]) {
+    for (const corruptExisting of [false, true]) {
+      const h = fixture(), bytes = Buffer.from((corruptExisting ? h.originalText : h.appendedText).slice(7), 'hex');
+      const identitySize = bytes.readUInt32LE(12), wordOffset = 12 + 4 + identitySize + 8;
+      const boundaryOffset = wordOffset + 4 + bytes.readUInt32LE(wordOffset) + 20;
+      const documentText = nativeCarrier(mutate(bytes, boundaryOffset));
+      if (corruptExisting) {
+        h.params[4].value = documentText;
+        const fresh = h.connection(); h.snapshot.locator = fresh.locator; h.snapshot.revision = fresh.revision;
+      }
+      assert.ok(h.extend(h.read(), { documentText }).error);
+      assert.deepEqual(h.writes, []);
+    }
+  }
+});
+
+test('extension rejects container replacement, reordering, removal, and append to multiple containers', () => {
+  for (const mutate of [
+    document => { document.captions[0].id = 'replacement'; },
+    document => { document.captions.reverse(); },
+    document => { document.captions.shift(); },
+    document => { document.captions[0].words.push(word('Another tail', 2, 2.5)); document.captions[0].end = 2.5; },
+  ]) {
+    const h = fixture(), next = structuredClone(h.next); mutate(next);
+    assert.ok(h.extend(h.read(), { documentText: encodeNativeTransportText(next) }).error);
+    assert.deepEqual(h.writes, []);
   }
 });
 
@@ -164,29 +223,81 @@ test('duration-only extension can reveal existing hidden words without rewriting
 
 
 test('v5 extension preserves background space flags, all styles/manual splits, native keys and old words',()=>{
- const h=fixture({fillSpaces:true}),curves=JSON.stringify(h.params.slice(0,4)),before=decodeNativePanelDocument(h.originalText,'seq-a');
- assert.equal(before.binaryVersion,5);assert.equal(before.style.current.bubbleFillSpaces,true);assert.equal(before.style.spoken.bubbleFillSpaces,true);
+ const h=fixture({binaryVersion:5,fillSpaces:true}),curves=JSON.stringify(h.params.slice(0,4)),before=decodeNativePanelDocument(h.originalText,'seq-a');
+ assert.equal(Buffer.from(h.originalText.slice(7),'hex').readUInt32LE(4),5);assert.equal(before.binaryVersion,10);assert.equal(before.style.current.bubbleFillSpaces,true);assert.equal(before.style.spoken.bubbleFillSpaces,true);
  const result=h.extend(h.read());assert.equal(result.ok,true,result.error);assert.equal(result.connection.documentText,h.appendedText);
  const after=decodeNativePanelDocument(result.connection.documentText,'seq-a');
- assert.equal(after.binaryVersion,5);assert.deepEqual(after.style,before.style);assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);
+ assert.equal(after.binaryVersion,10);assert.deepEqual(after.style,before.style);assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);
  assert.deepEqual(after.captions[0],before.captions[0]);assert.deepEqual(after.captions[1].words.slice(0,before.captions[1].words.length),before.captions[1].words);
  assert.equal(after.captions[1].id,before.captions[1].id);assert.equal(after.captions[1].manualSplit,true);assert.equal(JSON.stringify(h.params.slice(0,4)),curves);
  assert.equal(result.connection.startTicks,tick(10));assert.equal(result.connection.inTicks,tick(3600));
 });
 
-test('v1 through v5 extension retains its original format and exact style footer',()=>{
- for(const binaryVersion of [1,2,3,4,5]){
+test('v1 through v7 extension migrates boundaries and defaults to v10 without changing previous content',()=>{
+ for(const binaryVersion of [1,2,3,4,5,6,7]){
   const h=fixture({binaryVersion}),before=decodeNativePanelDocument(h.originalText,'seq-a'),result=h.extend(h.read());
   assert.equal(result.ok,true,result.error);assert.equal(result.connection.documentText,h.appendedText);
-  const after=decodeNativePanelDocument(result.connection.documentText,'seq-a');assert.equal(after.binaryVersion,before.binaryVersion);assert.deepEqual(after.style,before.style);
+  const after=decodeNativePanelDocument(result.connection.documentText,'seq-a');assert.equal(Buffer.from(h.originalText.slice(7),'hex').readUInt32LE(4),binaryVersion);assert.equal(after.binaryVersion,10);assert.deepEqual(after.style,before.style);
+  assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);assert.deepEqual(after.captions[0],before.captions[0]);assert.deepEqual(after.captions[1].words.slice(0,1),before.captions[1].words);assert.equal(after.captions[1].words[0].lineBreakBefore,'break');assert.equal(after.captions[1].manualSplit,true);
  }
 });
 
+test('legacy migration seeds breaks in storage order even for automatic containers with earlier timestamps', () => {
+  const h = fixture({ binaryVersion: 7, prepareDocument(document) {
+    document.captions[0].words = [word('Stored first', 3, 4)];
+    document.captions[0].start = 3; document.captions[0].end = 4;
+    document.captions[1].manualSplit = false; document.captions[1].words = [word('Stored second', 1, 2)];
+    document.captions[1].start = 1; document.captions[1].end = 2;
+  } });
+  const result = h.extend(h.read()); assert.equal(result.ok, true, result.error);
+  const after = decodeNativePanelDocument(result.connection.documentText, 'seq-a');
+  assert.equal(after.captions[0].id, 'manual-first'); assert.equal(after.captions[0].words[0].lineBreakBefore, undefined);
+  assert.equal(after.captions[1].id, 'manual-last'); assert.equal(after.captions[1].words[0].lineBreakBefore, 'break');
+  assert.equal(after.captions[1].manualSplit, false);
+});
+
+test('legacy-to-v8 append rejects lost storage breaks and changes to previously absent style defaults', () => {
+  for (const binaryVersion of [1, 2, 3, 4, 5, 6, 7]) {
+    for (const mutate of [
+      document => { delete document.captions[1].words[0].lineBreakBefore; },
+      document => { document.captions[1].words[0].lineBreakBefore = 'join'; },
+      document => { document.captions[0].words[0].lineBreakBefore = 'break'; },
+      document => { document.captions[0].words[0].endOfSentence = true; },
+      document => { document.style.current.opacity = .123; },
+      document => {
+        if (binaryVersion === 1) document.timeOriginSeconds = 1;
+        else if (binaryVersion === 2) document.style.baseFontWeight = 500;
+        else if (binaryVersion === 3) document.style.letterCase = 'uppercase';
+        else if (binaryVersion === 4) document.style.current.bubbleFillSpaces = true;
+        else if (binaryVersion === 5) document.style.current.bubblePaddingInline = 0;
+        else document.style.current.paddingTop = 0;
+      },
+    ]) {
+      const h = fixture({ binaryVersion }), next = structuredClone(h.next); mutate(next);
+      assert.ok(h.extend(h.read(), { documentText: encodeNativeTransportText(next) }).error, `v${binaryVersion} must preserve its decoded state`);
+      assert.deepEqual(h.writes, []);
+    }
+  }
+});
+
+test('v1 through v7 duration-only extension keeps its exact original carrier without a migration write', () => {
+  for (const binaryVersion of [1, 2, 3, 4, 5, 6, 7]) {
+    const h = fixture({ binaryVersion }), result = h.extend(h.read(), { documentText: h.originalText });
+    assert.equal(result.ok, true, result.error); assert.equal(result.connection.documentText, h.originalText);
+    assert.equal(h.writes.filter(row => row[0] === 'document').length, 0);
+  }
+});
+
+test('v8 extension cannot downgrade to a legacy layout and lose word boundaries', () => {
+  const h = fixture(), documentText = nativeCarrier(legacyNativeDocumentBytes(h.next, 7));
+  assert.match(h.extend(h.read(), { documentText }).error, /preserve/); assert.deepEqual(h.writes, []);
+});
+
 test('v5 footer flag edits, malformed booleans, trailing bytes and truncation refuse before any setter',()=>{
- const altered=fixture({fillSpaces:true}),receipt=altered.read(),changed=structuredClone(altered.next);changed.style.current.bubbleFillSpaces=false;
+ const altered=fixture({binaryVersion:5,fillSpaces:true}),receipt=altered.read(),changed=structuredClone(altered.next);changed.style.current.bubbleFillSpaces=false;
  assert.match(altered.extend(receipt,{documentText:encodeNativeTransportText(changed)}).error,/preserve/);assert.deepEqual(altered.writes,[]);
  for(const mutate of [bytes=>{bytes.writeUInt32LE(2,bytes.length-12);return bytes;},bytes=>bytes.subarray(0,bytes.length-4),bytes=>Buffer.concat([bytes,Buffer.from([0,0,0,0])]),bytes=>{bytes.writeUInt32LE(7,4);return bytes;}]){
-  const h=fixture({fillSpaces:true}),bytes=mutate(Buffer.from(h.originalText.slice(7),'hex'));
+  const h=fixture({binaryVersion:5,fillSpaces:true}),bytes=mutate(Buffer.from(h.originalText.slice(7),'hex'));
   // Even matching malformed old/new footers cannot serve as an append-only
   // preservation proof. Reject before changing the host clip duration.
   h.params[4].value='BCDOC1:'+bytes.toString('hex');const fresh=h.connection();h.snapshot.locator=fresh.locator;h.snapshot.revision=fresh.revision;
@@ -195,34 +306,34 @@ test('v5 footer flag edits, malformed booleans, trailing bytes and truncation re
 });
 
 test('v6 extension preserves both padding axes and absent-axis fallback with every previous style, word and native key',()=>{
- const h=fixture({paddingAxes:true,fillSpaces:true,underline:true}),curves=JSON.stringify(h.params.slice(0,4)),before=decodeNativePanelDocument(h.originalText,'seq-a');
- assert.equal(before.binaryVersion,6);assert.equal(before.style.current.bubblePaddingInline,19);assert.equal(before.style.current.bubblePaddingBlock,4096);assert.equal(before.style.spoken.bubblePaddingBlock,undefined);
+ const h=fixture({binaryVersion:6,paddingAxes:true,fillSpaces:true,underline:true}),curves=JSON.stringify(h.params.slice(0,4)),before=decodeNativePanelDocument(h.originalText,'seq-a');
+ assert.equal(Buffer.from(h.originalText.slice(7),'hex').readUInt32LE(4),6);assert.equal(before.binaryVersion,10);assert.equal(before.style.current.bubblePaddingInline,19);assert.equal(before.style.current.bubblePaddingBlock,4096);assert.equal(before.style.spoken.bubblePaddingBlock,undefined);
  assert.equal(before.style.upcoming.underline,true);assert.equal(before.style.current.underline,false);assert.equal(before.style.spoken.underline,undefined);
  const result=h.extend(h.read());assert.equal(result.ok,true,result.error);const after=decodeNativePanelDocument(result.connection.documentText,'seq-a');
- assert.equal(after.binaryVersion,6);assert.deepEqual(after.style,before.style);assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);assert.deepEqual(after.captions[0],before.captions[0]);
+ assert.equal(after.binaryVersion,10);assert.deepEqual(after.style,before.style);assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);assert.deepEqual(after.captions[0],before.captions[0]);
  assert.deepEqual(after.captions[1].words.slice(0,before.captions[1].words.length),before.captions[1].words);assert.equal(after.captions[1].manualSplit,true);assert.equal(JSON.stringify(h.params.slice(0,4)),curves);
  assert.equal(result.connection.startTicks,tick(10));assert.equal(result.connection.inTicks,tick(3600));
 });
 
 test('v6 axis changes, invalid IEEE values and malformed footer refuse before any duration or document setter',()=>{
  for(const field of ['bubblePaddingInline','bubblePaddingBlock']){
-  const h=fixture({paddingAxes:true}),changed=structuredClone(h.next);changed.style.current[field]=17;
+  const h=fixture({binaryVersion:6,paddingAxes:true}),changed=structuredClone(h.next);changed.style.current[field]=17;
   assert.match(h.extend(h.read(),{documentText:encodeNativeTransportText(changed)}).error,/preserve/);assert.deepEqual(h.writes,[]);
  }
  for(const value of [-2,-.001,4096.000000001,Infinity,-Infinity,NaN]){
-  const h=fixture({paddingAxes:true}),bytes=Buffer.from(h.originalText.slice(7),'hex');bytes.writeDoubleLE(value,bytes.length-60);
+  const h=fixture({binaryVersion:6,paddingAxes:true}),bytes=Buffer.from(h.originalText.slice(7),'hex');bytes.writeDoubleLE(value,bytes.length-60);
   h.params[4].value='BCDOC1:'+bytes.toString('hex');const entry=h.connection();h.snapshot.locator=entry.locator;h.snapshot.revision=entry.revision;
   assert.match(h.extend(h.read(),{documentText:h.params[4].value}).error,/padding axis/);assert.deepEqual(h.writes,[]);
  }
  for(const adjust of [bytes=>bytes.subarray(0,bytes.length-1),bytes=>Buffer.concat([bytes,Buffer.from([0])])]){
-  const h=fixture({paddingAxes:true}),bytes=adjust(Buffer.from(h.originalText.slice(7),'hex'));h.params[4].value='BCDOC1:'+bytes.toString('hex');
+  const h=fixture({binaryVersion:6,paddingAxes:true}),bytes=adjust(Buffer.from(h.originalText.slice(7),'hex'));h.params[4].value='BCDOC1:'+bytes.toString('hex');
   const entry=h.connection();h.snapshot.locator=entry.locator;h.snapshot.revision=entry.revision;assert.ok(h.extend(h.read(),{documentText:h.params[4].value}).error);assert.deepEqual(h.writes,[]);
  }
 });
 
 test('v6 axis walker accepts exact boundaries, fractional/subnormal positives, negative zero and absent sentinel without normalizing bytes',()=>{
  for(const value of [-1,-0,0,Number.MIN_VALUE,7.125,4096]){
-  const h=fixture({paddingAxes:true}),bytes=Buffer.from(h.originalText.slice(7),'hex');bytes.writeDoubleLE(value,bytes.length-60);
+  const h=fixture({binaryVersion:6,paddingAxes:true}),bytes=Buffer.from(h.originalText.slice(7),'hex');bytes.writeDoubleLE(value,bytes.length-60);
   h.params[4].value='BCDOC1:'+bytes.toString('hex');const entry=h.connection();h.snapshot.locator=entry.locator;h.snapshot.revision=entry.revision;
   const result=h.extend(h.read(),{documentText:h.params[4].value});assert.equal(result.ok,true,result.error);assert.equal(result.connection.documentText,h.params[4].value);
   assert.equal(h.writes.filter(row=>row[0]==='document').length,0);
@@ -230,11 +341,20 @@ test('v6 axis walker accepts exact boundaries, fractional/subnormal positives, n
 });
 
 test('v6 underline tri-state bytes remain immutable and invalid or missing flags refuse before setters',()=>{
- const changed=fixture({paddingAxes:true,underline:true}),next=structuredClone(changed.next);next.style.current.underline=true;
+ const changed=fixture({binaryVersion:6,paddingAxes:true,underline:true}),next=structuredClone(changed.next);next.style.current.underline=true;
  assert.match(changed.extend(changed.read(),{documentText:encodeNativeTransportText(next)}).error,/preserve/);assert.deepEqual(changed.writes,[]);
  for(const mutate of [bytes=>{bytes.writeUInt32LE(3,bytes.length-12);return bytes;},bytes=>{bytes.writeUInt32LE(0xffffffff,bytes.length-4);return bytes;},bytes=>bytes.subarray(0,bytes.length-12)]){
-  const h=fixture({paddingAxes:true,underline:true}),bytes=mutate(Buffer.from(h.originalText.slice(7),'hex'));h.params[4].value='BCDOC1:'+bytes.toString('hex');
+  const h=fixture({binaryVersion:6,paddingAxes:true,underline:true}),bytes=mutate(Buffer.from(h.originalText.slice(7),'hex'));h.params[4].value='BCDOC1:'+bytes.toString('hex');
   const entry=h.connection();h.snapshot.locator=entry.locator;h.snapshot.revision=entry.revision;
   assert.match(h.extend(h.read(),{documentText:h.params[4].value}).error,/underline|Truncated/);assert.deepEqual(h.writes,[]);
  }
+});
+
+
+test('v9 extension preserves deletion counts and refuses changing an existing gap override',()=>{
+ const h=fixture({prepareDocument(document){document.captions[0].words[0].pauseLinesRemoved=2;}});
+ const result=h.extend(h.read());assert.equal(result.ok,true);
+ const decoded=decodeNativePanelDocument(result.connection.documentText,'seq-a');assert.equal(decoded.captions[0].words[0].pauseLinesRemoved,2);
+ const bad=fixture({prepareDocument(document){document.captions[0].words[0].pauseLinesRemoved=2;}}),next=structuredClone(bad.next);next.captions[0].words[0].pauseLinesRemoved=1;
+ const refused=bad.extend(bad.read(),{documentText:encodeNativeTransportText(next)});assert.ok(refused.error);assert.deepEqual(bad.writes,[]);
 });

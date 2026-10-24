@@ -1,4 +1,7 @@
 #pragma once
+#include "parameters.hpp"
+#include "dimension_defaults.hpp"
+#include "purposeful_controls.hpp"
 // Draw-only Program Monitor caption bounds; never used by frame rendering.
 // Pointer editing is a separate opt-in experiment and is off in production.
 #include "AE_EffectUI.h"
@@ -11,29 +14,40 @@
 #include <ctime>
 #include <cmath>
 #include <cstdio>
+#if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 namespace better_captions::adobe::ui_probe {
+using namespace better_captions::adobe::parameters;
 // Owner-only regular flag enables bounded, non-content diagnostics without
 // changing Premiere preferences or enabling the experimental pointer handlers.
 inline bool boundsDiagnosticsFlag(const char* path) {
+#if defined(_WIN32)
+ (void)path;return false;
+#else
  const int file=::open(path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);if(file<0)return false;
  struct stat status{};const bool enabled=::fstat(file,&status)==0&&S_ISREG(status.st_mode)&&status.st_uid==::getuid()&&(status.st_mode&0077)==0&&status.st_nlink==1;
  ::close(file);return enabled;
+#endif
 }
 inline bool boundsDiagnosticsEnabled() {
+#if defined(_WIN32)
+ return false;
+#else
  static std::atomic<long long> last{-1};static std::atomic<bool> enabled{false};
  struct timespec now{};if(::clock_gettime(CLOCK_MONOTONIC,&now))return false;
  auto previous=last.load(std::memory_order_relaxed);
  if(previous!=now.tv_sec&&last.compare_exchange_strong(previous,now.tv_sec,std::memory_order_relaxed))enabled.store(boundsDiagnosticsFlag("/tmp/better-captions-native-bounds-diagnostics.enabled"),std::memory_order_relaxed);
  return enabled.load(std::memory_order_relaxed);
+#endif
 }
 inline void log(const char* action,long event,long window,long error=0,long x=0,long y=0,long continuation=0,long sendDrag=0,long lastTime=0) {
 #if defined(BC_UI_PROBE_TEST_LOG)
  BC_UI_PROBE_TEST_LOG(action,event,window,error,x,y,continuation,sendDrag,lastTime);return;
-#elif defined(BC_UI_PROBE_TEST_NO_LOG)
+#elif defined(BC_UI_PROBE_TEST_NO_LOG) || defined(_WIN32)
  (void)action;(void)event;(void)window;(void)error;(void)x;(void)y;(void)continuation;(void)sendDrag;(void)lastTime;return;
 #else
 #if BC_ENABLE_CUSTOM_UI_PROBE
@@ -57,7 +71,7 @@ template<class T>class Suite {
 };
 inline PF_Err registerUI(PF_InData* in) {
  if(!in->inter.register_ui){log("register-missing",0,0);return PF_Err_NONE;}
- PF_CustomUIInfo info{};info.events=PF_CustomEFlag_COMP;info.comp_ui_alignment=PF_UIAlignment_NONE;
+ PF_CustomUIInfo info{};info.events=PF_CustomEFlag_COMP|PF_CustomEFlag_EFFECT;info.comp_ui_alignment=PF_UIAlignment_NONE;
  const auto err=in->inter.register_ui(in->effect_ref,&info);log("register",0,0,err,info.events,info.comp_ui_alignment);
  // An optional probe must not make a working renderer unavailable.
  return PF_Err_NONE;
@@ -80,19 +94,19 @@ inline bool transform(PF_InData* in,PF_EventExtra* e,PF_FixedPoint& point,bool t
 }
 inline PF_Fixed fixed(double value){return static_cast<PF_Fixed>(std::max(-32767.0,std::min(32767.0,value))*65536);}
 // 0=center(move), 1=right(width), 2=bottom(height), 3=bottom-right(both).
-inline std::array<PF_FixedPoint,4> handles(PF_ParamDef* p[]){
- const auto x=p[1]->u.td.x_value,y=p[1]->u.td.y_value;
- const auto halfW=fixed(p[2]->u.fs_d.value/2),halfH=fixed(p[3]->u.fs_d.value/2);
+inline std::array<PF_FixedPoint,4> handles(PF_ParamDef* p[],PF_InData* in=nullptr){
+ const auto x=p[Position]->u.td.x_value,y=p[Position]->u.td.y_value;
+ const auto halfW=fixed(resolveDimension(p[Width]->u.fs_d.value,in,true)/2),halfH=fixed(resolveDimension(p[Height]->u.fs_d.value,in,false)/2);
  return {{{x,y},{x+halfW,y},{x,y+halfH},{x+halfW,y+halfH}}};
 }
 // Point parameters are already downsampled by the host. Pixel-distance sliders
 // are not; apply exactly the same anisotropic factors as the frame renderer.
 inline bool frameBounds(PF_InData* in,PF_ParamDef* p[],PF_EventExtra* e,std::array<PF_FixedPoint,4>& corners) {
- if(!in||!p||!p[1]||!p[2]||!p[3]){log("bounds-parameters-missing",0,0);return false;}
+ if(!in||!p||!p[Position]||!p[Width]||!p[Height]){log("bounds-parameters-missing",0,0);return false;}
  const double sx=in->downsample_x.den?double(in->downsample_x.num)/in->downsample_x.den:1;
  const double sy=in->downsample_y.den?double(in->downsample_y.num)/in->downsample_y.den:1;
- const double x=p[1]->u.td.x_value/65536.0,y=p[1]->u.td.y_value/65536.0;
- const double w=p[2]->u.fs_d.value*sx,h=p[3]->u.fs_d.value*sy;
+ const double x=p[Position]->u.td.x_value/65536.0,y=p[Position]->u.td.y_value/65536.0;
+ const double w=resolveDimension(p[Width]->u.fs_d.value,in,true)*sx,h=resolveDimension(p[Height]->u.fs_d.value,in,false)*sy;
  if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(w)||!std::isfinite(h)||w<=0||h<=0){log("bounds-values-invalid",e->e_type,0);return false;}
  corners={{{fixed(x-w/2),fixed(y-h/2)},{fixed(x+w/2),fixed(y-h/2)},{fixed(x+w/2),fixed(y+h/2)},{fixed(x-w/2),fixed(y+h/2)}}};
  for(auto& point:corners)if(!transform(in,e,point,true))return false;
@@ -140,6 +154,7 @@ inline PF_Err event(PF_InData* in,PF_ParamDef* p[],PF_EventExtra* e) {
  if(!e||!e->contextH||!*e->contextH){log("event-context-missing",0,-1);return PF_Err_NONE;}
  const auto window=(*e->contextH)->w_type;
  if(e->e_type!=PF_Event_IDLE)log("event",e->e_type,window,0,e->evt_in_flags,e->evt_out_flags);
+ if(window==PF_Window_EFFECT)return better_captions::adobe::purposeful_controls::event(in,p,e);
  if(window!=PF_Window_COMP)return PF_Err_NONE;
  if(e->e_type==PF_Event_DRAW){if(draw(in,p,e))e->evt_out_flags|=PF_EO_HANDLED_EVENT;return PF_Err_NONE;}
 #if BC_ENABLE_CUSTOM_UI_PROBE
@@ -149,7 +164,7 @@ inline PF_Err event(PF_InData* in,PF_ParamDef* p[],PF_EventExtra* e) {
  // Match the official CCU sample: some continuation callbacks retain DO_CLICK.
  if(e->e_type==PF_Event_DO_CLICK&&e->u.do_click.send_drag)e->e_type=PF_Event_DRAG;
  if(e->e_type==PF_Event_DO_CLICK){
-  auto points=handles(p);const auto mouse=e->u.do_click.screen_point;
+  auto points=handles(p,in);const auto mouse=e->u.do_click.screen_point;
   for(std::size_t i=0;i<points.size();++i){auto point=points[i];if(!transform(in,e,point,true))continue;
    if(std::hypot(point.x/65536.0-mouse.h,point.y/65536.0-mouse.v)<=10){e->u.do_click.continue_refcon[0]=i+1;e->u.do_click.send_drag=TRUE;e->evt_out_flags|=PF_EO_HANDLED_EVENT;log("handle-click",e->e_type,window,i+1,mouse.h,mouse.v,i+1,TRUE,e->u.do_click.last_time);return PF_Err_NONE;}}
   log("handle-miss",e->e_type,window,0,mouse.h,mouse.v);
@@ -157,9 +172,9 @@ inline PF_Err event(PF_InData* in,PF_ParamDef* p[],PF_EventExtra* e) {
  if(e->e_type==PF_Event_DRAG){
   auto& click=e->u.do_click;const auto mode=click.continue_refcon[0];if(mode<1||mode>4)return PF_Err_NONE;
   PF_FixedPoint point{fixed(click.screen_point.h),fixed(click.screen_point.v)};if(!transform(in,e,point,false))return PF_Err_NONE;
-  if(mode==1){p[1]->u.td.x_value=point.x;p[1]->u.td.y_value=point.y;p[1]->uu.change_flags|=PF_ChangeFlag_CHANGED_VALUE;}
-  if(mode==2||mode==4){p[2]->u.fs_d.value=std::max(1.0,std::min(8192.0,2*std::abs((double(point.x)-p[1]->u.td.x_value)/65536.0)));p[2]->uu.change_flags|=PF_ChangeFlag_CHANGED_VALUE;}
-  if(mode==3||mode==4){p[3]->u.fs_d.value=std::max(1.0,std::min(8192.0,2*std::abs((double(point.y)-p[1]->u.td.y_value)/65536.0)));p[3]->uu.change_flags|=PF_ChangeFlag_CHANGED_VALUE;}
+  if(mode==1){p[Position]->u.td.x_value=point.x;p[Position]->u.td.y_value=point.y;p[Position]->uu.change_flags|=PF_ChangeFlag_CHANGED_VALUE;}
+  if(mode==2||mode==4){p[Width]->u.fs_d.value=std::max(1.0,std::min(8192.0,2*std::abs((double(point.x)-p[Position]->u.td.x_value)/65536.0)));p[Width]->uu.change_flags|=PF_ChangeFlag_CHANGED_VALUE;}
+  if(mode==3||mode==4){p[Height]->u.fs_d.value=std::max(1.0,std::min(8192.0,2*std::abs((double(point.y)-p[Position]->u.td.y_value)/65536.0)));p[Height]->uu.change_flags|=PF_ChangeFlag_CHANGED_VALUE;}
   click.send_drag=!click.last_time;if(click.last_time)click.continue_refcon[0]=0;
   e->evt_out_flags|=PF_EO_HANDLED_EVENT|PF_EO_ALWAYS_UPDATE;log("native-param-drag",e->e_type,window,mode);
  }

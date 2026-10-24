@@ -9,9 +9,9 @@ const HOST_METHODS = new Set([
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession', 'loadStylePresets', 'saveStylePresets',
   'transcribeSequence', 'transcribeSequenceRange', 'getFonts', 'getFontCatalog', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'extendNativeCaptionDocument', 'editNativeCaptionControl', 'seekNativeCaptionKeyframe', 'writeNativeCaptionDocument', 'createNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'extendNativeCaptionDocument', 'editNativeCaptionControl', 'seekNativeCaptionKeyframe', 'writeNativeCaptionDocument', 'collapseNativeTyping', 'primeNativeTyping', 'readNativeUndoState', 'testNativeHistoryStep', 'createNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
 ]);
-const AGENT_METHODS = new Set(['getState', 'patchStyle', 'patchAnimation', 'setCaptions', 'refresh', 'apply', 'readArea', 'editArea']);
+const AGENT_METHODS = new Set(['getState', 'patchStyle', 'patchAnimation', 'setCaptions', 'refresh', 'apply', 'readArea', 'editArea', 'testTyping', 'testHistory']);
 const ID = /^(?:ui|host)-[a-zA-Z0-9_-]{1,100}$/;
 const pending = new Map();
 const running = new Set();
@@ -19,7 +19,7 @@ const completed = new Set();
 const api = createHostAPI();
 let webview = null, uiReady = false, destroyed = false, panelVisible = false, nextId = 0;
 let agentStart = null, agentStop = null, loadFailure = null;
-let playheadTimer = null, playheadReading = false, playheadGeneration = 0, lastPlayhead = '';
+let playheadTimer = null, playheadReading = false, playheadGeneration = 0, lastPlayhead = '', hiddenUndoTimer = null;
 const cleanupListeners = [];
 
 function showStatus(text, isError = false) {
@@ -38,12 +38,12 @@ function envelope(event) {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
 }
 function send(data) {
-  if (destroyed || !webview) throw new Error('The Better Captions panel is closed.');
+  if (destroyed || !webview) throw new Error('The S-Captions panel is closed.');
   webview.postMessage({ channel: CHANNEL, ...data });
 }
 function safeError(error) {
   const result = { message: String(error && error.message || error || 'Premiere caption operation failed.').slice(0, 4000) };
-  if (error && ['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE', 'BC_NATIVE_CLOSED', 'BC_OUTPUT_UNCONFIRMED'].includes(error.code)) {
+  if (error && ['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE', 'BC_NATIVE_CLOSED', 'BC_OUTPUT_UNCONFIRMED', 'BC_NATIVE_STALE'].includes(error.code)) {
     result.code = error.code;
     if (typeof error.recoverable === 'boolean') result.recoverable = error.recoverable;
     if (typeof error.operationPending === 'boolean') result.operationPending = error.operationPending;
@@ -60,6 +60,19 @@ function visibility(visible = panelVisible) {
   panelVisible = visible;
   if (webview && !destroyed) { try { send({ type: 'better-captions-panel-visibility', visible }); } catch {} }
   resetPlayhead();
+  if (visible && hiddenUndoTimer !== null) { clearTimeout(hiddenUndoTimer); hiddenUndoTimer = null; }
+  scheduleHiddenUndo();
+}
+// The hidden editor stops polling, so the host keeps Premiere Undo/Redo of
+// transcript and style edits applied until the panel is shown again.
+function scheduleHiddenUndo() {
+  if (hiddenUndoTimer !== null || destroyed || panelVisible || typeof api.restoreNativeUndoIfIdle !== 'function') return;
+  hiddenUndoTimer = setTimeout(async () => {
+    hiddenUndoTimer = null;
+    if (destroyed || panelVisible) return;
+    try { await api.restoreNativeUndoIfIdle(); } catch { /* Retried on the next tick; reads report availability themselves. */ }
+    scheduleHiddenUndo();
+  }, 1500);
 }
 function canFollowPlayhead() { return !destroyed && !!webview && uiReady && panelVisible && typeof api.readPlayheadIfIdle === 'function'; }
 function schedulePlayhead(delay = 100) {
@@ -90,7 +103,7 @@ function rejectPending(message) {
 }
 function requestAgent(method, args = []) {
   if (!AGENT_METHODS.has(method)) return Promise.reject(new Error('Unsupported caption agent action.'));
-  if (!uiReady || destroyed || !webview) return Promise.reject(new Error('Open Better Captions in Premiere and wait for its editor to load.'));
+  if (!uiReady || destroyed || !webview) return Promise.reject(new Error('Open S-Captions in Premiere and wait for its editor to load.'));
   const id = 'host-' + Date.now().toString(36) + '-' + ++nextId;
   const timeout = method === 'apply' ? 60 * 60 * 1000 : 60 * 1000;
   return new Promise((resolve, reject) => {
@@ -109,6 +122,8 @@ const agentProxy = {
   apply: () => requestAgent('apply'),
   readArea: payload => requestAgent('readArea', [payload]),
   editArea: payload => requestAgent('editArea', [payload]),
+  testTyping: payload => requestAgent('testTyping', [payload]),
+  testHistory: payload => requestAgent('testHistory', [payload]),
 };
 async function startAgent() {
   if (!agentStart) {
@@ -148,7 +163,7 @@ async function onMessage(event) {
       const detail = diagnostic.message.slice(0, 2000);
       if (diagnostic.stage === 'error' || diagnostic.stage === 'policy') {
         loadFailure = detail; showStatus('The caption editor could not start: ' + detail, true);
-        console.error('[Better Captions] Editor bootstrap:', detail);
+        console.error('[S-Captions] Editor bootstrap:', detail);
       } else if (!uiReady && !loadFailure) showStatus('Loading caption editor controls…');
       result = { reported: true };
     }
@@ -173,7 +188,7 @@ function sequenceEvents() {
       premiere.EventManager.addGlobalEventListener(event, listener);
       cleanupListeners.push(() => premiere.EventManager.removeGlobalEventListener(event, listener));
     }
-  } catch (error) { console.warn('[Better Captions] Sequence event updates unavailable:', safeError(error).message); }
+  } catch (error) { console.warn('[S-Captions] Sequence event updates unavailable:', safeError(error).message); }
 }
 function mount() {
   if (webview || destroyed) return;
@@ -185,7 +200,7 @@ function mount() {
     webview.addEventListener('message', onMessage);
     window.addEventListener('message', onMessage);
     cleanupListeners.push(() => window.removeEventListener('message', onMessage));
-    webview.addEventListener('loadstart', () => { uiReady = false; resetPlayhead(); loadFailure = null; showStatus('Loading caption editor…'); rejectPending('The Better Captions editor is reloading. Try the agent action again when it is ready.'); });
+    webview.addEventListener('loadstart', () => { uiReady = false; resetPlayhead(); loadFailure = null; showStatus('Loading caption editor…'); rejectPending('The S-Captions editor is reloading. Try the agent action again when it is ready.'); });
     webview.addEventListener('loadstop', () => {
       if (!uiReady && !loadFailure) showStatus('Caption editor loaded. Waiting for its controls…');
       Promise.resolve(api.getColorScheme()).then(scheme => notify('ui.colorScheme', [scheme])).catch(() => {});
@@ -195,7 +210,7 @@ function mount() {
     webview.addEventListener('loaderror', event => {
       loadFailure = String(event.message || 'The local editor page did not load.') + (event.code === undefined ? '' : ' (code ' + event.code + ')');
       showStatus('The caption editor could not load: ' + loadFailure, true);
-      console.error('[Better Captions] Webview load:', loadFailure);
+      console.error('[S-Captions] Webview load:', loadFailure);
     });
     webview.src = 'plugin:/client/index.html';
     document.getElementById('app').appendChild(webview);
@@ -203,14 +218,15 @@ function mount() {
     sequenceEvents();
   } catch (error) {
     const message = document.createElement('div'); message.className = 'caption-host__error';
-    message.textContent = 'Better Captions could not open its editor: ' + safeError(error).message;
+    message.textContent = 'S-Captions could not open its editor: ' + safeError(error).message;
     document.getElementById('app').appendChild(message);
   }
 }
 async function destroy() {
   visibility(false);
   destroyed = true; uiReady = false;
-  rejectPending('The Better Captions plugin was closed.');
+  if (hiddenUndoTimer !== null) { clearTimeout(hiddenUndoTimer); hiddenUndoTimer = null; }
+  rejectPending('The S-Captions plugin was closed.');
   for (const remove of cleanupListeners.splice(0)) { try { remove(); } catch {} }
   if (agentStop) await agentStop();
   if (typeof api.dispose === 'function') await api.dispose();

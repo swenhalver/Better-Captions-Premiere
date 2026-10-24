@@ -1,7 +1,11 @@
-import { MAX_CAPTION_CHARS, type CaptionItem, type CaptionSegment, type TextTransform } from '../types.ts';
+import { MAX_CAPTION_CHARS, type CaptionItem, type TextTransform } from '../types.ts';
 import type { ResolvedAppearance } from '../appearance.ts';
 import { installedFont } from '../font-catalog.ts';
 import type { NativeLineFitState } from '../../cep-api.ts';
+
+// The panel's Smart line fit button measures how many characters fit one line at the
+// layer's Width and font, then writes that number into Characters per caption. The
+// native renderer only ever groups by that character count.
 
 /** Returns glyph advance in pixels, excluding bubble padding. The style's
  * fontSize is already effective (state scale and native global scale applied). */
@@ -10,22 +14,19 @@ export interface SmartFitOptions {
   width: number;
   wordSpacing: number;
   appearances: readonly ResolvedAppearance[];
-  pause?: number;
 }
 
-/** Matches the native ASCII title-case rule; Unicode upper/lower mirrors the
+/** Matches the native ASCII title-case rule (words with an existing capital are kept); Unicode upper/lower mirrors the
  * macOS rasterizer's Unicode case transform, without modifying source words. */
 export function smartFitDisplayText(text: string, mode: TextTransform): string {
   if (mode === 'uppercase') return text.toUpperCase();
   if (mode === 'lowercase') return text.toLowerCase();
   if (mode !== 'titlecase') return text;
-  let initial = true, result = '';
-  for (const character of text) {
-    if (character.codePointAt(0)! >= 128) { initial = false; result += character; continue; }
-    if (/[a-zA-Z]/.test(character)) { result += initial ? character.toUpperCase() : character.toLowerCase(); initial = false; }
-    else { result += character; if (character === '-' || character === ' ' || character === '\t') initial = true; }
-  }
-  return result;
+  return text.split(/([-. \t])/).map(word => {
+    if (/[A-Z]/.test(word)) return word;
+    const first = word.search(/[a-z\u0080-\u{10FFFF}]/u);
+    return first < 0 || word.codePointAt(first)! >= 128 ? word : word.slice(0, first) + word[first].toUpperCase() + word.slice(first + 1);
+  }).join('');
 }
 
 /** Match render_style.hpp: state Size% affects font size, Bubble overrides
@@ -34,13 +35,13 @@ export function applyNativeFitState(appearance: ResolvedAppearance, globalFontSc
   const override = control === undefined ? { sizeScale: 1, bubbleMode: 1, paddingScale: 1 } : control;
   if (typeof override !== 'object' || override === null || Array.isArray(override) || Object.keys(override).some(key => !['sizeScale','bubbleMode','paddingScale'].includes(key)) ||
     !Number.isFinite(override.sizeScale) || override.sizeScale < .01 || override.sizeScale > 4 || !Number.isInteger(override.bubbleMode) || override.bubbleMode < 1 || override.bubbleMode > 3 ||
-    !Number.isFinite(override.paddingScale) || override.paddingScale < 0 || override.paddingScale > 4 || !Number.isFinite(globalFontScale) || globalFontScale <= 0 || globalFontScale > 16) throw new Error('Invalid native smart line fit state overrides.');
-  return { ...appearance, fontSize: appearance.fontSize * override.sizeScale * globalFontScale, padding: appearance.padding * override.paddingScale, bubblePaddingInline: (appearance.bubblePaddingInline??appearance.padding)*override.paddingScale, bubblePaddingBlock: (appearance.bubblePaddingBlock??appearance.padding)*override.paddingScale,
+    !Number.isFinite(override.paddingScale) || override.paddingScale < 0 || override.paddingScale > 4 || !Number.isFinite(globalFontScale) || globalFontScale <= 0 || globalFontScale > 16) throw new Error('Invalid native line fit state overrides.');
+  return { ...appearance, paddingTop:appearance.paddingTop*override.paddingScale,paddingRight:appearance.paddingRight*override.paddingScale,paddingBottom:appearance.paddingBottom*override.paddingScale,paddingLeft:appearance.paddingLeft*override.paddingScale, fontSize: appearance.fontSize * override.sizeScale * globalFontScale, padding: appearance.padding * override.paddingScale, bubblePaddingInline: (appearance.bubblePaddingInline??appearance.padding)*override.paddingScale, bubblePaddingBlock: (appearance.bubblePaddingBlock??appearance.padding)*override.paddingScale,
     bubble: override.bubbleMode === 1 ? appearance.bubble : override.bubbleMode === 2 };
 }
 
-/** Approximate character capacity using the transcript's measured glyph mix.
- * Actual Smart groups still use whole-word pixel fitting, not this estimate. */
+/** Approximate one-line character capacity using the transcript's measured glyph mix,
+ * the worst word-state advance and a 5% safety margin. */
 export function smartFitCharacterCapacity(captions: CaptionItem[], options: SmartFitOptions, measure: SmartFitMeasure): number | null {
   const {advance, usableWidth}=smartFitMetrics(options,measure);
   let pixels=0,characters=0;
@@ -53,52 +54,24 @@ export function smartFitCharacterCapacity(captions: CaptionItem[], options: Smar
   return Math.max(1,Math.min(MAX_CAPTION_CHARS,Math.floor(usableWidth*characters/pixels)));
 }
 
-/** Greedy whole-word groups, fixed for all active-word states and independent
- * of the playhead. Smart mode deliberately ignores the stored character cap.
- * Native rendering remains authoritative for actual font-engine measurement. */
+/** Per-word advance (widest word state, inline bubble padding and margins) and the usable line width. */
 function smartFitMetrics(options: SmartFitOptions, measure: SmartFitMeasure) {
-  const { width, wordSpacing, appearances } = options, pause = options.pause ?? .6;
-  if (!Number.isFinite(width) || width <= 0 || width > 8192 || !Number.isFinite(wordSpacing) || wordSpacing < 0 || wordSpacing > 4096 || !Number.isFinite(pause) || pause < 0 || appearances.length !== 3 || typeof measure !== 'function') throw new Error('Invalid native smart line fit configuration.');
+  const { width, wordSpacing, appearances } = options;
+  if (!Number.isFinite(width) || width <= 0 || width > 8192 || !Number.isFinite(wordSpacing) || wordSpacing < 0 || wordSpacing > 4096 || appearances.length !== 3 || typeof measure !== 'function') throw new Error('Invalid native line fit configuration.');
   const usableWidth = width * .95;
   const cache = new Map<string, number>();
   const advance = (text: string) => {
     const cached = cache.get(text); if (cached !== undefined) return cached;
     const value = Math.max(...appearances.map(appearance => {
-      if (!Number.isFinite(appearance.fontSize) || appearance.fontSize <= 0 || !Number.isFinite(appearance.padding) || appearance.padding < 0) throw new Error('Invalid smart line fit typography.');
+      if (!Number.isFinite(appearance.fontSize) || appearance.fontSize <= 0 || !Number.isFinite(appearance.padding) || appearance.padding < 0) throw new Error('Invalid line fit typography.');
       const measured = measure(smartFitDisplayText(text, appearance.textTransform), appearance);
-      if (!Number.isFinite(measured) || measured < 0 || measured > 1e9) throw new Error('Native smart line fit measurement failed.');
-      const inlinePad=appearance.bubblePaddingInline??appearance.padding;if(!Number.isFinite(inlinePad)||inlinePad<0)throw new Error('Invalid smart line fit padding.');
-      return measured + (appearance.bubble ? 2 * inlinePad : 0);
+      if (!Number.isFinite(measured) || measured < 0 || measured > 1e9) throw new Error('Native line fit measurement failed.');
+      const inlinePad=(appearance.paddingLeft+appearance.paddingRight)/2;if(!Number.isFinite(inlinePad)||inlinePad<0)throw new Error('Invalid line fit padding.');
+      return Math.max(0,measured + 2 * inlinePad+appearance.marginLeft+appearance.marginRight);
     }));
     cache.set(text, value); return value;
   };
   return {advance,usableWidth};
-}
-
-export function smartFitCaptionPhrases(captions: CaptionItem[], options: SmartFitOptions, measure: SmartFitMeasure): CaptionItem[] {
-  const {advance,usableWidth}=smartFitMetrics(options,measure);
-  const {wordSpacing}=options,pause=options.pause??.6;
-  return captions.map(caption => {
-    const renderSegments: CaptionSegment[] = [];
-    let first = 0, count = 0, occupied = 0;
-    const flush = () => {
-      if (!count) return;
-      const words = caption.words.slice(first, first + count).map(word => ({ ...word }));
-      renderSegments.push({ id: `native-fit-${caption.id}-${first}`, words, text: words.map(word => word.text).join(' '), startTime: words[0].startTime, endTime: Math.max(...words.map(word => word.endTime)) });
-      count = 0; occupied = 0;
-    };
-    caption.words.forEach((word, index) => {
-      const punctuation = /^[.,!?;:%)\]}]/.test(word.text), pixels = advance(word.text);
-      if (count && !punctuation && (occupied + wordSpacing + pixels > usableWidth || word.startTime - caption.words[index - 1].endTime > pause)) flush();
-      if (!count) first = index;
-      occupied += pixels + (count && !punctuation ? wordSpacing : 0); count++;
-      if (word.endOfSentence || /[.!?]$/.test(word.text)) flush();
-    });
-    flush();
-    // group metadata is derived editor state only, never a native document field.
-    const { groupingMaxChars: _characterLimit, ...preserved } = caption;
-    return { ...preserved, renderSegments };
-  });
 }
 
 type CanvasMetrics = Pick<TextMetrics, 'width'> & Partial<Pick<TextMetrics, 'actualBoundingBoxLeft' | 'actualBoundingBoxRight'>>;

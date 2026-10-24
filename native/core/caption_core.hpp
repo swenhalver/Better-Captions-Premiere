@@ -1,21 +1,23 @@
 #pragma once
 #include <cstdint>
+#include <array>
 #include <functional>
 #include <string>
 #include <vector>
 
 namespace better_captions {
-constexpr std::uint32_t kSchemaVersion = 6;
+constexpr std::uint32_t kSchemaVersion = 10;
 constexpr std::size_t kMaxWords = 100000;
 constexpr std::size_t kMaxDocumentBytes = 16 * 1024 * 1024;
 constexpr std::size_t kMaxGroupsPerPage = 100;
 // Native integer sliders may interpolate fractional samples between keyframes.
 // Round finite host samples consistently; source/editor integer validation stays strict.
 std::size_t sampledGroupsPerPage(double);
-bool sampledSmartLineFit(double);
 int sampledTextAlignment(double); // 1 left, 2 center, 3 right
 struct Color { double r=1,g=1,b=1,a=1; };
-struct Word { std::string text; double start=0,end=0; bool endOfSentence=false; };
+// MergeEdge (v10) renders like Break; the panel clears it, and Join, on reflow.
+enum class LineBreakBefore : std::uint32_t { Auto=0,Break=1,Join=2,MergeEdge=3 };
+struct Word { std::string text; double start=0,end=0; bool endOfSentence=false; LineBreakBefore lineBreakBefore=LineBreakBefore::Auto; std::uint32_t pauseLinesRemoved=0; };
 struct WordStyle {
     std::string fontFamily="Arial";
     // Zero / -1 preserve legacy named-face selection until explicitly styled.
@@ -27,6 +29,14 @@ struct WordStyle {
     Color bubbleColor{0,0,0,1};
     double padding=8,radius=10,outlineWidth=0;
     double bubblePaddingInline=-1,bubblePaddingBlock=-1; // -1 inherits legacy uniform padding
+    double paddingTop=-1;double paddingRight=-1;double paddingBottom=-1;double paddingLeft=-1;double radiusTL=-1;double radiusTR=-1;double radiusBR=-1;double radiusBL=-1;double marginTop=0;double marginRight=0;double marginBottom=0;double marginLeft=0;
+    double topPadding()const{return paddingTop<0?blockPadding():paddingTop;}
+    double rightPadding()const{return paddingRight<0?inlinePadding():paddingRight;}
+    double bottomPadding()const{return paddingBottom<0?blockPadding():paddingBottom;}
+    double leftPadding()const{return paddingLeft<0?inlinePadding():paddingLeft;}
+    double horizontalPadding()const{return leftPadding()+rightPadding();}
+    double verticalPadding()const{return topPadding()+bottomPadding();}
+    void scaleGeometry(double sx,double sy){if(paddingTop>=0)paddingTop*=sy;if(paddingRight>=0)paddingRight*=sx;if(paddingBottom>=0)paddingBottom*=sy;if(paddingLeft>=0)paddingLeft*=sx;if(radiusTL>=0)radiusTL*=sy;if(radiusTR>=0)radiusTR*=sy;if(radiusBR>=0)radiusBR*=sy;if(radiusBL>=0)radiusBL*=sy;marginTop*=sy;marginRight*=sx;marginBottom*=sy;marginLeft*=sx;}
     double inlinePadding()const{return bubblePaddingInline<0?padding:bubblePaddingInline;}
     double blockPadding()const{return bubblePaddingBlock<0?padding:bubblePaddingBlock;}
     Color outlineColor{0,0,0,1};
@@ -35,9 +45,18 @@ struct WordStyle {
 };
 struct Style { WordStyle upcoming,current,spoken; double wordSpacing=12,lineHeight=1.3; bool titleCase=false; double baseFontWeight=0; int letterCase=0; }; // 0 legacy/as typed/title, 1 upper, 2 lower
 struct CaptionContainer { std::string id; bool manualSplit=false; std::vector<Word> words; };
-struct Document { std::uint32_t schemaVersion=3; std::vector<CaptionContainer> containers; Style style; double timeOriginSeconds=0; };
-struct Phrase { std::string containerId; std::size_t firstWord=0,wordCount=0; double start=0,end=0; };
-// Regrouping is derived; source words, container identities and manual splits never mutate.
+struct Document { std::uint32_t schemaVersion=kSchemaVersion; std::vector<CaptionContainer> containers; Style style; double timeOriginSeconds=0; };
+struct WordRef { std::size_t containerIndex=0,wordIndex=0; };
+struct Phrase {
+    // The first word's source identity and the total number of words remain
+    // available; wordRefs resolves every word in a cross-container line.
+    std::string containerId; std::size_t firstWord=0,wordCount=0; double start=0,end=0;
+    std::vector<WordRef> wordRefs;
+};
+// pauseLinesRemoved (0..8) belongs to the next line's first source word.
+// Joined interior-word overrides stay stored until that word starts a line again.
+// Regrouping is derived; explicit word breaks/joins govern lines. Containers
+// are storage only. Source words, IDs, metadata and word times never mutate.
 std::vector<Phrase> regroup(const Document&, std::size_t maxChars=56, double pauseSeconds=0.6);
 void validate(const Document&); // throws std::invalid_argument on untrusted/invalid data
 std::vector<std::uint8_t> encode(const Document&);
@@ -49,10 +68,6 @@ struct LayoutBox { double x=0,y=0,width=1536,height=300; int alignment=2; };
 struct Metrics { double width=0,ascent=0,descent=0; };
 using TransformText=std::function<std::string(const std::string&,const Style&)>;
 using MeasureText=std::function<Metrics(const std::string&,const WordStyle&)>;
-// Actual shaped advance, maximum across all word states plus bubble padding,
-// greedily fills 95% of the box. Character-limit setting stays independent.
-std::vector<Phrase> regroupToWidth(const Document&,double width,const MeasureText&,
-                                 double pauseSeconds=0.6,const TransformText& transform={});
 struct DrawWord {
     std::string text;
     std::string containerId;
@@ -65,9 +80,23 @@ struct DrawWord {
     // Derived joins flatten only internal touching edges; never serialized.
     bool bubbleJoinLeft=false,bubbleJoinRight=false;
 };
+struct RollUpEdge {
+    double inset=0;
+    bool fadeEnabled=true;
+    double thickness=.2,amount=1;
+    int curve=2; // 1 linear, 2 smooth, 3 ease-in, 4 ease-out
+};
+// Fractions are 0..1; native percentage controls divide by 100 before sampling.
+RollUpEdge sampledRollUpEdge(double inset,double fadeEnabled,double thickness,double amount,double curve);
 struct RollUpSettings {
     bool enabled=false;
+    // Maximum visible rolling rows. Physical box height limits actual capacity;
+    // fonts and style geometry always retain their authored values.
     std::size_t visibleLines=2;
+    // Current row slot counted from the entry edge; 1 retains full history.
+    std::size_t currentLine=1;
+    // Seconds per complete silence row; zero follows the average spoken line.
+    double blankLineSeconds=0;
     double scrollDuration=.18;
     bool boundaryEnabled=true;
     double boundaryPosition=0,transitionThickness=.35,fadeAmount=1;
@@ -76,22 +105,29 @@ struct RollUpSettings {
     double speed=1;
     bool waitForLine=true;
     int transition=1; // 1 scroll, 2 fade, 3 slide, 4 pop
+    int boundaryMode=0; // 0 directional boundary, 1 independent edges
+    std::array<RollUpEdge,4> edges{}; // top, bottom, left, right; inward fractions
 };
 RollUpSettings sampledRollUpSettings(double enabled,double lines,double duration,double boundary,
-    double position,double thickness,double fade,double curve,double direction=1,double speed=1,double wait=1,double transition=1);
+    double position,double thickness,double fade,double curve,double direction=1,double speed=1,double wait=1,double transition=1,double currentLine=1,double blankLineSeconds=0);
 struct Frame {
     std::vector<DrawWord> words;
     bool overflow=false,rolling=false;
     LayoutBox viewport;
     RollUpSettings rollUp;
+    // Stable paint-only allowances, top/bottom/left/right. Used only by the
+    // default directional boundary; never move rows or explicit crop edges.
+    std::array<double,4> directionalPaintOutset{};
 };
 // Multiplies existing sharp pixels; never blurs or reconstructs the glyph image.
 double rollUpAlpha(double x,double y,const Frame&);
 // Host supplies real shaped font metrics. Commands retain independent styles and font sizes.
-// Box coordinates are top-left pixels; lines are centered within box, clipped by host.
+// Box coordinates are top-left pixels; the box places text without cropping it.
+// Actual output-frame edges and explicitly enabled boundaries can crop paint.
 // Consecutive phrase groups share one page; every group starts a new line.
-// Pages do not cross manual containers. Source documents/word times stay unchanged.
+// Pages consume consecutive lines across storage containers. Source documents
+// and word times stay unchanged; pause lines occupy ordinary line slots.
 Frame layoutFrame(const Document&, double time, const LayoutBox&, const MeasureText&,
                   std::size_t maxChars=56,double pauseSeconds=0.6,const TransformText& transform={},
-                  std::size_t groupsPerPage=1,bool smartLineFit=false,const RollUpSettings& rollUp={});
+                  std::size_t groupsPerPage=1,const RollUpSettings& rollUp={});
 } // namespace better_captions

@@ -12,7 +12,22 @@ export function validateCaptions(captions:CaptionItem[]){
   });return true;
 }
 export function replaceText(c:CaptionItem,text:string):CaptionItem{
-  const tokens=text.trim().split(/\s+/).filter(Boolean);if(!tokens.length)throw new Error('A caption cannot be empty.');
+  const tokens=text.trim().split(/\s+/).filter(Boolean);if(!tokens.length)throw new Error('A line cannot be empty.');
+  const keepLine=(words:CaptionWord[]):CaptionWord[]=>{
+    const removed=c.words[0]?.pauseLinesRemoved;
+    // Pause deletion belongs to the boundary before this line, including when
+    // its first spoken word is replaced, removed or preceded by new typing.
+    const bounded=words.map((word,index)=>{
+      const next={...word};
+      if(removed!==undefined){
+        if(index===0)next.pauseLinesRemoved=removed;
+        else if(word.startTime===c.words[0].startTime)delete next.pauseLinesRemoved;
+      }
+      return next;
+    });
+    const first=c.words[0]?.lineBreakBefore;
+    return (first==='break'||first==='edge')&&c.words.slice(1).every(word=>word.lineBreakBefore==='join')?bounded.map((word,index)=>({...word,lineBreakBefore:index===0?first:'join'})):bounded;
+  };
   if(tokens.length===c.words.length)return {...c,text:tokens.join(' '),words:c.words.map((w,i)=>({...w,text:tokens[i]}))};
   const last=c.words[c.words.length-1]?.endTime??c.endTime;
   const estimate=(items:string[],start:number,end:number):CaptionWord[]=>{
@@ -41,10 +56,10 @@ export function replaceText(c:CaptionItem,text:string):CaptionItem{
   }
   // Inserting speech into a gap with no duration necessarily changes timing.
   // Mark estimates visibly, and let the timing editor provide exact corrections.
-  return {...c,text:tokens.join(' '),timingEstimated:true,words:canPreserve?words:estimate(tokens,c.startTime,last)};
+  return {...c,text:tokens.join(' '),timingEstimated:true,words:keepLine(canPreserve?words:estimate(tokens,c.startTime,last))};
 }
 export function retime(c:CaptionItem,start:number,end:number):CaptionItem{
-  if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start)throw new Error('Caption end must be after its nonnegative start.');
+  if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start)throw new Error('Line end must be after its nonnegative start.');
   validateCaptions([c]);const scale=(end-start)/(c.endTime-c.startTime);
   const updated={...c,startTime:start,endTime:end,words:c.words.map(w=>({...w,startTime:start+(w.startTime-c.startTime)*scale,endTime:start+(w.endTime-c.startTime)*scale}))};
   validateCaptions([updated]);return updated;

@@ -85,16 +85,16 @@ test('enlarged active and past fonts keep every reserved word center and line st
   }
 });
 
-test('wrapped text, bubbles and background fit landscape and portrait frames at edge positions',()=>{
+test('viewport size and edge placement never split or reduce an authored caption line',()=>{
   for(const [width,height] of [[1920,1080],[1080,1920],[640,360]])for(const textAlign of ['left','center','right']){
     const s=style();Object.assign(s,{fontSize:100,positionX:1,positionY:1,maxWidth:.7,textAlign,backgroundEnabled:true,backgroundPadding:35});
-    Object.assign(s.activeWord,{sizeScale:1.8,padding:24,fontFamily:'Wide'});
-    s.spokenWord.bubble=true;s.spokenWord.padding=18;
-    const c=caption(['An','exceptionallylongcaptionword','that','wraps','well'].map((text,i)=>word(text,i*.5,i*.5+.4)));
-    for(const p of render(c,.7,s,width,height)){
-      assert.ok(p.bounds.left>=-1e-6&&p.bounds.right<=width+1e-6,`${textAlign} ${width}x${height}: horizontal ${JSON.stringify(p)}`);
-      assert.ok(p.bounds.top>=-1e-6&&p.bounds.bottom<=height+1e-6,`${textAlign} ${width}x${height}: vertical ${JSON.stringify(p)}`);
-    }
+    for(const key of ['activeWord','spokenWord','upcomingWord'])s[key]={...s[key],fontSize:100,sizeScale:1,fontFamily:'Fixture',bubble:false};
+    const c=caption(['An','exceptionallylongcaptionword','that','overflows'].map((text,i)=>word(text,i*.5,i*.5+.4)));
+    const painted=texts(render(c,.7,s,width,height));
+    assert.deepEqual(painted.map(p=>p.text),c.words.map(w=>w.text));
+    assert.equal(new Set(painted.map(p=>(p.bounds.top+p.bounds.bottom)/2)).size,1,'every grouped word stays on one baseline');
+    for(const p of painted)assert.ok(Math.abs(p.bounds.right-p.bounds.left-[...p.text].length*100*.55)<1e-6,'viewport width cannot shrink authored font size');
+    assert.ok(painted.some(p=>p.bounds.left<0||p.bounds.right>width),'oversized text is allowed to overflow the frame');
   }
 });
 
@@ -144,11 +144,14 @@ test('bounce moves bubble and active text through a landing and rebound while ne
   }
 });
 
-test('bounce motion remains in the frame when a wrapped caption is positioned at either vertical edge',()=>{
+test('bounce motion preserves authored dimensions even when a caption exceeds a frame edge',()=>{
   const c=caption(['A','large','bouncing','caption'].map((text,i)=>word(text,i*.5,i*.5+.3)));
   for(const positionY of [0,1])for(const time of [0,.08,.2,.5,.58,.7,1,1.08,1.2]){
     const s=style();Object.assign(s,{fontSize:120,positionY,maxWidth:.65});s.activeWord.padding=22;s.activeWord.sizeScale=1.8;
-    for(const p of render(c,time,s,640,360,{...animation,preset:'bounce'}))assert.ok(p.bounds.top>=-1e-6&&p.bounds.bottom<=360+1e-6);
+    for(const p of texts(render(c,time,s,640,360,{...animation,preset:'bounce'}))){
+      const size=Number(p.font.match(/([\d.]+)px/)[1]);
+      assert.ok(Math.abs(p.bounds.right-p.bounds.left-[...p.text].length*size*.55)<1e-6,'neither a narrow frame nor bounce may shrink the glyphs');
+    }
   }
 });
 

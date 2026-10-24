@@ -1,16 +1,16 @@
 import { nativeCaptionPhrases } from './phrases.ts';
-import { createCanvasWordMeasure, smartFitCharacterCapacity, smartFitCaptionPhrases, applyNativeFitState, type SmartFitMeasure } from './smart-fit.ts';
+import { createCanvasWordMeasure, smartFitCharacterCapacity, applyNativeFitState, type SmartFitMeasure } from './smart-fit.ts';
 import type { NativeLineFitStates } from '../../cep-api.ts';
 import { validateCharacterLimit } from '../transcript/parser.ts';
 import { validTransparentCarrier } from './carrier.ts';
 import { DEFAULT_ANIMATION, DEFAULT_STYLE, type CaptionItem, type SequenceInfo, type SessionState, type StyleConfig, type WordAppearance } from '../types.ts';
 import { resolveAppearance } from '../appearance.ts';
-import { normalizeNativeMatchName, validateNativeDocument, type NativeCaption, type NativeColor, type NativeDocument, type NativeStyle, type NativeWordStyle } from './contract.ts';
+import { normalizeNativeMatchName, validateNativeDocument, type NativeCaption, type NativeColor, type NativeDocument, type NativeStyle, type NativeWord, type NativeWordStyle } from './contract.ts';
 import { buildCepNativeReadScript, type CepNativeLocator, type CepNativeSnapshot } from './cep-operations.ts';
 import { encodeNativeTransportText, MAX_NATIVE_CARRIER_BYTES, NATIVE_TRANSPORT_PREFIX } from './encode.ts';
 
 export interface NativePanelEntry {
-  kind: 'native-effect'; maxChars?: number; smartLineFit?: boolean; lineFitWidth?: number; lineFitFontScale?: number; lineFitStates?: NativeLineFitStates; clipNodeId: string; projectItemId: string; trackIndex: number; clipIndex: number;
+  kind: 'native-effect'; maxChars?: number; lineFitWidth?: number; lineFitFontScale?: number; lineFitStates?: NativeLineFitStates; clipNodeId: string; projectItemId: string; trackIndex: number; clipIndex: number;
   startTicks: string; endTicks: string; inTicks: string; outTicks: string; selected: boolean;
   locator: CepNativeLocator; matchName: string; documentText: string; revision: string;
 }
@@ -28,7 +28,7 @@ export const NATIVE_PANEL_CAPABILITIES = {
   storage: 'embedded-native-document', geometry: 'premiere-effect-controls', animation: 'premiere-effect-controls',
   unsupportedGlobalStyleFields: unsupportedGlobal, unsupportedWordStyleFields: unsupportedWord,
   supportedGlobalStyleFields: ['wordSpacing', 'lineHeight'],
-  supportedWordStyleFields: ['fontFamily', 'fontWeight', 'fontWeightOffset', 'italic', 'underline', 'fontSize', 'sizeScale', 'color', 'opacity', 'bubble', 'bubbleFillSpaces', 'bubblePaddingInline', 'bubblePaddingBlock', 'bubbleColor', 'bubbleOpacity', 'padding', 'radius', 'strokeEnabled', 'strokeColor', 'strokeWidth', 'strokeOpacity', 'shadowEnabled', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'],
+  supportedWordStyleFields: ['fontFamily', 'fontWeight', 'fontWeightOffset', 'italic', 'underline', 'fontSize', 'sizeScale', 'color', 'opacity', 'bubble', 'bubbleFillSpaces', 'bubblePaddingInline', 'bubblePaddingBlock', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft', 'bubbleColor', 'bubbleOpacity', 'padding', 'radius', 'strokeEnabled', 'strokeColor', 'strokeWidth', 'strokeOpacity', 'shadowEnabled', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'],
   case: 'shared-as-typed-upper-lower-or-ascii-titlecase', wordSpacing: 'editable-native-pixels', effectToggles: 'outline-width-and-shadow-alpha',
 } as const;
 
@@ -56,14 +56,31 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
   const flag = () => { const value = u(); if (value > 1) throw new Error('Invalid native document flag.'); return value === 1; };
   const string = (limit: number) => { const size = u(); if (!size || size > limit) throw new Error('Invalid native document string.'); need(size); const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(offset, offset + size)); offset += size; return value; };
   if (u() !== 0x50414342) throw new Error('Invalid native document magic.');
-  const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) throw new Error('Unsupported native binary version.');
+  const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10) throw new Error('Unsupported native binary version.');
   const count = u(); if (count > 10000) throw new Error('Too many native caption containers.');
   const captions: NativeCaption[] = []; let totalWords = 0;
   for (let i = 0; i < count; i++) {
     const id = string(256), manualSplit = flag(), wordCount = u();
     if (!wordCount || (totalWords += wordCount) > 50000) throw new Error('This panel supports 1 to 50000 native words.');
-    const words = [];
-    for (let j = 0; j < wordCount; j++) words.push({ text: string(4096), start: d(), end: d(), endOfSentence: flag() });
+    const words: NativeWord[] = [];
+    for (let j = 0; j < wordCount; j++) {
+      const word: NativeWord = { text: string(4096), start: d(), end: d(), endOfSentence: flag() };
+      if (version >= 8) {
+        const boundary = u();
+        if (boundary > (version >= 10 ? 3 : 2)) throw new Error('Invalid native word line boundary.');
+        if (boundary) word.lineBreakBefore = boundary === 1 ? 'break' : boundary === 2 ? 'join' : 'edge';
+      } else if (i > 0 && j === 0) {
+        // Older renderers always restarted at storage edges. Preserve those
+        // visible splits once, then keep storage independent from grouping.
+        word.lineBreakBefore = 'break';
+      }
+      if (version >= 9) {
+        const removed = u();
+        if (removed > 8) throw new Error('Invalid native word removed pause lines.');
+        if (removed) word.pauseLinesRemoved = removed;
+      }
+      words.push(word);
+    }
     captions.push({ id, manualSplit, start: Math.min(...words.map(word => word.start)), end: Math.max(...words.map(word => word.end)), words });
   }
   const color = (): NativeColor => ({ r: d(), g: d(), b: d(), a: d() });
@@ -75,8 +92,15 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
   if(version>=5){for(const word of [style.upcoming,style.current,style.spoken]){const fill=flag();if(fill)word.bubbleFillSpaces=true;}}
   if(version>=6)for(const word of [style.upcoming,style.current,style.spoken])for(const axis of ['bubblePaddingInline','bubblePaddingBlock'] as const){const value=d();if(value!==-1)word[axis]=value;}
   if(version>=6)for(const word of [style.upcoming,style.current,style.spoken]){const mode=u();if(mode>2)throw new Error('Invalid native underline mode.');if(mode)word.underline=mode===2;}
+  if(version>=7)for(const word of [style.upcoming,style.current,style.spoken])for(const key of ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const){const value=d();if(!key.startsWith('margin')?value!==-1:value!==0)word[key]=value;}
   if (offset !== bytes.length) throw new Error('Trailing native document bytes.');
-  return validateNativeDocument({ version: 1, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(sequenceId), captions, style, timeOriginSeconds, ...(version===2?{}:{binaryVersion:version}) });
+  if (version < 10) {
+    // Before v10 a merge also wrote plain breaks at its edges. A break right
+    // beside a joined word came from a merge, so a reflow may clear it.
+    const all = captions.flatMap(caption => caption.words);
+    all.forEach((word, index) => { if (word.lineBreakBefore === 'break' && (all[index - 1]?.lineBreakBefore === 'join' || all[index + 1]?.lineBreakBefore === 'join')) word.lineBreakBefore = 'edge'; });
+  }
+  return validateNativeDocument({ version: 1, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(sequenceId), captions, style, timeOriginSeconds, binaryVersion: 10 });
 }
 
 function hexColor(color: NativeColor): string {
@@ -89,7 +113,7 @@ function editColor(previous: NativeColor, value: string): NativeColor {
 function panelWord(native: NativeWordStyle, textCase: WordAppearance['textTransform']): WordAppearance {
   return { fontFamily: native.fontFamily, fontWeight: native.fontWeight??400, fontWeightOffset: native.fontWeightOffset??null, fontSize: native.fontSize * native.sizeScale, sizeScale: native.sizeScale,
     italic: native.italic??false, ...(native.underline===undefined?{}:{underline:native.underline}), letterSpacing: 0, textTransform: textCase, color: hexColor(native.color), opacity: native.opacity,
-    bubble: native.bubble, bubbleFillSpaces: native.bubbleFillSpaces ?? false, bubbleColor: hexColor(native.bubbleColor), bubbleOpacity: native.bubbleColor.a, padding: native.padding, ...(native.bubblePaddingInline===undefined?{}:{bubblePaddingInline:native.bubblePaddingInline}), ...(native.bubblePaddingBlock===undefined?{}:{bubblePaddingBlock:native.bubblePaddingBlock}), radius: native.radius,
+    bubble: native.bubble, bubbleFillSpaces: native.bubbleFillSpaces ?? false, bubbleColor: hexColor(native.bubbleColor), bubbleOpacity: native.bubbleColor.a, padding: native.padding, ...(native.paddingTop===undefined?{}:{paddingTop:native.paddingTop}), ...(native.paddingRight===undefined?{}:{paddingRight:native.paddingRight}), ...(native.paddingBottom===undefined?{}:{paddingBottom:native.paddingBottom}), ...(native.paddingLeft===undefined?{}:{paddingLeft:native.paddingLeft}), ...(native.radiusTL===undefined?{}:{radiusTL:native.radiusTL}), ...(native.radiusTR===undefined?{}:{radiusTR:native.radiusTR}), ...(native.radiusBR===undefined?{}:{radiusBR:native.radiusBR}), ...(native.radiusBL===undefined?{}:{radiusBL:native.radiusBL}), ...(native.marginTop===undefined?{}:{marginTop:native.marginTop}), ...(native.marginRight===undefined?{}:{marginRight:native.marginRight}), ...(native.marginBottom===undefined?{}:{marginBottom:native.marginBottom}), ...(native.marginLeft===undefined?{}:{marginLeft:native.marginLeft}),  ...(native.bubblePaddingInline===undefined?{}:{bubblePaddingInline:native.bubblePaddingInline}), ...(native.bubblePaddingBlock===undefined?{}:{bubblePaddingBlock:native.bubblePaddingBlock}), radius: native.radius,
     strokeEnabled: native.outlineWidth > 0, strokeWidth: native.outlineWidth, strokeColor: hexColor(native.outlineColor), strokeOpacity: native.outlineColor.a,
     shadowEnabled: native.shadowColor.a > 0 && (native.shadowBlur > 0 || native.shadowX !== 0 || native.shadowY !== 0), shadowColor: hexColor(native.shadowColor), shadowOpacity: native.shadowColor.a,
     shadowBlur: native.shadowBlur, shadowOffsetX: native.shadowX, shadowOffsetY: native.shadowY };
@@ -109,35 +133,29 @@ function bindingSnapshot(entry: NativePanelEntry): CepNativeSnapshot {
   return { locator: clone(entry.locator), revision: entry.revision };
 }
 
-/** Derive editor-only phrase rows from current styles and native fit controls.
- * Inject a metric callback for deterministic tests. null explicitly requests the
- * safe character-count fallback; undefined selects an in-memory canvas if any. */
-export function deriveNativePanelPhrases(binding: NativePanelBinding, session: SessionState, measure: SmartFitMeasure | null = createCanvasWordMeasure()): CaptionItem[] {
-  const clip = binding.clip;
-  if (clip.smartLineFit !== undefined && typeof clip.smartLineFit !== 'boolean') throw new Error('Invalid native smart line fit mode.');
-  if (!clip.smartLineFit) return nativeCaptionPhrases(session.captions, session.style.maxChars);
-  const options=nativeFitOptions(binding,session);
-  if (!measure) return nativeCaptionPhrases(session.captions, session.style.maxChars);
-  return smartFitCaptionPhrases(session.captions, options, measure);
+/** Derive editor-only phrase rows. The native renderer groups using explicit boundaries and Characters per line. */
+export function deriveNativePanelPhrases(_binding: NativePanelBinding, session: SessionState): CaptionItem[] {
+  return nativeCaptionPhrases(session.captions, session.style.maxChars);
 }
 
 function nativeFitOptions(binding:NativePanelBinding,session:SessionState){
   const clip=binding.clip;
   const width = clip.lineFitWidth, scale = clip.lineFitFontScale;
-  if (typeof width !== 'number' || !Number.isFinite(width) || width < 1 || width > 8192 || typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0 || scale > 16) throw new Error('Native smart line fit geometry is unavailable. Refresh Better Captions.');
+  if (typeof width !== 'number' || !Number.isFinite(width) || width < 1 || width > 8192 || typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0 || scale > 16) throw new Error('Native line fit geometry is unavailable. Refresh S-Captions.');
   const overrides = clip.lineFitStates;
-  if (overrides !== undefined && (typeof overrides !== 'object' || overrides === null || Array.isArray(overrides) || Object.keys(overrides).length !== 3 || !['upcoming','current','spoken'].every(key => Object.hasOwn(overrides,key) && overrides[key as keyof NativeLineFitStates] !== undefined))) throw new Error('Invalid native smart line fit state overrides.');
+  if (overrides !== undefined && (typeof overrides !== 'object' || overrides === null || Array.isArray(overrides) || Object.keys(overrides).length !== 3 || !['upcoming','current','spoken'].every(key => Object.hasOwn(overrides,key) && overrides[key as keyof NativeLineFitStates] !== undefined))) throw new Error('Invalid native line fit state overrides.');
   const appearances = pairs.map(([key,nativeKey]) => applyNativeFitState(resolveAppearance(session.style,key),scale,overrides?.[nativeKey]));
   return {width,wordSpacing:session.style.wordSpacing??binding.document.style.wordSpacing,appearances};
 }
 
-export function nativeSmartFitCharacterCapacity(binding:NativePanelBinding,session:SessionState,measure:SmartFitMeasure|null=createCanvasWordMeasure()):number|null{
-  if(!binding.clip.smartLineFit)return null;
+/** Measures how many characters fit one line at the layer's Width and font, for the line fit button. */
+export function nativeLineFitCharacterCapacity(binding:NativePanelBinding,session:SessionState,measure:SmartFitMeasure|null=createCanvasWordMeasure()):number|null{
+  if(binding.clip.lineFitWidth===undefined||binding.clip.lineFitFontScale===undefined)return null;
   const options=nativeFitOptions(binding,session);
   return measure?smartFitCharacterCapacity(session.captions,options,measure):null;
 }
 
-export function rehydrateNativePanel(entry: NativePanelEntry, sequence: SequenceInfo, measure?: SmartFitMeasure | null) {
+export function rehydrateNativePanel(entry: NativePanelEntry, sequence: SequenceInfo) {
   const snapshot = bindingSnapshot(entry);
   if (nativePanelSequenceId(snapshot.locator.sequenceId) !== nativePanelSequenceId(sequence.id)) throw new Error('The native caption belongs to another sequence.');
   if (![sequence.frameWidth, sequence.frameHeight, sequence.frameRate, sequence.duration].every(Number.isFinite) || sequence.frameWidth < 1 || sequence.frameHeight < 1 || sequence.frameRate <= 0 || sequence.duration < 0) throw new Error('Invalid active sequence metadata.');
@@ -153,19 +171,15 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
     upcomingWord: panelWord(document.style.upcoming, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')), activeWord: panelWord(document.style.current, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')), spokenWord: panelWord(document.style.spoken, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')) };
   const captions: CaptionItem[] = nativeCaptionPhrases(document.captions.map(caption => ({ id: caption.id, text: caption.words.map(word => word.text).join(' '),
     startTime: caption.start + timelineOffsetSeconds, endTime: caption.end + timelineOffsetSeconds, manualSplit: caption.manualSplit,
-    words: caption.words.map(word => ({ text: word.text, startTime: word.start + timelineOffsetSeconds, endTime: word.end + timelineOffsetSeconds, endOfSentence: word.endOfSentence, isActive: false })) })), style.maxChars);
+    words: caption.words.map(word => ({ text: word.text, startTime: word.start + timelineOffsetSeconds, endTime: word.end + timelineOffsetSeconds, endOfSentence: word.endOfSentence, ...(word.lineBreakBefore === undefined ? {} : { lineBreakBefore: word.lineBreakBefore }), ...(word.pauseLinesRemoved === undefined ? {} : { pauseLinesRemoved: word.pauseLinesRemoved }), isActive: false })) })), style.maxChars);
   const session: SessionState = { sequenceId: sequence.id, sequenceName: sequence.name, transcriptJson: null, captions, style, animation: { ...clone(DEFAULT_ANIMATION), preset: 'karaoke' },
     hasTranscript: captions.length > 0, isLoading: false, currentTime: sequence.playhead ?? 0, duration: sequence.duration, frameRate: sequence.frameRate, frameWidth: sequence.frameWidth, frameHeight: sequence.frameHeight };
   const binding: NativePanelBinding = { snapshot, document: clone(document), baseline: clone(session), timelineOffsetSeconds, clip: clone(entry) };
-  const measurement = measure === undefined ? createCanvasWordMeasure() : measure;
-  session.captions = deriveNativePanelPhrases(binding, session, measurement);
-  binding.baseline = clone(session);
   const warnings = [
     'Native Position, Width, Height and animated overrides remain in Premiere Effect Controls. Panel edits do not rewrite their keyframes.',
     'Native typography supports available font weights, relative B and real or synthetic italic. Letter spacing, alignment and whole-caption backgrounds remain unsupported.',
     `Native word spacing is edited in pixels. Outline and shadow toggles map to native outline width and shadow opacity; remembered disabled values stay in this editing session.`,
   ];
-  if (entry.smartLineFit) warnings.push(measurement ? 'Smart line fit phrase rows use browser font measurement; the native renderer remains authoritative.' : 'Smart line fit measurement is unavailable in this editor; phrase rows use the saved character limit while native rendering retains Smart line fit.');
   warnings.push('Native text case supports shared As typed, Uppercase, Lowercase or ASCII Title Case; the source transcript is preserved.');
   if (captions.some(caption => caption.startTime < 0)) warnings.push('Some preserved source caption times precede sequence zero after this layer move; no source words were clipped or removed.');
   return { session, binding, warnings, capabilities: NATIVE_PANEL_CAPABILITIES };
@@ -186,7 +200,7 @@ function updateWord(previous: NativeWordStyle, before: ReturnType<typeof resolve
   if (before.bubbleColor !== after.bubbleColor) result.bubbleColor = editColor(result.bubbleColor, after.bubbleColor);
   if (before.bubbleOpacity !== after.bubbleOpacity) result.bubbleColor.a = after.bubbleOpacity;
   if (before.padding !== after.padding) result.padding = after.padding;
-  for(const axis of ['bubblePaddingInline','bubblePaddingBlock'] as const)if(beforeRaw?.[axis]!==afterRaw?.[axis]){if(afterRaw?.[axis]===undefined)delete result[axis];else result[axis]=afterRaw[axis];}
+  for(const axis of ['bubblePaddingInline','bubblePaddingBlock','paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const)if(beforeRaw?.[axis]!==afterRaw?.[axis]){if(afterRaw?.[axis]===undefined)delete result[axis];else result[axis]=afterRaw[axis];}
   if (before.radius !== after.radius) result.radius = after.radius;
   if (before.strokeEnabled !== after.strokeEnabled || before.strokeWidth !== after.strokeWidth) result.outlineWidth = after.strokeEnabled ? (after.strokeWidth > 0 ? after.strokeWidth : 2) : 0;
   if (before.strokeColor !== after.strokeColor) result.outlineColor = editColor(result.outlineColor, after.strokeColor);
@@ -220,6 +234,7 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
   const styles = pairs.map(([key]) => resolveAppearance(edited.style, key));
   if (!styles.every(style => style.textTransform === styles[0].textTransform) || !['none', 'titlecase', 'uppercase', 'lowercase'].includes(styles[0].textTransform)) unsupported('different word-state case');
   const document = clone(binding.document);
+  document.binaryVersion = 10;
   if(edited.style.fontWeight!==before.style.fontWeight||pairs.some(([key])=>edited.style[key]?.fontWeightOffset!==before.style[key]?.fontWeightOffset&&(edited.style[key]?.fontWeightOffset===0||edited.style[key]?.fontWeightOffset===100)))document.style.baseFontWeight=edited.style.fontWeight;
   for (const [key, nativeKey] of pairs) document.style[nativeKey] = updateWord(document.style[nativeKey], resolveAppearance(before.style, key), resolveAppearance(edited.style, key),before.style[key],edited.style[key]);
   if (edited.style.lineHeight !== before.style.lineHeight) document.style.lineHeight = edited.style.lineHeight;
@@ -262,13 +277,22 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
       const old = original?.words[index], stored = originalNative?.words[index];
       // Avoid adding/subtracting a floating placement offset to untouched source
       // timestamps. A style edit must not rewrite transcript bytes by rounding.
-      if (old && stored && word.text === old.text && word.startTime === old.startTime && word.endTime === old.endTime && word.endOfSentence === old.endOfSentence) return clone(stored);
-      return { text: word.text, start: word.startTime - binding.timelineOffsetSeconds, end: word.endTime - binding.timelineOffsetSeconds, endOfSentence: word.endOfSentence === true };
+      if (old && stored && word.text === old.text && word.startTime === old.startTime && word.endTime === old.endTime && word.endOfSentence === old.endOfSentence && word.lineBreakBefore === old.lineBreakBefore && (word.pauseLinesRemoved ?? 0) === (old.pauseLinesRemoved ?? 0)) return clone(stored);
+      return { text: word.text, start: old && stored && word.startTime === old.startTime ? stored.start : word.startTime - binding.timelineOffsetSeconds, end: old && stored && word.endTime === old.endTime ? stored.end : word.endTime - binding.timelineOffsetSeconds, endOfSentence: word.endOfSentence === true, ...(word.lineBreakBefore === undefined ? {} : { lineBreakBefore: word.lineBreakBefore }), ...(word.pauseLinesRemoved === undefined ? {} : { pauseLinesRemoved: word.pauseLinesRemoved }) };
     });
     return { id: caption.id, start: Math.min(...words.map(word => word.start)), end: Math.max(...words.map(word => word.end)), manualSplit: caption.manualSplit === true, words };
   });
   // Origin and envelope sequence are owned by the original exact native binding.
   return validateNativeDocument(document);
+}
+
+/** The exact-revision snapshot for one document write. A changed limit rides
+ * along as grouping, so the host commits the scalar and the document's edit
+ * token in one Premiere transaction: one Undo restores both. */
+export function nativeDocumentWriteSnapshot(binding: NativePanelBinding, edited: SessionState): CepNativeSnapshot & { grouping?: { before: number; value: number } } {
+  if (edited.style.maxChars === binding.baseline.style.maxChars) return clone(binding.snapshot);
+  if (binding.clip.maxChars === undefined) unsupported('an animated or unavailable character limit');
+  return { ...clone(binding.snapshot), grouping: { before: binding.clip.maxChars, value: edited.style.maxChars } };
 }
 
 export function confirmNativePanelUpdate(binding: NativePanelBinding, prepared: NativeDocument, edited: SessionState, response: { revision: string; documentText: string; maxChars?: number }): NativePanelBinding {

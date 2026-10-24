@@ -1,5 +1,5 @@
 ---
-name: Better Captions
+name: S-Captions
 description: A compact Premiere-native caption editing workspace.
 colors:
   panel-bg: "var(--uxp-host-background-color, #232323)"
@@ -111,13 +111,13 @@ components:
     padding: ".5rem 1.125rem 1.125rem"
 ---
 
-# Design System: Better Captions
+# Design System: S-Captions
 
 ## Overview
 
 **Creative North Star: "The Premiere Native Workspace"**
 
-Better Captions belongs beside footage in Premiere: calm charcoal surfaces, compact system typography and familiar rectangular controls. Blue identifies selection, focus and the main action; neutral hierarchy keeps the transcript readable under controlled ambient light.
+S-Captions belongs beside footage in Premiere: calm charcoal surfaces, compact system typography and familiar rectangular controls. Blue identifies selection, focus and the main action; neutral hierarchy keeps the transcript readable under controlled ambient light.
 
 The interface is dense without hiding state. Labels stay explicit, timing uses tabular figures, and supporting detail opens through native disclosures. Selection connects sentence timing, word appearance and caption placement without adding a video canvas. The browser review shell remains a fixture around the installed panel’s visual system.
 

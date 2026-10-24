@@ -3,11 +3,13 @@
   import type { CaptionItem } from '../lib/types';
   import { moveWord, moveWordEdge, wordEdgeLimits, type WordEdge } from '../lib/transcript/timing';
   interface Props { caption: CaptionItem; fps: number; currentTime: number; selectedWord?: number; onSelectWord?: (index: number) => void; onChange: (caption: CaptionItem) => void; onSeek: (time: number) => void;
-    wordOffset?: number; onSplitBefore?: (wordIndex: number) => void; splitDisabled?: boolean; splitTitle?: string;
+    wordOffset?: number; onSplitBefore?: (wordIndex: number) => void; splitDisabled?: boolean; splitTitle?: string; caretSplitIndex?: number | null;
     onMergeNext?: () => void; mergeDisabled?: boolean; mergeTitle?: string;
+    /** Words outside this range belong to the neighbouring lines and are shown for retiming across the line ending. */
+    focusStart?: number; focusEnd?: number;
   }
   let { caption, fps, currentTime, selectedWord = 0, onSelectWord = () => {}, onChange, onSeek,
-    wordOffset = 0, onSplitBefore, splitDisabled = false, splitTitle, onMergeNext, mergeDisabled = false, mergeTitle }: Props = $props();
+    wordOffset = 0, onSplitBefore, splitDisabled = false, splitTitle, caretSplitIndex = null, onMergeNext, mergeDisabled = false, mergeTitle, focusStart = 0, focusEnd = Infinity }: Props = $props();
   let zoom = $state<number | 'fit'>('fit'), problem = $state(''), draft = $state<CaptionItem | null>(null);
   let lane: HTMLDivElement;
   let cleanupDrag: (() => void) | undefined;
@@ -24,7 +26,9 @@
     if (suppressWordClick) { suppressWordClick = false; event?.preventDefault(); return; }
     onSelectWord(i); onSeek(caption.words[i].startTime);
   }
-  function splitSelected() { if (!splitDisabled && onSplitBefore && wordOffset + index > 0) onSplitBefore(wordOffset + index); }
+  const splitIndex = $derived(caretSplitIndex ?? wordOffset + index);
+  const splitAllowed = $derived(caretSplitIndex !== null ? splitIndex > 0 : index > focusStart && index < Math.min(focusEnd, shown.words.length));
+  function splitSelected() { if (!splitDisabled && onSplitBefore && splitAllowed) onSplitBefore(splitIndex); }
   function mergeSelected() { if (!mergeDisabled) onMergeNext?.(); }
   async function zoomAtPointer(container: HTMLDivElement, next: number | 'fit', clientX: number) {
     const currentLane = lane, before = currentLane.getBoundingClientRect(), revision = ++zoomRevision;
@@ -121,7 +125,7 @@
       if (e.type !== 'pointerup' || !moved) return;
       if (!edge) { suppressWordClick = true; if (clickReset !== undefined) clearTimeout(clickReset); clickReset = setTimeout(() => { suppressWordClick = false; clickReset = undefined; }, 0); }
       if (next && next.words.some((word, j) => word.startTime !== original.words[j].startTime || word.endTime !== original.words[j].endTime)) {
-        if (timingIdentity(caption) !== identity) { problem = 'This sentence changed during the drag. Try again.'; return; }
+        if (timingIdentity(caption) !== identity) { problem = 'This line changed during the drag. Try again.'; return; }
         onChange({ ...caption, timingEstimated: false, words: caption.words.map((word, j) => ({ ...word, startTime: next.words[j].startTime, endTime: next.words[j].endTime })) });
       }
     };
@@ -130,18 +134,19 @@
   }
 </script>
 
-<section class="word-timing" aria-label="Selected sentence word timing">
+<section class="word-timing" aria-label="Selected line word timing">
   <div class="word-timing__toolbar"><span>Words</span><div class="word-timing__actions">
-    <button class="word-timing__action" aria-label="Split clip before selected word" title={splitTitle ?? (wordOffset + index > 0 ? `Split clip before “${word.text}”` : 'Select a word after the first word to split')} disabled={splitDisabled || !onSplitBefore || wordOffset + index <= 0} onclick={splitSelected}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="m8.12 8.12 3.88 3.88m-3.88 3.88L20 4m-6 10 6 6"/></svg></button>
-    <button class="word-timing__action" aria-label="Merge with next caption" title={mergeTitle ?? 'Merge with next caption'} disabled={mergeDisabled || !onMergeNext} onclick={mergeSelected}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 4v3c0 3 3 5 7 5M5 20v-3c0-3 3-5 7-5m0 0h8m-3-3 3 3-3 3"/></svg></button>
+    <button class="word-timing__action" aria-label={caretSplitIndex !== null ? "Split line at text cursor" : "Split line before selected word"} onpointerdown={(event) => event.preventDefault()} title={splitTitle ?? (caretSplitIndex !== null ? (splitIndex > 0 ? 'Split line at text cursor' : 'Place the text cursor between words to split') : wordOffset + index > 0 ? `Split line before “${word.text}”` : 'Select a word after the first word to split')} disabled={splitDisabled || !onSplitBefore || !splitAllowed} onclick={splitSelected}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="m8.12 8.12 3.88 3.88m-3.88 3.88L20 4m-6 10 6 6"/></svg></button>
+    <button class="word-timing__action" aria-label="Merge with next line" title={mergeTitle ?? 'Merge with next line'} disabled={mergeDisabled || !onMergeNext} onclick={mergeSelected}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 4v3c0 3 3 5 7 5M5 20v-3c0-3 3-5 7-5m0 0h8m-3-3 3 3-3 3"/></svg></button>
     <label>Zoom <select aria-label="Word timeline zoom" bind:value={zoom}><option value="fit">Fit content</option><option value={1}>100%</option><option value={1.5}>150%</option><option value={2}>200%</option><option value={3}>300%</option><option value={4}>400%</option></select></label>
   </div></div>
   <div class="word-timing__scroll" role="region" aria-label="Word timeline; scroll horizontally" use:wheelZoom>
     <div class="word-timing__lane" bind:this={lane} style:width={laneWidth}>
       <div class="word-timing__ruler"><span>{shown.startTime.toFixed(3)}s</span><span>{((shown.startTime + shown.endTime) / 2).toFixed(3)}s</span><span>{shown.endTime.toFixed(3)}s</span></div>
       {#each shown.words as item, i}
-        <div class="word-timing__word" class:word-timing__word--selected={i === index} style:left="{percent(item.startTime)}%" style:width="{(item.endTime - item.startTime) / duration * 100}%">
-          <button class="word-timing__block" aria-label="{item.text}, {item.startTime.toFixed(3)} to {item.endTime.toFixed(3)} seconds" aria-pressed={i === index} onpointerdown={(event) => drag(event,null,i)} onclick={(event) => choose(i,event)}>{item.text}</button>
+        {@const neighbour = i < focusStart || i >= focusEnd}
+        <div class="word-timing__word" class:word-timing__word--selected={i === index} class:word-timing__word--neighbour={neighbour} title={neighbour ? `“${item.text}” is in the ${i < focusStart ? 'previous' : 'next'} line` : undefined} style:left="{percent(item.startTime)}%" style:width="{(item.endTime - item.startTime) / duration * 100}%">
+          <button class="word-timing__block" aria-label="{item.text}{neighbour ? `, ${i < focusStart ? 'previous' : 'next'} line` : ''}, {item.startTime.toFixed(3)} to {item.endTime.toFixed(3)} seconds" aria-pressed={i === index} onpointerdown={(event) => drag(event,null,i)} onclick={(event) => choose(i,event)}>{item.text}</button>
           {#each ['startTime','endTime'] as raw}{@const edge = raw as WordEdge}{@const limits = wordEdgeLimits(shown,i,edge,fps)}
             <div class="word-timing__edge" class:word-timing__edge--start={edge === 'startTime'} class:word-timing__edge--end={edge === 'endTime'} role="slider" tabindex="0" aria-label="{edge === 'startTime' ? 'Start' : 'End'} boundary for {item.text}" aria-valuemin={limits.min} aria-valuemax={Math.max(limits.min,limits.max)} aria-valuenow={Math.round(item[edge]*fps)} aria-valuetext="{item[edge].toFixed(3)} seconds" onfocus={() => onSelectWord(i)} onpointerdown={(event) => drag(event,edge,i)} onkeydown={(event) => keyboard(event,edge,i)}></div>
           {/each}
@@ -168,6 +173,7 @@
   .word-timing__ruler{display:flex;justify-content:space-between;padding-block:.4rem;font-size:var(--caption-type-xs);color:var(--color-panel-secondary);font-variant-numeric:tabular-nums}
   .word-timing__word{position:absolute;inset-block-start:1.8rem;block-size:2.3rem;&:hover .word-timing__edge{opacity:1}}
   .word-timing__word--selected .word-timing__edge{opacity:1}
+  .word-timing__word--neighbour .word-timing__block{border-style:dashed;color:var(--color-panel-secondary);&[aria-pressed=false]{background:transparent}}
   .word-timing__block{position:absolute;inset:0;inline-size:100%;block-size:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;background:var(--color-surface-raised);border:1px solid var(--color-panel-border);color:var(--color-panel-text);padding:.3rem;font:inherit;cursor:grab;touch-action:none;&[aria-pressed=true]{background:var(--color-selection);border-color:var(--color-accent)}&:hover{filter:brightness(1.15)}&:active{cursor:grabbing}}
   .word-timing__playhead{position:absolute;inset-block:1.5rem .25rem;inline-size:1px;background:var(--color-panel-text);pointer-events:none;z-index:1}
   .word-timing__edge{position:absolute;inset-block:-.25rem;inline-size:min(.8rem,25%);cursor:ew-resize;touch-action:none;opacity:0;z-index:2;&::after{content:"";position:absolute;inset-block:0;inline-size:min(3px,100%);background:var(--color-accent)}&:focus-visible{opacity:1}}

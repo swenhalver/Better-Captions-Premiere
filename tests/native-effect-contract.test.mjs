@@ -1,3 +1,4 @@
+import { legacyNativeDocumentBytes, nativeCarrier } from './helpers/native-document.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultNativeStyle, validateNativeStyle, NATIVE_PARAMETER_DISK_MAPPING, NATIVE_EFFECT_MATCH_NAME, validateNativeDocument, requireNativeHost, planNativeParameterEdit, planNativeMigration } from '../webview-ui/src/lib/native-effect/contract.ts';
@@ -88,36 +89,33 @@ test('TS encoder bytes roundtrip through actual C++ decoder and encoder', async 
     const data = document(); data.captions[0].words[0].text = 'café 日本語 CASE!'; data.style.titleCase = true;
     data.style.current.fontFamily = 'Helvetica'; data.style.current.bubble = true; data.style.current.color.r = .25;
     data.style.spoken.shadowY = -7; data.style.wordSpacing = 19; data.timeOriginSeconds = -12.5;
+    data.captions[0].words.at(-1).lineBreakBefore = 'edge';
     const encoded = encodeNativeDocument(data), input = join(temp, 'in.bcap'), output = join(temp, 'out.bcap');
     writeFileSync(input, encoded); execFileSync(executable, ['--roundtrip', input, output]);
     assert.deepEqual(new Uint8Array(readFileSync(output)), encoded);
-    const legacyDocument = { ...data, timeOriginSeconds: 0 }, legacy = encodeNativeDocument(legacyDocument).slice(0, -8);
-    legacy[4] = 1; writeFileSync(input, legacy);
-    execFileSync(executable, ['--roundtrip', input, output]);
-    assert.deepEqual(new Uint8Array(readFileSync(output)), legacy,'Untouched legacy v1 is not rewritten');
-    assert.deepEqual(Array.from(encoded.slice(0, 8)), [66, 67, 65, 80, 2, 0, 0, 0]);
-    const typography=structuredClone(data);typography.style.baseFontWeight=442.5;
-    Object.assign(typography.style.current,{fontWeight:700,fontWeightOffset:100,italic:true});
-    Object.assign(typography.style.upcoming,{fontWeight:1,italic:false});
-    Object.assign(typography.style.spoken,{fontWeight:442.5,fontWeightOffset:0});
-    const v3=encodeNativeDocument(typography);assert.equal(v3.length,encoded.length+56);
-    writeFileSync(input,v3);execFileSync(executable,['--roundtrip',input,output]);
-    assert.deepEqual(new Uint8Array(readFileSync(output)),v3,'v3 typography is byte-exact across TS and C++');
-    assert.equal(new DataView(v3.buffer).getUint32(4,true),3);
-    for(const letterCase of ['uppercase','lowercase']){
-      typography.style.letterCase=letterCase;typography.style.titleCase=false;const v4=encodeNativeDocument(typography);
-      assert.equal(new DataView(v4.buffer).getUint32(4,true),4);assert.equal(v4.length,v3.length+4);
-      writeFileSync(input,v4);execFileSync(executable,['--roundtrip',input,output]);
-      assert.deepEqual(new Uint8Array(readFileSync(output)),v4,'v4 display case is byte-exact across TS and C++');
+    assert.deepEqual(Array.from(encoded.slice(0, 8)), [66, 67, 65, 80, 10, 0, 0, 0]);
+    const { decodeNativePanelDocument } = await import('../webview-ui/src/lib/native-effect/panel.ts');
+    // Merge edges are v10 only.
+    const older = structuredClone(data); delete older.captions[0].words.at(-1).lineBreakBefore;
+    for (let version = 1; version <= 8; version++) {
+      const legacy = legacyNativeDocumentBytes({ ...older, timeOriginSeconds: 0 }, version);
+      writeFileSync(input, legacy); execFileSync(executable, ['--roundtrip', input, output]);
+      const expected = encodeNativeDocument(decodeNativePanelDocument(nativeCarrier(legacy), 'seq-1'));
+      assert.deepEqual(new Uint8Array(readFileSync(output)), expected, `v${version} upgrades identically in TS and C++`);
     }
-    const spaces=structuredClone(typography);spaces.style.current.bubbleFillSpaces=true;spaces.style.spoken.bubbleFillSpaces=true;
-    spaces.style.lineHeight=.6;
-    const v5=encodeNativeDocument(spaces);assert.equal(new DataView(v5.buffer).getUint32(4,true),5);assert.equal(v5.length,v3.length+16);
-    writeFileSync(input,v5);execFileSync(executable,['--roundtrip',input,output]);
-    assert.deepEqual(new Uint8Array(readFileSync(output)),v5,'v5 bubble space flags are byte-exact across TS and C++');
-    Object.assign(spaces.style.current,{bubblePaddingInline:19,bubblePaddingBlock:3.5});spaces.style.upcoming.bubblePaddingBlock=0;spaces.style.current.underline=true;spaces.style.spoken.underline=false;
-    const v6=encodeNativeDocument(spaces);assert.equal(new DataView(v6.buffer).getUint32(4,true),6);assert.equal(v6.length,v5.length+60);
-    writeFileSync(input,v6);execFileSync(executable,['--roundtrip',input,output]);assert.deepEqual(new Uint8Array(readFileSync(output)),v6,'v6 independent padding is byte-exact across TS and C++');
+    const rich = structuredClone(data); rich.style.baseFontWeight = 442.5;
+    Object.assign(rich.style.current, { fontWeight: 700, fontWeightOffset: 100, italic: true, bubbleFillSpaces: true,
+      bubblePaddingInline: 19, bubblePaddingBlock: 3.5, underline: true, paddingTop: 2, marginLeft: -3, radiusBR: 14 });
+    Object.assign(rich.style.upcoming, { fontWeight: 1, italic: false, bubblePaddingBlock: 0 });
+    Object.assign(rich.style.spoken, { fontWeight: 442.5, fontWeightOffset: 0, underline: false });
+    rich.captions[0].words[0].lineBreakBefore = 'break';
+    rich.captions[0].words[0].pauseLinesRemoved = 8;
+    rich.captions[0].words.push({ text: 'after', start: 1, end: 2, endOfSentence: false, lineBreakBefore: 'join' });
+    for (const letterCase of ['uppercase', 'lowercase']) {
+      rich.style.letterCase = letterCase; rich.style.titleCase = false;
+      const bytes = encodeNativeDocument(rich); writeFileSync(input, bytes); execFileSync(executable, ['--roundtrip', input, output]);
+      assert.deepEqual(new Uint8Array(readFileSync(output)), bytes, 'v9 boundaries, pause removal and every optional style roundtrip through C++');
+    }
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -128,7 +126,7 @@ test('native typography validates bounded weights, explicit italic and the relat
   Object.assign(data.style.current,{fontWeight:700,italic:true,fontWeightOffset:100});
   Object.assign(data.style.upcoming,{fontWeight:1,italic:false,fontWeightOffset:0});
   const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');
-  assert.equal(decoded.binaryVersion,3);assert.deepEqual(decoded.style,data.style);
+  assert.equal(decoded.binaryVersion,10);assert.deepEqual(decoded.style,data.style);
   assert.equal(decodeNativeTransportTimeOrigin(text),123.456);
   assert.equal(encodeNativeTransportText(decoded),text);
   for(const patch of [{fontWeight:0},{fontWeight:.999},{fontWeight:1000.01},{fontWeight:NaN},{italic:1},{fontWeightOffset:50}]){
@@ -136,7 +134,7 @@ test('native typography validates bounded weights, explicit italic and the relat
   }
   for(const value of [0,.999,1000.01,Infinity])assert.throws(()=>validateNativeDocument({...data,style:{...data.style,baseFontWeight:value}}));
   const bytes=Buffer.from(text.slice(7),'hex');
-  for(const field of [bytes.length-40,bytes.length-36]){
+  for(const field of [bytes.length-404,bytes.length-400]){
     const malformed=Buffer.from(bytes);malformed.writeUInt32LE(3,field);const carrier='BCDOC1:'+malformed.toString('hex');
     assert.throws(()=>decodeNativePanelDocument(carrier,'seq-1'));assert.throws(()=>decodeNativeTransportTimeOrigin(carrier));
   }
@@ -290,8 +288,8 @@ test('persistent adjustment origin validates exact bounded ticks and leaves tran
   const source = buildCepNativeDocumentApplyScript({locator,revision}, {...doc,timeOriginSeconds:300}, true, 'initial-attachment');
   const embedded = JSON.parse(source.match(/var r=(.*);/)[1]);
   const binary = Buffer.from(embedded.documentText.slice(7), 'hex');
-  assert.equal(binary.readDoubleLE(binary.length-8), -8);
-  assert.equal(binary.readUInt32LE(4), 2);
+  assert.equal(binary.readDoubleLE(binary.length-428), -8);
+  assert.equal(binary.readUInt32LE(4), 10);
   assert.equal(doc.captions[0].words[0].start, 0);
   const bad = JSON.parse(revision); bad.start = '1e3';
   assert.throws(() => buildCepNativeDocumentApplyScript({locator,revision:JSON.stringify(bad)}, doc, true, 'initial-attachment'), /ticks/);
@@ -320,7 +318,7 @@ test('existing-document edit preserves host origin3600 after split/move and igno
   assert.equal(result.ok,true);assert.equal(writes,1);assert.equal(decodeNativeTransportTimeOrigin(carrier),3600);
   assert.equal(edited.timeOriginSeconds,-999);assert.equal(edited.captions[0].words[0].start,0);
   assert.throws(()=>buildCepNativeDocumentApplyScript({locator,revision:fresh.revision},edited,true),/Choose explicit/);
-  if(typography)assert.equal(Buffer.from(carrier.slice(7),'hex').readUInt32LE(4),3,'Existing typography documents retain BCAP3 and their persisted origin');
+  if(typography)assert.equal(Buffer.from(carrier.slice(7),'hex').readUInt32LE(4),10,'Typography and persisted origin use BCAP10');
   }
 });
 
@@ -329,10 +327,10 @@ test('persisted-origin reader accepts legacyv1 zero and rejects malformed footer
   const bytes=encodeNativeDocument({...document(),timeOriginSeconds:3600});
   const text=bytes=>'BCDOC1:'+Buffer.from(bytes).toString('hex');
   assert.equal(decodeNativeTransportTimeOrigin(text(bytes)),3600);
-  const v1=bytes.slice(0,-8);v1[4]=1;assert.equal(decodeNativeTransportTimeOrigin(text(v1)),0);
+  const v1=legacyNativeDocumentBytes({...document(),timeOriginSeconds:0},1);assert.equal(decodeNativeTransportTimeOrigin(text(v1)),0);
   for (const data of [bytes.slice(0,-1),new Uint8Array([...bytes,0]),bytes.slice(0,12)]) assert.throws(()=>decodeNativeTransportTimeOrigin(text(data)));
   const bad=bytes.slice();bad[4]=3;assert.throws(()=>decodeNativeTransportTimeOrigin(text(bad)));
-  const nan=bytes.slice();new DataView(nan.buffer).setFloat64(nan.length-8,NaN,true);assert.throws(()=>decodeNativeTransportTimeOrigin(text(nan)));
+  const nan=bytes.slice();new DataView(nan.buffer).setFloat64(nan.length-428,NaN,true);assert.throws(()=>decodeNativeTransportTimeOrigin(text(nan)));
   const malformed=bytes.slice();new DataView(malformed.buffer).setUint32(8,10001,true);assert.throws(()=>decodeNativeTransportTimeOrigin(text(malformed)));
 });
 
@@ -349,8 +347,8 @@ test('bubble space flags retain legacy bytes, roundtrip all three states and rej
  for(const state of ['upcoming','current','spoken']){
   const data=document();data.timeOriginSeconds=42.125;data.style[state].bubbleFillSpaces=true;
   const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');
-  assert.equal(decoded.binaryVersion,5);assert.equal(decoded.style[state].bubbleFillSpaces,true);assert.equal(decodeNativeTransportTimeOrigin(text),42.125);assert.equal(encodeNativeTransportText(decoded),text);
-  const bytes=Buffer.from(text.slice(7),'hex');bytes.writeUInt32LE(2,bytes.length-12);
+  assert.equal(decoded.binaryVersion,10);assert.equal(decoded.style[state].bubbleFillSpaces,true);assert.equal(decodeNativeTransportTimeOrigin(text),42.125);assert.equal(encodeNativeTransportText(decoded),text);
+  const bytes=Buffer.from(text.slice(7),'hex');bytes.writeUInt32LE(2,bytes.length-360);
   const malformed='BCDOC1:'+bytes.toString('hex');assert.throws(()=>decodeNativePanelDocument(malformed,'seq-1'));assert.throws(()=>decodeNativeTransportTimeOrigin(malformed));
  }
  for(const value of [1,0,null,'true',{}]){const data=document();data.style.current.bubbleFillSpaces=value;assert.throws(()=>validateNativeDocument(data),/bubble spaces flag/);}
@@ -368,15 +366,15 @@ test('axis padding v6 retains old bytes when absent, roundtrips explicit zero an
  const {decodeNativePanelDocument}=await import('../webview-ui/src/lib/native-effect/panel.ts');
  for(const binaryVersion of [1,2,3,4,5]){const data=document();data.binaryVersion=binaryVersion;const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');assert.equal(encodeNativeTransportText(decoded),text);for(const state of ['upcoming','current','spoken']){assert.equal(decoded.style[state].bubblePaddingInline,undefined);assert.equal(decoded.style[state].bubblePaddingBlock,undefined);}}
  const data=document();data.timeOriginSeconds=123.5;Object.assign(data.style.current,{bubblePaddingInline:0,bubblePaddingBlock:4096});Object.assign(data.style.upcoming,{bubblePaddingInline:12.5});data.style.spoken.bubblePaddingBlock=3;
- const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');assert.equal(decoded.binaryVersion,6);assert.deepEqual(decoded.style,data.style);assert.equal(decodeNativeTransportTimeOrigin(text),123.5);assert.equal(encodeNativeTransportText(decoded),text);
+ const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');assert.equal(decoded.binaryVersion,10);assert.deepEqual(decoded.style,data.style);assert.equal(decodeNativeTransportTimeOrigin(text),123.5);assert.equal(encodeNativeTransportText(decoded),text);
  for(const axis of ['bubblePaddingInline','bubblePaddingBlock'])for(const value of [-1,-.01,4096.01,NaN,Infinity,null,'10']){const bad=document();bad.style.current[axis]=value;assert.throws(()=>validateNativeDocument(bad));}
- const bytes=Buffer.from(text.slice(7),'hex');for(const value of [-2,4097,Infinity,NaN]){const bad=Buffer.from(bytes);bad.writeDoubleLE(value,bad.length-60);const carrier='BCDOC1:'+bad.toString('hex');assert.throws(()=>decodeNativePanelDocument(carrier,'seq-1'));assert.throws(()=>decodeNativeTransportTimeOrigin(carrier));}
+ const bytes=Buffer.from(text.slice(7),'hex');for(const value of [-2,4097,Infinity,NaN]){const bad=Buffer.from(bytes);bad.writeDoubleLE(value,bad.length-348);const carrier='BCDOC1:'+bad.toString('hex');assert.throws(()=>decodeNativePanelDocument(carrier,'seq-1'));assert.throws(()=>decodeNativeTransportTimeOrigin(carrier));}
 });
 
 
 test('native underline is an independent optional boolean with byte-exact absent legacy state and strict tri-state footer',async()=>{
  const {encodeNativeTransportText,decodeNativeTransportTimeOrigin}=await import('../webview-ui/src/lib/native-effect/encode.ts');const {decodeNativePanelDocument}=await import('../webview-ui/src/lib/native-effect/panel.ts');
- for(const state of ['upcoming','current','spoken'])for(const underline of [true,false]){const data=document();data.timeOriginSeconds=42.25;data.style[state].underline=underline;const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');assert.equal(decoded.binaryVersion,6);assert.deepEqual(decoded.style,data.style);assert.equal(decodeNativeTransportTimeOrigin(text),42.25);assert.equal(encodeNativeTransportText(decoded),text);}
+ for(const state of ['upcoming','current','spoken'])for(const underline of [true,false]){const data=document();data.timeOriginSeconds=42.25;data.style[state].underline=underline;const text=encodeNativeTransportText(data),decoded=decodeNativePanelDocument(text,'seq-1');assert.equal(decoded.binaryVersion,10);assert.deepEqual(decoded.style,data.style);assert.equal(decodeNativeTransportTimeOrigin(text),42.25);assert.equal(encodeNativeTransportText(decoded),text);}
  for(const value of [null,0,1,'true',{}]){const data=document();data.style.current.underline=value;assert.throws(()=>validateNativeDocument(data),/underline flag/);}
- const data=document();data.style.current.underline=true;const bytes=Buffer.from(encodeNativeTransportText(data).slice(7),'hex');for(const offset of [bytes.length-12,bytes.length-8,bytes.length-4]){const bad=Buffer.from(bytes);bad.writeUInt32LE(3,offset);const text='BCDOC1:'+bad.toString('hex');assert.throws(()=>decodeNativePanelDocument(text,'seq-1'));assert.throws(()=>decodeNativeTransportTimeOrigin(text));}
+ const data=document();data.style.current.underline=true;const bytes=Buffer.from(encodeNativeTransportText(data).slice(7),'hex');for(const offset of [bytes.length-300,bytes.length-296,bytes.length-292]){const bad=Buffer.from(bytes);bad.writeUInt32LE(3,offset);const text='BCDOC1:'+bad.toString('hex');assert.throws(()=>decodeNativePanelDocument(text,'seq-1'));assert.throws(()=>decodeNativeTransportTimeOrigin(text));}
 });

@@ -78,3 +78,11 @@ BCAP binary v5 adds `bubbleFillSpaces` for upcoming/current/spoken appearances a
 
 
 BCAP v6 keeps all prior bytes and appends 48 bytes of axis padding (upcoming inline/block, current inline/block, spoken inline/block; binary64, -1 unset or finite 0–4096), then three uint32 underline modes (upcoming/current/spoken: 0 unset, 1 off, 2 on). Optional JSON properties are `bubblePaddingInline`, `bubblePaddingBlock`, and `underline`. Each padding axis falls back independently to the state's existing `padding`. Absent overrides leave v1–5 carriers byte-identical. Explicit false underline also requires v6, preserving its difference from unset. Both bounded TypeScript readers and the native decoder validate the entire footer; CEP append-only extension validates it before duration mutation and preserves its raw bytes.
+
+BCAP v7 appends 288 bytes after the v6 footer: twelve binary64 values per
+state in upcoming/current/spoken order. Fields are paddingTop, paddingRight,
+paddingBottom, paddingLeft, radiusTL, radiusTR, radiusBR, radiusBL, marginTop,
+marginRight, marginBottom, marginLeft. Padding/radius use -1 to inherit legacy
+axis/uniform values; explicit values are finite 0–4096. Margins default to zero
+and accept finite -4096–4096. Values participate in layout and native render
+scaling. Unedited v1–6 documents retain their byte representation.

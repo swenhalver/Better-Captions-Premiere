@@ -22,7 +22,6 @@ export interface LegacyCaptionConnection {
 export interface NativeCaptionConnection {
   kind: 'native-effect';
   maxChars?: number;
-  smartLineFit?: boolean;
   lineFitWidth?: number;
   lineFitFontScale?: number;
   lineFitStates?: NativeLineFitStates;
@@ -129,7 +128,6 @@ function validateSnapshot(value: CaptionConnections, expected: SequenceIdentity)
     localPath(entry.path); legacyNodes.add(entry.clipNodeId);
   }
   for (const entry of value.native) {
-    if(entry.smartLineFit!==undefined&&typeof entry.smartLineFit!=='boolean')fail();
     if(entry.lineFitWidth!==undefined&&(!Number.isFinite(entry.lineFitWidth)||entry.lineFitWidth<1||entry.lineFitWidth>8192))fail();
     if(entry.lineFitFontScale!==undefined&&(!Number.isFinite(entry.lineFitFontScale)||entry.lineFitFontScale<=0||entry.lineFitFontScale>100))fail();
     if(entry.lineFitStates!==undefined){
@@ -220,4 +218,18 @@ export function reconnectLegacyCaptions(captions: CaptionItem[], snapshot: Capti
 export function nativeAboveDisabledBackups(snapshot: CaptionConnections): NativeCaptionConnection | undefined {
   if (snapshot.selectedClipNodeIds.length || snapshot.native.length !== 1 || snapshot.native[0].disabled === true || !snapshot.legacy.length || !snapshot.legacy.every(clip => clip.disabled === true)) return undefined;
   return snapshot.native[0];
+}
+
+/** Resolve the editor target from validated discovery, without changing the
+ * timeline. Missing movie sidecars must not mask the sole live native layer. */
+export function chooseNativeCaptionConnection(snapshot: CaptionConnections, selectedLegacyId: string | null, retainedClipNodeId?: string): NativeCaptionConnection | undefined {
+  const selected = snapshot.selectedClipNodeIds.length === 1
+    ? snapshot.native.find(item => item.clipNodeId === snapshot.selectedClipNodeIds[0]) : undefined;
+  if (selected) return selected;
+  const retained = snapshot.native.find(item => item.clipNodeId === retainedClipNodeId);
+  if (!selectedLegacyId && retained) return retained;
+  const aboveBackups = nativeAboveDisabledBackups(snapshot);
+  if (aboveBackups) return aboveBackups;
+  if (!snapshot.selectedClipNodeIds.length && !snapshot.legacy.length && snapshot.native.length === 1 && snapshot.native[0].disabled !== true) return snapshot.native[0];
+  return undefined;
 }

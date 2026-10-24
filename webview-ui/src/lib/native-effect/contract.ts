@@ -7,9 +7,9 @@ export function normalizeNativeMatchName(value: unknown): typeof NATIVE_EFFECT_M
 }
 export const NATIVE_PARAMETERS = ['positionX', 'positionY', 'width', 'height'] as const;
 export type NativeParameter = typeof NATIVE_PARAMETERS[number];
-export interface NativeWord { text: string; start: number; end: number; endOfSentence: boolean; }
+export interface NativeWord { text: string; start: number; end: number; endOfSentence: boolean; lineBreakBefore?: 'break' | 'join' | 'edge'; pauseLinesRemoved?: number; }
 export interface NativeCaption { id: string; start: number; end: number; manualSplit: boolean; words: NativeWord[]; }
-export interface NativeDocument { version: 1; animationAuthority: 'premiere-effect'; sequenceId: string; captions: NativeCaption[]; style: NativeStyle; timeOriginSeconds: number; binaryVersion?: 1 | 2 | 3 | 4 | 5 | 6; }
+export interface NativeDocument { version: 1; animationAuthority: 'premiere-effect'; sequenceId: string; captions: NativeCaption[]; style: NativeStyle; timeOriginSeconds: number; binaryVersion?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10; }
 export interface NativeHostEvidence {
   host: 'premiere'; matchName: string; loaded: boolean; renderVerified: boolean;
   parameterReadWriteVerified: boolean; serializationVerified: boolean;
@@ -51,17 +51,19 @@ export function validateNativeDocument(input: unknown): NativeDocument {
     if (!Array.isArray(caption.words) || !caption.words.length || (words += caption.words.length) > 50000) throw new Error('Expected 1 to 50000 total words.');
     let previous = start;
     const result = caption.words.map(item => {
-      const word = record(item, ['text', 'start', 'end', 'endOfSentence']); const [a, b] = interval(word);
+      const word = record(item, ['text', 'start', 'end', 'endOfSentence', 'lineBreakBefore', 'pauseLinesRemoved']); const [a, b] = interval(word);
       if (typeof word.text !== 'string' || word.text.length > 500 || !word.text.trim() || new TextDecoder().decode(new TextEncoder().encode(word.text)) !== word.text || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(word.text) || (characters += word.text.length) > 2000000) throw new Error('Invalid or oversized native transcript text.');
       if (a < start || b > end || a < previous) throw new Error('Native words must be ordered inside their caption.');
       previous = a;
       if (typeof word.endOfSentence !== 'boolean') throw new Error('endOfSentence must be explicit.');
-      return { text: word.text, start: a, end: b, endOfSentence: word.endOfSentence };
+      if (word.lineBreakBefore !== undefined && word.lineBreakBefore !== 'break' && word.lineBreakBefore !== 'join' && word.lineBreakBefore !== 'edge') throw new Error('Invalid native word line boundary.');
+      if (word.pauseLinesRemoved !== undefined && (typeof word.pauseLinesRemoved !== 'number' || !Number.isInteger(word.pauseLinesRemoved) || word.pauseLinesRemoved < 0 || word.pauseLinesRemoved > 8)) throw new Error('Invalid native word removed pause lines.');
+      return { text: word.text, start: a, end: b, endOfSentence: word.endOfSentence, ...(word.pauseLinesRemoved === undefined || word.pauseLinesRemoved === 0 ? {} : { pauseLinesRemoved: word.pauseLinesRemoved as number }), ...(word.lineBreakBefore === undefined ? {} : { lineBreakBefore: word.lineBreakBefore as 'break' | 'join' | 'edge' }) };
     });
     return { id: captionId, start, end, manualSplit: caption.manualSplit, words: result };
   });
-  if (doc.binaryVersion !== undefined && ![1,2,3,4,5,6].includes(doc.binaryVersion as number)) throw new Error('Unsupported native binary version.');
-  return { version: 1, animationAuthority: 'premiere-effect', sequenceId: id(doc.sequenceId), captions, style: validateNativeStyle(doc.style), timeOriginSeconds: doc.timeOriginSeconds === undefined ? 0 : numeric(doc.timeOriginSeconds, -864000, 864000), ...(doc.binaryVersion === undefined ? {} : { binaryVersion: doc.binaryVersion as 1|2|3|4|5|6 }) };
+  if (doc.binaryVersion !== undefined && ![1,2,3,4,5,6,7,8,9,10].includes(doc.binaryVersion as number)) throw new Error('Unsupported native binary version.');
+  return { version: 1, animationAuthority: 'premiere-effect', sequenceId: id(doc.sequenceId), captions, style: validateNativeStyle(doc.style), timeOriginSeconds: doc.timeOriginSeconds === undefined ? 0 : numeric(doc.timeOriginSeconds, -864000, 864000), ...(doc.binaryVersion === undefined ? {} : { binaryVersion: doc.binaryVersion as 1|2|3|4|5|6|7|8|9|10 }) };
 }
 export function requireNativeHost(evidence: NativeHostEvidence): void {
   if (evidence.host !== 'premiere' || !normalizeNativeMatchName(evidence.matchName) || evidence.loaded !== true || evidence.renderVerified !== true || evidence.parameterReadWriteVerified !== true || evidence.serializationVerified !== true) throw new Error('Native effect is unavailable or unverified. No automatic movie fallback.');
@@ -113,7 +115,7 @@ export interface NativeColor { r: number; g: number; b: number; a: number; }
 export interface NativeWordStyle {
   fontWeight?: number; italic?: boolean; underline?: boolean; fontWeightOffset?: 0 | 100 | null;
   fontFamily: string; fontSize: number; sizeScale: number; opacity: number; color: NativeColor;
-  bubble: boolean; bubbleFillSpaces?: boolean; bubblePaddingInline?: number; bubblePaddingBlock?: number; bubbleColor: NativeColor; padding: number; radius: number; outlineWidth: number;
+  paddingTop?: number; paddingRight?: number; paddingBottom?: number; paddingLeft?: number; radiusTL?: number; radiusTR?: number; radiusBR?: number; radiusBL?: number; marginTop?: number; marginRight?: number; marginBottom?: number; marginLeft?: number; bubble: boolean; bubbleFillSpaces?: boolean; bubblePaddingInline?: number; bubblePaddingBlock?: number; bubbleColor: NativeColor; padding: number; radius: number; outlineWidth: number;
   outlineColor: NativeColor; shadowBlur: number; shadowX: number; shadowY: number; shadowColor: NativeColor;
 }
 export interface NativeStyle { upcoming: NativeWordStyle; current: NativeWordStyle; spoken: NativeWordStyle; wordSpacing: number; lineHeight: number; titleCase: boolean; letterCase?: 'uppercase' | 'lowercase'; baseFontWeight?: number; }
@@ -122,7 +124,7 @@ function nativeColor(input: unknown): NativeColor {
   return { r: numeric(c.r, 0, 1), g: numeric(c.g, 0, 1), b: numeric(c.b, 0, 1), a: numeric(c.a, 0, 1) };
 }
 function wordStyle(input: unknown): NativeWordStyle {
-  const keys = ['fontFamily', 'fontSize', 'sizeScale', 'opacity', 'color', 'bubble', 'bubbleColor', 'padding', 'radius', 'outlineWidth', 'outlineColor', 'shadowBlur', 'shadowX', 'shadowY', 'shadowColor', 'fontWeight', 'italic', 'fontWeightOffset', 'bubbleFillSpaces', 'bubblePaddingInline', 'bubblePaddingBlock', 'underline'];
+  const keys = ['fontFamily', 'fontSize', 'sizeScale', 'opacity', 'color', 'bubble', 'bubbleColor', 'padding', 'radius', 'outlineWidth', 'outlineColor', 'shadowBlur', 'shadowX', 'shadowY', 'shadowColor', 'fontWeight', 'italic', 'fontWeightOffset', 'bubbleFillSpaces', 'bubblePaddingInline', 'bubblePaddingBlock', 'underline', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft'];
   const s = record(input, keys);
   if (typeof s.fontFamily !== 'string' || !s.fontFamily.trim() || new TextDecoder().decode(new TextEncoder().encode(s.fontFamily)) !== s.fontFamily || new TextEncoder().encode(s.fontFamily).length > 256 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(s.fontFamily)) throw new Error('Invalid native font family.');
   if (typeof s.bubble !== 'boolean') throw new Error('Invalid native bubble flag.');
@@ -130,7 +132,7 @@ function wordStyle(input: unknown): NativeWordStyle {
   if (s.underline !== undefined && typeof s.underline !== 'boolean') throw new Error('Invalid native underline flag.');
   if (s.italic !== undefined && typeof s.italic !== 'boolean') throw new Error('Invalid native italic flag.');
   if (s.fontWeightOffset !== undefined && s.fontWeightOffset !== null && s.fontWeightOffset !== 0 && s.fontWeightOffset !== 100) throw new Error('Invalid native relative weight mode.');
-  return { fontFamily: s.fontFamily, fontSize: numeric(s.fontSize, 0.01, 4096), sizeScale: numeric(s.sizeScale, .01, 16), opacity: numeric(s.opacity, 0, 1), color: nativeColor(s.color), bubble: s.bubble, bubbleColor: nativeColor(s.bubbleColor), padding: numeric(s.padding, 0, 4096), radius: numeric(s.radius, 0, 4096), outlineWidth: numeric(s.outlineWidth, 0, 4096), outlineColor: nativeColor(s.outlineColor), shadowBlur: numeric(s.shadowBlur, 0, 4096), shadowX: numeric(s.shadowX, -4096, 4096), shadowY: numeric(s.shadowY, -4096, 4096), shadowColor: nativeColor(s.shadowColor), ...(s.underline === undefined ? {} : {underline:s.underline as boolean}), ...(s.bubblePaddingInline === undefined ? {} : {bubblePaddingInline:numeric(s.bubblePaddingInline,0,4096)}), ...(s.bubblePaddingBlock === undefined ? {} : {bubblePaddingBlock:numeric(s.bubblePaddingBlock,0,4096)}), ...(s.bubbleFillSpaces === undefined ? {} : {bubbleFillSpaces:s.bubbleFillSpaces as boolean}), ...(s.fontWeight === undefined ? {} : {fontWeight:numeric(s.fontWeight,1,1000)}), ...(s.italic === undefined ? {} : {italic:s.italic as boolean}), ...(s.fontWeightOffset === undefined ? {} : {fontWeightOffset:s.fontWeightOffset as 0|100|null}) };
+  return { fontFamily: s.fontFamily, fontSize: numeric(s.fontSize, 0.01, 4096), sizeScale: numeric(s.sizeScale, .01, 16), opacity: numeric(s.opacity, 0, 1), color: nativeColor(s.color), bubble: s.bubble, bubbleColor: nativeColor(s.bubbleColor), padding: numeric(s.padding, 0, 4096), radius: numeric(s.radius, 0, 4096), outlineWidth: numeric(s.outlineWidth, 0, 4096), outlineColor: nativeColor(s.outlineColor), shadowBlur: numeric(s.shadowBlur, 0, 4096), shadowX: numeric(s.shadowX, -4096, 4096), shadowY: numeric(s.shadowY, -4096, 4096), shadowColor: nativeColor(s.shadowColor), ...(s.paddingTop===undefined?{}:{paddingTop:numeric(s.paddingTop,0,4096)}), ...(s.paddingRight===undefined?{}:{paddingRight:numeric(s.paddingRight,0,4096)}), ...(s.paddingBottom===undefined?{}:{paddingBottom:numeric(s.paddingBottom,0,4096)}), ...(s.paddingLeft===undefined?{}:{paddingLeft:numeric(s.paddingLeft,0,4096)}), ...(s.radiusTL===undefined?{}:{radiusTL:numeric(s.radiusTL,0,4096)}), ...(s.radiusTR===undefined?{}:{radiusTR:numeric(s.radiusTR,0,4096)}), ...(s.radiusBR===undefined?{}:{radiusBR:numeric(s.radiusBR,0,4096)}), ...(s.radiusBL===undefined?{}:{radiusBL:numeric(s.radiusBL,0,4096)}), ...(s.marginTop===undefined?{}:{marginTop:numeric(s.marginTop,-4096,4096)}), ...(s.marginRight===undefined?{}:{marginRight:numeric(s.marginRight,-4096,4096)}), ...(s.marginBottom===undefined?{}:{marginBottom:numeric(s.marginBottom,-4096,4096)}), ...(s.marginLeft===undefined?{}:{marginLeft:numeric(s.marginLeft,-4096,4096)}), ...(s.underline === undefined ? {} : {underline:s.underline as boolean}), ...(s.bubblePaddingInline === undefined ? {} : {bubblePaddingInline:numeric(s.bubblePaddingInline,0,4096)}), ...(s.bubblePaddingBlock === undefined ? {} : {bubblePaddingBlock:numeric(s.bubblePaddingBlock,0,4096)}), ...(s.bubbleFillSpaces === undefined ? {} : {bubbleFillSpaces:s.bubbleFillSpaces as boolean}), ...(s.fontWeight === undefined ? {} : {fontWeight:numeric(s.fontWeight,1,1000)}), ...(s.italic === undefined ? {} : {italic:s.italic as boolean}), ...(s.fontWeightOffset === undefined ? {} : {fontWeightOffset:s.fontWeightOffset as 0|100|null}) };
 }
 export function validateNativeStyle(input: unknown): NativeStyle {
   const s = record(input, ['upcoming', 'current', 'spoken', 'wordSpacing', 'lineHeight', 'titleCase', 'baseFontWeight', 'letterCase']);

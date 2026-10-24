@@ -41,7 +41,8 @@ const animation = { ...DEFAULT_ANIMATION, preset: 'karaoke', fadeInDuration: 0, 
 function plainStyle() {
   const style = structuredClone(DEFAULT_STYLE);
   Object.assign(style, { fontSize: 32, strokeEnabled: false, backgroundEnabled: false });
-  for (const state of ['activeWord', 'spokenWord']) Object.assign(style[state], { sizeScale: 1, bubble: false });
+  // Isolate font-space behavior from separately authored padding clearance.
+  for (const state of ['activeWord', 'spokenWord', 'upcomingWord']) style[state] = { ...style[state], sizeScale: 1, bubble: false, padding: 0 };
   return style;
 }
 function render(cue, style, time = .2, width = 1000) {
@@ -87,13 +88,14 @@ test('tight spacing keeps active bubbles clear of adjacent text and inside the m
   }
 });
 
-test('word spacing participates in line wrapping at fixed font size', () => {
+test('word spacing changes row width without creating a line break', () => {
   const cue = caption('one two six'), style = plainStyle();
   style.wordSpacing = 0;
   const tight = render(cue, style, .2, 160);
   style.wordSpacing = 200;
   const loose = render(cue, style, .2, 160);
-  assert.equal(tight.layout.rows.length, 1); assert.equal(loose.layout.rows.length, 2);
+  assert.equal(tight.layout.rows.length, 1); assert.equal(loose.layout.rows.length, 1);
+  assert.ok(loose.layout.width>tight.layout.width);assert.ok(loose.layout.width>160);
   assert.ok([...tight.texts, ...loose.texts].every(word => word.font.includes('32px')));
 });
 
@@ -127,11 +129,15 @@ test('agent style edits accept bounded spacing and title case for every word sta
 });
 
 test('title case handles Unicode, contractions, punctuation and hyphens without changing transcription', () => {
-  const source = '“hELLO,” don’T stop—rÉSUMÉ élÈVE ΜΊΑ ПРИВЕТ 123abc e\u0301LAN';
+  const source = '“hello,” don’t stop—résumé élève μία привет 123abc e\u0301lan';
   assert.equal(transformCaptionText(source, 'titlecase'), '“Hello,” Don’t Stop—Résumé Élève Μία Привет 123Abc E\u0301lan');
-  assert.equal(transformCaptionText("'tIS mOTHER-in-LAW l’AMOUR rock ’n’ roll", 'titlecase'), "'Tis Mother-In-Law L’amour Rock ’N’ Roll");
+  assert.equal(transformCaptionText("'tis mother-in-law l’amour rock ’n’ roll", 'titlecase'), "'Tis Mother-In-Law L’amour Rock ’N’ Roll");
+  // Existing capitals are intentional: acronyms and brand casing stay as typed.
+  assert.equal(transformCaptionText('NASA visits JunkYourVehicle.Net on an iPhone', 'titlecase'), 'NASA Visits JunkYourVehicle.Net On An iPhone');
+  assert.equal(transformCaptionText('YourVehicle.Net', 'titlecase', 'Junk'), 'YourVehicle.Net');
+  assert.equal(transformCaptionText('so i went to junkyourvehicle.net', 'titlecase'), 'So I Went To Junkyourvehicle.Net');
   for (const text of ['', '👩🏽‍💻', '中文 标题', '123', '...']) assert.equal(transformCaptionText(text, 'titlecase'), text);
-  const cue = caption('dON’T “ÉLÈVE,”'), before = structuredClone(cue), style = plainStyle();
+  const cue = caption('don’t “élève,”'), before = structuredClone(cue), style = plainStyle();
   style.textTransform = 'titlecase';
   assert.deepEqual(render(cue, style).texts.map(word => word.text), ['Don’t', '“Élève,”']);
   style.activeWord.textTransform = 'uppercase';
@@ -139,12 +145,12 @@ test('title case handles Unicode, contractions, punctuation and hyphens without 
   assert.deepEqual(cue, before, 'case conversion only affects styled output');
 });
 
-test('title-case measurement matches painting, including a long word split across lines', () => {
-  const cue = caption('EXTRAORDINARY'), style = plainStyle();
+test('title-case measurement matches a whole overflowing word without splitting it', () => {
+  const cue = caption('extraordinary'), style = plainStyle();
   style.textTransform = 'titlecase';
   const frame = render(cue, style, .2, 80);
-  assert.ok(frame.layout.rows.length > 1);
-  assert.equal(frame.texts.map(word => word.text).join(''), 'Extraordinary', 'continuations do not capitalize the middle of a word');
-  assert.ok(frame.texts.every(word => word.x >= -1e-8 && word.right <= 80 + 1e-8));
+  assert.equal(frame.layout.rows.length, 1);
+  assert.deepEqual(frame.texts.map(word=>word.text), ['Extraordinary']);
+  assert.ok(frame.layout.width>80,'the authored word may overflow the narrow canvas area');
   for (const word of frame.texts) assert.ok(word.right - word.x <= frame.layout.width + 1e-8);
 });

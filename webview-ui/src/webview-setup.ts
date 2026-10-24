@@ -7,13 +7,13 @@ const HOST_METHODS = [
   'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'saveSession', 'loadStylePresets', 'saveStylePresets',
   'transcribeSequence', 'transcribeSequenceRange', 'getFonts', 'getFontCatalog', 'showInPremiere', 'beginCaption',
   'saveCaptionFrames', 'finishCaption', 'preflightCaptionClips',
-  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'extendNativeCaptionDocument', 'editNativeCaptionControl', 'seekNativeCaptionKeyframe', 'writeNativeCaptionDocument', 'createNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
+  'applyCaptionClips', 'readTimeline', 'selectCaptionClip', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'extendNativeCaptionDocument', 'editNativeCaptionControl', 'seekNativeCaptionKeyframe', 'writeNativeCaptionDocument', 'collapseNativeTyping', 'primeNativeTyping', 'readNativeUndoState', 'testNativeHistoryStep', 'createNativeCaptionDocument', 'readCaptionArea', 'editCaptionArea', 'getColorScheme', 'readCaptionConsolidation', 'applyConsolidatedCaption',
 ] as const;
 const READ_METHODS = new Set(['loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionConnections', 'readNativeCaptionControls', 'readNativeCaptionExtension', 'readCaptionArea', 'readCaptionConsolidation']);
 // Internal position sampling may report lane availability, but cannot be
 // requested through the webview's RPC allowlist.
 const AVAILABILITY_METHODS = new Set<string>([...HOST_METHODS, 'readTimelinePlayhead']);
-const TRANSPORT_CODES = new Set(['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE', 'BC_NATIVE_CLOSED', 'BC_OUTPUT_UNCONFIRMED']);
+const TRANSPORT_CODES = new Set(['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE', 'BC_NATIVE_CLOSED', 'BC_OUTPUT_UNCONFIRMED', 'BC_NATIVE_STALE']);
 export interface NativeTransportAvailability {
   version: 1;
   revision: number;
@@ -128,6 +128,8 @@ function nativeTransport(host: UXPMessageHost, webviewAPI: unknown) {
         case 'agent.apply': if (!handler) throw new Error('The caption editor is not ready.'); result = await handler.apply(); break;
         case 'agent.readArea': if (!handler?.readArea) throw new Error('Caption area inspection is unavailable.'); result = await handler.readArea(args[0]); break;
         case 'agent.editArea': if (!handler?.editArea) throw new Error('Caption area editing is unavailable.'); result = await handler.editArea(args[0]); break;
+        case 'agent.testTyping': if (!handler?.testTyping) throw new Error('The typing test hook is unavailable.'); result = await handler.testTyping(args[0]); break;
+        case 'agent.testHistory': if (!handler?.testHistory) throw new Error('The history test hook is unavailable.'); result = await handler.testHistory(args[0]); break;
         default: throw new Error('Unsupported caption editor method.');
       }
       if (data.id) send({ id: data.id, result: result === undefined ? null : result });

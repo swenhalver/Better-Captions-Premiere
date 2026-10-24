@@ -373,3 +373,12 @@ test('fixed area agent requests round trip as data while the internal CEP patch 
   delete app.handler.editArea;
   await assert.rejects(app.proxy().editArea(edit), /Caption area editing is unavailable/);
 });
+test('a hidden editor still has Premiere Undo/Redo of caption documents restored by the host, one check at a time',async t=>{
+  let checks=0,finish;const app=harness(t,{readPlayheadIfIdle:async()=>null,restoreNativeUndoIfIdle:()=>{checks++;return new Promise(resolve=>{finish=resolve;});}},{manualTimers:true});await tick();
+  app.setup.panels.betterCaptions.show();assert.equal(app.timerCount(1500),0,'a visible editor polls connections itself');
+  app.setup.panels.betterCaptions.hide();assert.equal(app.timerCount(1500),1);
+  const pending=app.fireTimeout(1500);await tick();assert.equal(checks,1);assert.equal(app.timerCount(1500),0,'no second check while one is outstanding');
+  finish(true);await pending;assert.equal(app.timerCount(1500),1);
+  app.setup.panels.betterCaptions.show();assert.equal(app.timerCount(1500),0);
+  app.setup.panels.betterCaptions.hide();await app.setup.plugin.destroy();assert.equal(app.timerCount(1500),0);
+});

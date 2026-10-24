@@ -9,9 +9,9 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url), ts = require('../webview-ui/node_modules/typescript');
 const platform = require('../cep/platform.cjs');
 const source = fs.readFileSync(new URL('../cep/service.ts', import.meta.url), 'utf8');
-function loadService() {
+function loadService(clock = () => Date.now()) {
   const exports = {}, code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  vm.runInNewContext(code, { exports, console, setTimeout, clearTimeout, setInterval, clearInterval, require: () => ({ createHostAPI: () => { throw new Error('Tests must inject the API'); } }) });
+  vm.runInNewContext(code, { Date: class extends Date { static now(){return clock();} }, exports, console, setTimeout, clearTimeout, setInterval, clearInterval, require: () => ({ createHostAPI: () => { throw new Error('Tests must inject the API'); } }) });
   return exports;
 }
 const service = loadService();
@@ -191,4 +191,23 @@ test('filesystem wake does not add fast idle polling, ignores unrelated filename
  callback('rename','unrelated.tmp');callback('rename','not-a-nonce.json');await new Promise(resolve=>setTimeout(resolve,30));assert.equal(scans,baseline,'idle watcher must not scan or busy-poll');
  const data=request();writeRequest(worker.root,data);callback('rename',data.id+'.json');await new Promise(resolve=>setTimeout(resolve,30));assert.ok(scans>baseline);worker.stop();const stopped=scans;assert.equal(closed,1);
  callback('rename',data.id+'.json');await new Promise(resolve=>setTimeout(resolve,10));assert.equal(scans,stopped);
+});
+
+
+test('hidden worker clears a layout guide after idle without the visible UXP panel',async t=>{
+ let now=Date.now(),sweeps=0,edits=0;
+ const clocked=loadService(()=>now),api={getActiveSequenceInfo:info,
+  clearExpiredNativeCaptionGuides:async()=>{sweeps++;return {ok:true,pending:0,cleared:1};},
+  dispatchNativeCaptionControlRequest:async()=>{edits++;return {ok:true,layoutGuide:{active:true}};}};
+ const worker=clocked.startBackendService(options(t,api));t.after(worker.stop);await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(sweeps,1,'startup reclaims an older host lease');
+ const data=request('editNativeCaptionControl',[{locator:{}},{parameter:'width'}]);data.createdAt=now;writeRequest(worker.root,data);await worker.poll();
+ assert.equal(edits,1);assert.equal(sweeps,1);now+=799;await worker.poll();assert.equal(sweeps,1);
+ now+=2;await worker.poll();assert.equal(sweeps,2);now+=2000;await worker.poll();assert.equal(sweeps,2,'no native idle sweep after cleanup');
+});
+test('guide sweep errors retry without requiring another panel request',async t=>{
+ let now=Date.now(),sweeps=0;
+ const clocked=loadService(()=>now),worker=clocked.startBackendService(options(t,{clearExpiredNativeCaptionGuides:async()=>{if(++sweeps===1)throw new Error('host busy');return {ok:true,pending:0,cleared:1};}}));
+ t.after(worker.stop);await new Promise(resolve=>setImmediate(resolve));assert.equal(sweeps,1);
+ now+=251;await worker.poll();assert.equal(sweeps,2);now+=1000;await worker.poll();assert.equal(sweeps,2);
 });

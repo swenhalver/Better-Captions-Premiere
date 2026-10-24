@@ -28,4 +28,31 @@ The line-height multiplier accepts finite values from 0.6 through 10. The panel 
 
 BCAP schema 6 appends a 60-byte footer after v5: six binary64 axis padding values in upcoming-inline/upcoming-block/current-inline/current-block/spoken-inline/spoken-block order, followed by three uint32 underline modes in upcoming/current/spoken order. Axis value -1 means inherit that state's old uniform `padding`; explicit values are finite 0–4096. Underline modes are 0 unset, 1 explicit off, 2 on. New optional JSON fields are `bubblePaddingInline`, `bubblePaddingBlock`, and `underline`. An explicit axis or underline choice requires v6; absent values retain v1–5 bytes exactly. Disabling an already-v6 option preserves its version and other footer values. Unknown modes, malformed numbers, truncation, and trailing bytes are rejected.
 
-Inline padding affects bubble width, text's horizontal inset, and Smart width fitting; block padding affects bubble height and measured line extent. Native Padding% modulates both axes; output downsampling uses the appropriate axis for explicit values, preserving legacy uniform-padding behavior when overrides are absent. Independent color-space joins still reset at physical line breaks. Native underline is rendered by CoreText on the unchanged font, glyph origins, and advances; an explicit off produces the old unset pixels exactly. No new Effect Controls parameter or animation authority is introduced.
+Inline padding affects bubble width and text's horizontal inset; block padding affects bubble height and measured line extent. Native Padding% modulates both axes; output downsampling uses the appropriate axis for explicit values, preserving legacy uniform-padding behavior when overrides are absent. Independent color-space joins still reset at physical line breaks. Native underline is rendered by CoreText on the unchanged font, glyph origins, and advances; an explicit off produces the old unset pixels exactly. No new Effect Controls parameter or animation authority is introduced.
+
+BCAP v7 appends 288 bytes after the v6 footer: twelve binary64 values per
+state in upcoming/current/spoken order. Fields are paddingTop, paddingRight,
+paddingBottom, paddingLeft, radiusTL, radiusTR, radiusBR, radiusBL, marginTop,
+marginRight, marginBottom, marginLeft. Padding/radius use -1 to inherit legacy
+axis/uniform values; explicit values are finite 0–4096. Margins default to zero
+and accept finite -4096–4096. Values participate in layout and native render
+scaling. Unedited v1–6 documents retain their byte representation.
+
+
+Scrolling `visibleLines` is a maximum history count, constrained by the physical
+caption height. Increasing the count never scales font size, bubble padding,
+margins, outlines or shadows. If the area fits fewer lines, only that many are
+shown; increase the area's height to show more history at the authored size.
+Independent boundary insets and fades remain masks over that unchanged layout.
+
+Within a scrolling container, a gap longer than `pauseSeconds` derives timed
+empty rows without changing the transcript or word timings. The count is
+`min(visibleLines, max(1, floor(gapSeconds / pauseSeconds)))`: the first row
+enters at the preceding speech end, subsequent rows enter every `pauseSeconds`,
+and the final empty row lasts until speech resumes. A zero pause threshold uses
+the default 0.6-second cadence while still recognizing every positive gap.
+Long pauses can therefore clear all visible history, with at most eight derived
+empty rows per gap. Future words remain hidden until the gap ends. Static pages
+retain their existing single empty row per qualifying gap; separate containers
+never acquire connecting silence rows. The layout is derived independently for
+each requested frame, including backward seeks.

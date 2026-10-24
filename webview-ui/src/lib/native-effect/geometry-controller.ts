@@ -1,5 +1,5 @@
-import type { NativeCaptionSnapshot, NativeCaptionControls, NativeCaptionControlEdit, NativeCaptionKeyframeSeek } from '../../cep-api.ts';
-export type GeometryParameter = 'position'|'width'|'height'|'groups'|'smartFit'|'rollUp'|'rollUpLines'|'rollUpDuration'|'rollUpFade'|'rollUpFadePosition'|'rollUpFadeThickness'|'rollUpFadeAmount'|'rollUpFadeCurve'|'rollUpDirection'|'rollUpSpeed'|'rollUpWait'|'rollUpTransition'|'alignment';
+import type { NativeCaptionSnapshot, NativeCaptionControls, NativeCaptionControlEdit, NativeCaptionKeyframeSeek, NativeBoundaryControlKey } from '../../cep-api.ts';
+export type GeometryParameter = NativeBoundaryControlKey|'position'|'width'|'height'|'groups'|'rollUp'|'rollUpLines'|'rollUpCurrentLine'|'rollUpBlankLineSeconds'|'rollUpDuration'|'rollUpFade'|'rollUpFadePosition'|'rollUpFadeThickness'|'rollUpFadeAmount'|'rollUpFadeCurve'|'rollUpDirection'|'rollUpSpeed'|'rollUpWait'|'rollUpTransition'|'alignment';
 export interface GeometryContext { key:string; sequenceId:string; snapshot:NativeCaptionSnapshot; visible:boolean; disabled:boolean; }
 interface Options {
  current:()=>GeometryContext; read:(snapshot:NativeCaptionSnapshot,id:string)=>Promise<NativeCaptionControls>;
@@ -22,8 +22,10 @@ export function createNativeGeometryController(options:Options){
  function notifyInteraction(){const next=alive&&(dragging||!!pending||activeKind==='edit'||activeKind==='seek');if(next!==lastInteraction){lastInteraction=next;options.interacting?.(next);}}
  function drain(){if(pending){cancelSeek();void flush();}else if(pendingSeek)void flushSeek();notifyInteraction();}
  function sync(){const c=options.current();if(c.key!==key){key=c.key;generation++;pending=null;cancelSeek();blocked=false;publish(null);}return c;}
- async function read(){const c=sync(),g=generation;if(!enabled(c)){pending=null;cancelSeek();if(!c.visible)dragging=false;notifyInteraction();return;}if(active||dragging||pending||blocked)return;active=true;activeKind='read';
-  try{const next=await options.read(c.snapshot,c.sequenceId);if(current(c,g)&&enabled(options.current())){if(next.clipNodeId!==c.snapshot.locator.clipNodeId)throw new Error('The native caption clip changed.');publish(next);options.error('');}}
+ async function read(){const c=sync(),g=generation;if(!enabled(c)){pending=null;cancelSeek();if(!c.visible)dragging=false;notifyInteraction();return;}if(active||dragging||pending)return;active=true;activeKind='read';
+  // Uncertain writes block further writes, not observation. A fresh read adopts
+  // Premiere's actual state without replaying the failed or discarded edits.
+  try{const next=await options.read(c.snapshot,c.sequenceId);if(current(c,g)&&enabled(options.current())){if(next.clipNodeId!==c.snapshot.locator.clipNodeId)throw new Error('The native caption clip changed.');publish(next);blocked=false;options.error('');}}
   catch(e){cancelSeek();if(current(c,g)){pending=null;receiptAt=-Infinity;options.error(e instanceof Error?e.message:String(e));}}finally{active=false;activeKind=null;drain();}}
  async function flush(){const c=sync(),g=generation;if(active||!pending||!enabled(c)||blocked)return;
   const intent=pending;pending=null;if(!state){options.error('Wait for Position & size to finish loading.');notifyInteraction();return;}
@@ -33,7 +35,7 @@ export function createNativeGeometryController(options:Options){
   active=true;activeKind='edit';notifyInteraction();
   try{const result=await options.edit(c.snapshot,{...next,revision:receipt.revision,atTicks:receipt.timelineTicks},c.sequenceId);
    if(current(c,g)){if(!result.readbackVerified||result.clipNodeId!==c.snapshot.locator.clipNodeId)throw Object.assign(new Error('Premiere did not confirm this geometry change.'),{code:'BC_OUTPUT_UNCONFIRMED'});publish(result);options.error('');}}
-  catch(e){if(current(c,g)){pending=null;blocked=(e as {code?:string})?.code==='BC_OUTPUT_UNCONFIRMED';options.error(blocked?'Premiere could not confirm this change. Check Effect Controls before trying again.':e instanceof Error?e.message:String(e));}}
+  catch(e){if(current(c,g)){pending=null;blocked=(e as {code?:string})?.code==='BC_OUTPUT_UNCONFIRMED';const detail=e instanceof Error?e.message:String(e);options.error(blocked?`Premiere could not confirm this change. ${detail} Syncing the current values from Premiere…`:detail);}}
   finally{active=false;activeKind=null;drain();}}
  function enqueue(intent:NonNullable<typeof pending>){const c=sync();if(blocked||!enabled(c))return;cancelSeek();
   // Typed edits after a scrub also need a fresh clock. Pointer gestures take

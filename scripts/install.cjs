@@ -148,6 +148,16 @@ function install(args = process.argv.slice(2)) {
       fs.writeFileSync(path.join(staging, 'better-captions-install.json'), JSON.stringify({ id: 'ca.swen.bettercaptions.service', version: uxpVersion }), { mode: 0o600 });
     }
     if (!args.includes('--service-only')) {
+      // Premiere's UXP plugin manager keeps the first registration of a plugin id and
+      // ignores the rest, so stale older versions win over the one just installed.
+      // Remove every existing S-Captions registration before installing this one.
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const listed = run(upia, [windows ? '/list' : '--list', 'all']);
+        if (!/^\s*Enabled\s+S-Captions\s+\d/m.test(listed) && !/^\s*Disabled\s+S-Captions\s+\d/m.test(listed)) break;
+        const removed = run(upia, [windows ? '/remove' : '--remove', 'S-Captions']);
+        console.log(removed.trim());
+        if (!/Removal Successful|Removed/i.test(removed)) throw new Error('Adobe could not remove the previous S-Captions registration. Quit Premiere and retry.');
+      }
       const result = run(upia, [windows ? '/install' : '--install', ccx]);
       console.log(result.trim());
       if (!/Installation Successful/i.test(result)) throw new Error('Adobe did not confirm installation. Open Creative Cloud Desktop and retry. Alternatively open ' + ccx + ' in Creative Cloud, complete its installation, then run node scripts/install.cjs --service-only.');
@@ -163,8 +173,8 @@ function install(args = process.argv.slice(2)) {
   }
   if (windows) run(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe'), ['add', 'HKCU\\Software\\Adobe\\CSXS.12', '/v', 'PlayerDebugMode', '/t', 'REG_SZ', '/d', '1', '/f']);
   else run('/usr/bin/defaults', ['write', 'com.adobe.CSXS.12', 'PlayerDebugMode', '-string', '1']);
-  console.log('Installed Better Captions: ' + destination);
-  console.log('Save your work and restart Premiere once. Open Window > UXP Plugins > Better Captions; the render service stays invisible.');
+  console.log('Installed S-Captions: ' + destination);
+  console.log('Save your work and restart Premiere once. Open Window > UXP Plugins > S-Captions; the render service stays invisible.');
 }
 if (require.main === module) { try { install(); } catch (error) { console.error(error.message); if (error.stdout) console.error(String(error.stdout)); if (error.stderr) console.error(String(error.stderr)); process.exitCode = 1; } }
 module.exports = { install, installedPanel, serviceVersion, existingService };

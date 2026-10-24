@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
+  import { trackAnchoredPopup } from '../lib/anchored-popup.ts';
   import { searchFonts } from '../lib/font-catalog.ts';
   interface Props { value: string; fonts: string[]; placeholder?: string; loading?: boolean; error?: string; onOpen?: () => void; onRetry?: () => void; onSelect: (font: string) => void; }
   let { value, fonts, placeholder = 'Font family', loading = false, error = '', onOpen, onRetry, onSelect }: Props = $props();
@@ -7,19 +8,16 @@
   let input: HTMLInputElement;
   let popup: HTMLDivElement | undefined;
   let opened = $state(false), searching = $state(false), query = $state(''), active = $state(0);
-  let position = $state('');
+  let tracking: ReturnType<typeof trackAnchoredPopup> | undefined;
   let matches = $derived(searchFonts(fonts, searching ? query : ''));
   const optionId = (index: number) => `${id}-font-${index}`;
   function place() {
-    if (!opened || !input) return;
-    const rect = input.getBoundingClientRect(), width = Math.min(window.innerWidth - 16, Math.max(rect.width, 250));
-    const below = window.innerHeight - rect.bottom - 8, above = rect.top - 8, up = below < 180 && above > below;
-    const height = Math.max(80, Math.min(300, up ? above : below));
-    position = `left:${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px;width:${width}px;max-height:${height}px;${up ? `bottom:${window.innerHeight - rect.top + 3}px` : `top:${rect.bottom + 3}px`}`;
+    tracking?.update();
   }
   function portal(node: HTMLDivElement) {
-    popup = node; document.body.appendChild(node); place();
-    return { destroy() { node.remove(); popup = undefined; } };
+    popup = node; document.body.appendChild(node);
+    tracking = trackAnchoredPopup(input, node, { width: () => Math.max(input.getBoundingClientRect().width, 250), maxHeight: 300, gap: 3, onHidden: close });
+    return { destroy() { tracking?.destroy(); tracking = undefined; node.remove(); popup = undefined; } };
   }
   async function reveal() { await tick(); document.getElementById(optionId(active))?.scrollIntoView({ block: 'nearest' }); }
   function open() {
@@ -49,13 +47,13 @@
   }
 </script>
 
-<svelte:window onpointerdown={outside} onresize={place} onscroll={() => { if (opened) place(); }} />
+<svelte:window onpointerdown={outside} />
 <div class="font-picker">
   <input bind:this={input} class="font-picker__input" role="combobox" aria-label="Font family" aria-autocomplete="list" aria-expanded={opened} aria-controls={`${id}-fonts`} aria-activedescendant={opened && matches[active] ? optionId(active) : undefined} autocomplete="off" spellcheck="false" maxlength="4096" {placeholder} value={opened ? query : value} onclick={open} onfocus={() => { open(); input.select(); }} onblur={close} oninput={(event) => { query = event.currentTarget.value; searching = true; opened = true; active = 0; place(); }} onkeydown={keydown} />
   <button type="button" class="font-picker__toggle" aria-label="Show installed fonts" aria-expanded={opened} tabindex="-1" onpointerdown={(event) => event.preventDefault()} onclick={() => { if (opened) close(); else { input.focus(); open(); } }}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button>
 </div>
 {#if opened}
-  <div class="font-picker__popup" style={position} use:portal>
+  <div class="font-picker__popup" use:portal>
     {#if loading && !fonts.length}<p class="font-picker__message" role="status">Loading installed fonts…</p>
     {:else if error}<div class="font-picker__message" role="status">Couldn’t load installed fonts. <button class="caption-button" onclick={() => onRetry?.()}>Retry</button></div>{/if}
     <div id={`${id}-fonts`} class="font-picker__list" role="listbox" aria-label="Installed fonts">

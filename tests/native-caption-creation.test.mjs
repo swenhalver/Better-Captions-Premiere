@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { writeDocument } from './native-write-commit.mjs';
 
 const source = fs.readFileSync(new URL('../cep/host/bridge.jsx', import.meta.url), 'utf8');
 const TICKS = 254016000000, TPF = 8467200000;
@@ -79,8 +80,9 @@ function fixture(options = {}) {
           if (options.ignoreEffect) return;
           const properties = collection([
             parameter('Height', 150), parameter('Position', [.5, .9]), parameter('Width', 1536),
-            parameter('Caption document (experimental)', 'BCDOC1:424341500200000000000000'), parameter('Characters per caption', 56),
+            parameter('Caption document (experimental)', 'BCDOC1:424341500200000000000000'), parameter('Characters per line', 56), parameter('Global font size (64 = 1x)', 64),
           ]);
+          if (options.dimensionProxies) properties.push(parameter('Width, px', -1), parameter('Height, px', -1));
           // Insert in the middle, never at components.length-1.
           c.components.splice(1, 0, { matchName: MATCH, properties });
           c.components.push({ matchName: 'AE.ADBE Opacity', properties: collection([]) });
@@ -88,7 +90,7 @@ function fixture(options = {}) {
       return { numItems: rows.length, getItemAt: i => { hook('qe-item'); return rows[i]; } };
     },
   };
-  const qe = { project: { getActiveSequence: () => { hook('qe-sequence'); return qSequence; }, getVideoEffectByName: name => options.missingEffect ? null : { name },
+  const qe = { project: { getActiveSequence: () => { hook('qe-sequence'); return qSequence; }, getVideoEffectByName: name => options.missingEffect || name !== (options.legacyEffect ? 'Better Captions Native Probe' : 'S-Captions') ? null : { name },
     newTransparentVideo(...args) {
       mutations.push(['factory', ...args]);
       const n = options.factoryCount ?? 1;
@@ -114,7 +116,7 @@ function fixture(options = {}) {
     get createdClip() { return createdClip; }, get createdItem() { return createdItem; },
     create: patch => call('createNativeCaptionDocument', { ...payload, ...patch }),
     read: patch => call('readCaptionConnections', { sequenceId: 'seq-a', projectPath: project.path, generatedRoot: '/project/Better Captions/seq-a', knownLinks: [], includeDocuments: true, ...patch }),
-    write: (snapshot, text) => call('writeNativeCaptionDocument', { sequenceId: 'seq-a', projectPath: project.path, snapshot, documentText: text }),
+    write: (snapshot, text) => writeDocument(call, () => createdClip.components[snapshot.locator.componentIndex].properties, { sequenceId: 'seq-a', projectPath: project.path, snapshot, documentText: text }),
   };
 }
 
@@ -244,4 +246,28 @@ test('ownership tag cannot reconnect a native carrier backed by external media',
   const result = h.read(); assert.equal(result.ok, true, result.error);
   assert.equal(h.createdItem._metadata[NS + FIELD], marker, 'ownership tag remains otherwise unchanged');
   assert.equal(result.native.length, 0); assert.ok(result.warnings.length);
+});
+
+
+test('native creation synchronizes fresh cosmetic dimensions after saved geometry readback',()=>{
+ const h=fixture({dimensionProxies:true}),before=h.original(),result=h.create();assert.equal(result.readbackVerified,true,result.error);assert.equal(h.original(),before);
+ const properties=h.createdClip.components[1].properties;
+ for(const [label,value] of [['Width, px',700],['Height, px',260]])assert.equal(properties.find(p=>p.displayName===label).getValue(),value);
+ assert.deepEqual(h.parameterWrites.slice(-2),[['Width, px',700,1],['Height, px',260,1]]);
+});
+test('native creation reports an ignored cosmetic dimension update without retry',()=>{
+ const h=fixture({dimensionProxies:true,ignoreParameter:'Width, px'}),result=h.create();assert.equal(result.code,'BC_OUTPUT_UNCONFIRMED');assert.equal(result.retry,'never');assert.equal(result.readbackVerified,undefined);
+ assert.equal(h.parameterWrites.filter(p=>p[0]==='Width, px').length,1);assert.equal(h.parameterWrites.filter(p=>p[0]==='Height, px').length,0);
+});
+test('native creation stops display synchronization if the first display setter switches sequence',()=>{
+ const h=fixture({dimensionProxies:true,hook(event,state){if(event==='parameter-write:Width, px')state.project.activeSequence={...state.sequence,sequenceID:'other'};}}),result=h.create();
+ assert.equal(result.code,'BC_OUTPUT_UNCONFIRMED');assert.equal(h.parameterWrites.filter(p=>p[0]==='Height, px').length,0);
+});
+
+test('native creator resolves renamed and previously installed effect display names', () => {
+  for (const legacyEffect of [false, true]) {
+    const h = fixture({ legacyEffect });
+    assert.equal(h.create().ok, true);
+    assert.equal(h.mutations.find(row => row[0] === 'effect')[2], legacyEffect ? 'Better Captions Native Probe' : 'S-Captions');
+  }
 });

@@ -39,7 +39,9 @@ and fail configuration explicitly on unsupported compiler selections.
 
 `core/caption_core.hpp` defines a bounded schema-v3 caption document with a persisted timing origin, independent
 upcoming/current/spoken styles, stable container IDs, derived phrase grouping,
-versioned binary encode/decode, and frame layout commands. Layout uses a supplied
+versioned binary encode/decode, and frame layout commands. Phrase grouping always
+uses the fixed Characters per caption limit, sentence endings and pauses. The panel
+can measure width and write a fixed character limit. Layout uses a supplied
 text-metrics callback: each platform renderer supplies font shaping and rasterizes
 glyphs, bubbles, outlines and shadows. Width changes can reflow commands at the
 same font size, including in exported native Premiere frames. Title Case currently

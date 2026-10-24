@@ -6,7 +6,7 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 test -f "$AE_SDK_EXAMPLES/Headers/AE_Effect.h"
 build_dir="${BC_NATIVE_OUTPUT_DIR:-$root/artifacts/native}"
 probe="${BC_ENABLE_CUSTOM_UI_PROBE:-0}"
-bounds_ui="${BC_ENABLE_CAPTION_BOUNDS_UI:-0}"
+bounds_ui="${BC_ENABLE_CAPTION_BOUNDS_UI:-1}"
 time_probe="${BC_ENABLE_SOURCE_TIME_PROBE:-0}"
 adjustment_probe="${BC_ENABLE_ADJUSTMENT_TIME_PROBE:-0}"
 render_diagnostics="${BC_ENABLE_RENDER_TIME_DIAGNOSTICS:-0}"
@@ -34,7 +34,7 @@ cat > "$output/Contents/Info.plist" <<'PLIST'
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>BetterCaptionsNativeProbe</string>
 <key>CFBundleIdentifier</key><string>ca.swen.bettercaptions.nativeprobe</string>
-<key>CFBundleName</key><string>Better Captions Native Probe</string>
+<key>CFBundleName</key><string>S-Captions</string>
 <key>CFBundlePackageType</key><string>eFKT</string>
 <key>CFBundleSignature</key><string>FXTC</string>
 <key>CFBundleVersion</key><string>0.1.0</string>
@@ -54,6 +54,15 @@ xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]
 "$build_dir/render_style_test"
 xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
   "$root/native/adobe/parameter_sections_test.cpp" -o "$build_dir/parameter_sections_test"
+xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
+  "$root/native/adobe/purposeful_controls_test.cpp" -o "$build_dir/purposeful_controls_test"
+xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
+  "$root/native/adobe/boundary_parameters_test.cpp" -o "$build_dir/boundary_parameters_test"
+xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
+  "$root/native/adobe/dimension_defaults_test.cpp" -o "$build_dir/dimension_defaults_test"
+"$build_dir/dimension_defaults_test"
+"$build_dir/boundary_parameters_test"
+"$build_dir/purposeful_controls_test"
 "$build_dir/parameter_sections_test"
 if test "$probe" = 1 || test "$bounds_ui" = 1; then
   xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
@@ -63,4 +72,7 @@ fi
 xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined "${includes[@]}" \
   "$root/native/adobe/source_time_test.cpp" -o "$build_dir/source_time_test"
 "$build_dir/source_time_test"
+xcrun clang++ -arch arm64 -std=c++17 -fsanitize=address,undefined \
+  "$root/native/adobe/temporary_bounds_test.cpp" -o "$build_dir/temporary_bounds_test"
+"$build_dir/temporary_bounds_test"
 printf '%s\n' "$output"

@@ -1,0 +1,23 @@
+<script lang="ts">
+  import SpacingInspector from './SpacingInspector.svelte';
+  import LucideIcon from './LucideIcon.svelte';
+  let options=$state([{variant:'cross' as const,name:'Open layout',description:'Outside margins surround padding and corner radius. A small gap separates the middle inputs.',values:{lineHeight:1.2,inline:6,block:6,top:0,right:0,bottom:0,left:0,radiusTL:5,radiusTR:5,radiusBR:5,radiusBL:5,paddingTop:6,paddingRight:6,paddingBottom:6,paddingLeft:6}},{variant:'cross-leading' as const,name:'Line height in center',description:'The same outside margins and corner controls, with editable line height in the middle.',values:{lineHeight:1.2,inline:6,block:6,top:0,right:0,bottom:0,left:0,radiusTL:5,radiusTR:5,radiusBR:5,radiusBL:5,paddingTop:6,paddingRight:6,paddingBottom:6,paddingLeft:6}},{variant:'neutral' as const,name:'Neutral box',description:'The same box layout with neutral surfaces and no color coding.',values:{lineHeight:1.2,inline:6,block:6,top:0,right:0,bottom:0,left:0,radiusTL:5,radiusTR:5,radiusBR:5,radiusBL:5,paddingTop:6,paddingRight:6,paddingBottom:6,paddingLeft:6}},{variant:'box' as const,name:'Box model',description:'Nested margin and padding, with radius in each corner.',values:{lineHeight:1.2,inline:6,block:6,top:0,right:0,bottom:0,left:0,radiusTL:5,radiusTR:5,radiusBR:5,radiusBL:5,paddingTop:6,paddingRight:6,paddingBottom:6,paddingLeft:6}},{variant:'grid' as const,name:'Grouped grid',description:'Two columns keep every value easy to compare.',values:{lineHeight:1.2,inline:6,block:6,top:0,right:0,bottom:0,left:0,radiusTL:5,radiusTR:5,radiusBR:5,radiusBL:5,paddingTop:6,paddingRight:6,paddingBottom:6,paddingLeft:6}},{variant:'rows' as const,name:'Inspector rows',description:'Familiar labeled rows with room to drag numbers.',values:{lineHeight:1.2,inline:6,block:6,top:0,right:0,bottom:0,left:0,radiusTL:5,radiusTR:5,radiusBR:5,radiusBL:5,paddingTop:6,paddingRight:6,paddingBottom:6,paddingLeft:6}}]);
+</script>
+<section class="spacing-designs" aria-label="Spacing design choices" id="spacing-designs">
+  <header><h2>Choose a spacing layout</h2><p>Try dragging the values. These samples change only their own preview.</p></header>
+  <div class="spacing-designs__options">{#each options as option}<section class="spacing-designs__option" aria-label={option.name}>
+    <h3>{option.name}</h3><p>{option.description}</p>
+    <div class="spacing-designs__toolbar"><span>Line height <b>1.2</b></span><span class="spacing-designs__scan" title="Padding and margin"><LucideIcon name="scan"/></span></div>
+    <div class="spacing-designs__panel"><SpacingInspector variant={option.variant} value={option.values} onChange={(key,value)=>option.values[key]=value}/></div>
+    <div class="spacing-designs__preview" style:line-height={option.values.lineHeight}>{#each ['Make','space.'] as word}<span style:margin={`${option.values.top/2}px ${option.values.right/2}px ${option.values.bottom/2}px ${option.values.left/2}px`} style:padding={`${option.values.paddingTop/2}px ${option.values.paddingRight/2}px ${option.values.paddingBottom/2}px ${option.values.paddingLeft/2}px`} style:border-radius={`${option.values.radiusTL/2}px ${option.values.radiusTR/2}px ${option.values.radiusBR/2}px ${option.values.radiusBL/2}px`}>{word}</span>{/each}</div>
+  </section>{/each}</div>
+</section>
+<style>
+  .spacing-designs {margin-block:2.5rem 4rem;scroll-margin-block-start:1rem;&>header {margin-block-end:1.25rem;}& h2 {font-size:1.2rem;margin:0 0 .4rem;}& p {color:var(--color-panel-secondary);font-size:.9rem;line-height:1.5;margin:0;}}
+  .spacing-designs__options {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,19rem),1fr));gap:1.5rem;align-items:start;}
+  .spacing-designs__option {min-inline-size:0;&>h3 {font-size:1.05rem;margin:0 0 .5rem;}&>p {min-block-size:3rem;margin-block-end:1rem;}}
+  .spacing-designs__toolbar {display:flex;justify-content:flex-end;align-items:center;gap:.5rem;padding:.5rem;background:var(--color-panel-bg);border-block-end:1px solid var(--color-panel-border);font-size:.85rem;& b {margin-inline-start:.5rem;font-weight:400;}}
+  .spacing-designs__scan {display:grid;place-items:center;padding:.4rem;border-radius:.35rem;background:var(--color-selection);color:var(--color-accent);& :global(svg) {inline-size:1.3rem;block-size:1.3rem;}}
+  .spacing-designs__panel {padding:.75rem 1.2rem 1.2rem;background:var(--color-panel-bg);}
+  .spacing-designs__preview {display:flex;justify-content:center;flex-wrap:wrap;min-block-size:5rem;padding:1rem;border-block-start:1px solid var(--color-panel-border);background:var(--color-input);& span {align-self:center;display:inline-block;background:#993fa0;color:#fff;border-radius:.4rem;font-size:1.4rem;}}
+</style>

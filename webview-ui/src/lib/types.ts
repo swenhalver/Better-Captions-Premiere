@@ -69,6 +69,12 @@ export interface CaptionWord {
   endTime: number;
   isActive: boolean;
   endOfSentence?: boolean;
+  /** Absent follows automatic grouping; explicit values override every automatic boundary.
+   * 'break' is a manual split; 'join' and 'edge' (the hard edges of a merged
+   * line) are merge markers that a reflow clears. 'edge' renders like 'break'. */
+  lineBreakBefore?: 'break' | 'join' | 'edge';
+  /** Deleted derived pause rows before this word, an integer from 0 to 8. Absent means zero. */
+  pauseLinesRemoved?: number;
 }
 
 export type AnimationPreset = "fade" | "pop" | "typewriter" | "karaoke" | "bounce";
@@ -105,6 +111,19 @@ export interface WordAppearance {
   padding: number;
   bubblePaddingInline?: number;
   bubblePaddingBlock?: number;
+  paddingTop?: number;
+  paddingRight?: number;
+  paddingBottom?: number;
+  paddingLeft?: number;
+  radiusTL?: number;
+  radiusTR?: number;
+  radiusBR?: number;
+  radiusBL?: number;
+  marginTop?: number;
+  marginRight?: number;
+  marginBottom?: number;
+  marginLeft?: number;
+
   radius: number;
 }
 

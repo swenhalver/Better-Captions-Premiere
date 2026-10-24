@@ -94,3 +94,27 @@ test('appending to a retained single container keeps one container and rejects u
   assert.throws(() => prepareNativeCaptionExtension(document, placement, ticks(10), [word('bad\ntext', 6, 7)]), /text/);
   assert.throws(() => prepareNativeCaptionExtension(document, placement, ticks(10), [word('x'.repeat(501), 6, 7)]), /text/);
 });
+
+test('extension retains existing boundary edits and carries appended break/join metadata', () => {
+  const { document, placement } = fixture();
+  document.binaryVersion = 8;
+  document.captions[0].words[0].lineBreakBefore = 'break';
+  document.captions[1].words[0].lineBreakBefore = 'join';
+  const fresh = [{ ...word('New', 6, 6.5), lineBreakBefore: 'break' }, { ...word('words', 7, 8), lineBreakBefore: 'join' }];
+  const result = prepareNativeCaptionExtension(document, placement, ticks(10), fresh);
+  assert.deepEqual(result.document.captions.flatMap(caption => caption.words).map(word => word.lineBreakBefore), ['break', 'join', 'break', 'join']);
+  assert.deepEqual(result.document.captions.map(caption => caption.id), document.captions.map(caption => caption.id));
+});
+
+test('extension retains stored pause deletions and copies appended pause metadata without shifting source words', () => {
+  const { document, placement } = fixture();
+  document.captions[0].words[0].pauseLinesRemoved = 3;
+  document.captions[1].words[0].pauseLinesRemoved = 8;
+  const before = structuredClone(document), fresh = { ...word('Tail', 6.125, 7.33333333333333), pauseLinesRemoved: 2 };
+  const result = prepareNativeCaptionExtension(document, placement, ticks(10), [fresh]);
+  assert.deepEqual(result.document.captions[0], before.captions[0]);
+  assert.deepEqual(result.document.captions[1].words[0], before.captions[1].words[0]);
+  assert.deepEqual(result.document.captions[1].words[1], fresh);
+  assert.deepEqual(document, before);
+  for (const pauseLinesRemoved of [-1, 1.5, 9]) assert.throws(() => prepareNativeCaptionExtension(document, placement, ticks(10), [{ ...fresh, pauseLinesRemoved }]), /pause lines/);
+});

@@ -232,6 +232,21 @@ test('the character control regroups linked bundled sentences while preserving n
   await h.main.flushSave(); assert.ok(h.calls.saves.length >= 2);
 });
 
+test('live character changes split and rejoin fresh unlinked captions immediately', async t => {
+  const h = fixture(t), caption = h.caption('fresh', 'Alpha beta gamma delta epsilon zeta', 0, false);
+  delete caption.groupingMaxChars; delete caption.captionBundle;
+  h.api.loadSession = async () => h.saved([caption]); await h.start();
+  const words = clone(h.manager.current.captions.flatMap(c => c.words));
+  h.main.changeCharacterLimit(15); h.sync();
+  const shortCount = h.manager.current.captions.length;
+  assert.ok(shortCount > 1, 'unlinked captions are actually split, not merely relabeled');
+  assert.deepEqual(clone(h.manager.current.captions.flatMap(c => c.words)), words);
+  h.main.changeCharacterLimit(150); h.sync();
+  assert.ok(h.manager.current.captions.length < shortCount, 'larger limits rejoin earlier automatic groups');
+  assert.deepEqual(clone(h.manager.current.captions.flatMap(c => c.words)), words);
+  assert.equal(h.manager.current.style.maxChars, 150);
+});
+
 test('slow native availability gates the real mounted automatic-output callback and resumes only its latest style', async t => {
   const h = fixture(t); await h.start();
   h.main.updateStyle({ textColor: '#FF0000' }); h.sync(); h.emitAvailability('waiting');
@@ -482,4 +497,42 @@ test('native adoption and supported style edits never overwrite the sequence’s
   assert.equal(JSON.parse(cacheBefore)[connectionKey(h.info)].style.fontSize, 79);
   assert.equal(h.calls.saves.length, savesBefore, 'Native edits also bypass the legacy caption sidecar');
   assert.equal(h.calls.apply.length, 0); assert.equal(h.calls.renders.length, 0);
+});
+
+test('startup adopts the sole live native document over an obsolete saved movie sidecar without selection or output writes', async t => {
+  let native; const h = fixture(t, {connections:async()=>connectionSnapshot(h.info,[],{nativeSequenceId:native.entry.locator.sequenceId,native:[{...clone(native.entry),selected:false}],selectedClipNodeIds:[]})});
+  h.info.id='f18a14ea-2be5-4393-a113-c1b43bfcab1e';native=nativeConnection(h.info);
+  const saved=h.saved(); saved.captions[0].layoutOverflow=true;h.api.loadSession=async()=>clone(saved);
+  await h.start();
+  assert.equal(h.manager.current.nativeClipId,'native-layer');assert.equal(h.context().needed,false);
+  assert.equal(h.manager.current.captions[0].layoutOverflow,undefined);
+  assert.equal(h.main.getState().runtime.connection.status,'Connected to native caption layer');
+  assert.equal(h.calls.saves.length,0);assert.equal(h.calls.renders.length,0);assert.equal(h.calls.commits.length,0);
+  assert.equal(saved.captions[0].layoutOverflow,true);
+});
+
+test('pending obsolete movie edits cannot deadlock selected native discovery or leave its unrelated uncertain-output banner stuck', async t => {
+  const h=fixture(t,{render:async()=>{throw Object.assign(new Error('Unconfirmed old movie output'),{code:'BC_OUTPUT_UNCONFIRMED'});}});
+  h.info.id='f18a14ea-2be5-4393-a113-c1b43bfcab1e';await h.start();h.realExport();
+  h.main.updateStyle({fontSize:79});h.sync();await h.advance(400);await h.settle();await h.main.flushSave();
+  assert.equal(h.context().needed,true);assert.equal(h.main.getState().runtime.liveOutput.blocked,true);
+  const saved=clone(h.calls.saves.at(-1)),native=nativeConnection(h.info),reads=[];
+  h.api.readCaptionConnections=async(_id,_links,options)=>{
+    reads.push(options.includeDocuments);const {documentText,revision,...summary}=native.entry;
+    return connectionSnapshot(h.info,[],{nativeSequenceId:native.entry.locator.sequenceId,selectedClipNodeIds:['native-layer'],native:[options.includeDocuments?clone(native.entry):summary]});
+  };
+  await h.main.inspectConnections();h.sync();await h.advance(5000);
+  assert.deepEqual(reads.slice(0,2),[false,true]);assert.equal(h.manager.current.nativeClipId,'native-layer');
+  assert.equal(h.context().needed,false);assert.equal(h.main.getState().runtime.liveOutput.blocked,false);
+  assert.equal(h.main.getState().runtime.liveOutput.phase,'idle');assert.equal(h.calls.renders.length,1,'Failed movie render was never replayed');
+  assert.equal(h.calls.commits.length,0);assert.deepEqual(h.calls.saves.at(-1),saved,'The old saved edits were retained');
+});
+
+test('read-only reconnect never replaces pending edits already belonging to the native document', async t => {
+  let native;const h=fixture(t,{stored:null,connections:async()=>connectionSnapshot(h.info,[],{nativeSequenceId:native.entry.locator.sequenceId,selectedClipNodeIds:['native-layer'],native:[clone(native.entry)]})});
+  h.info.id='f18a14ea-2be5-4393-a113-c1b43bfcab1e';native=nativeConnection(h.info);await h.start();
+  h.main.updateStyle({activeWord:{color:'#123456'}});h.sync();
+  await h.main.inspectConnections();
+  assert.equal(h.manager.current.style.activeWord.color,'#123456');assert.equal(h.context().needed,true);
+  assert.equal(h.calls.saves.length,0);assert.equal(h.calls.commits.length,0);
 });

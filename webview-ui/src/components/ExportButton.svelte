@@ -55,7 +55,7 @@
     if (isExporting) throw new Error('Caption generation is already running.');
     if (disabled) throw new Error('Wait for the current transcript or timeline operation to finish.');
     if (!captions.length) throw new Error('Transcribe or load captions first.');
-    if (hostApi.isDemo) throw new Error('Open the Better Captions panel in Premiere to generate timeline clips.');
+    if (hostApi.isDemo) throw new Error('Open the S-Captions panel in Premiere to generate timeline clips.');
     if (!Number.isInteger(selectedTrack) || selectedTrack < -1) throw new Error('Choose an automatic or unlocked caption track.');
     const exportStyle = clone(style), exportAnimation = clone(animation);
     const id = sequenceId, track = selectedTrack, key = sourceKey(), notify = onUpdated;

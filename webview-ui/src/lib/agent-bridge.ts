@@ -12,9 +12,12 @@ export interface AgentHandler {
   patchAnimation?:(patch:Partial<AnimationConfig>)=>unknown|Promise<unknown>;
   readArea?:(payload:unknown)=>unknown|Promise<unknown>;
   editArea?:(payload:unknown)=>unknown|Promise<unknown>;
+  /** Test hooks only (scripts/agent.cjs test_typing / test_history). */
+  testTyping?:(payload:unknown)=>unknown|Promise<unknown>;
+  testHistory?:(payload:unknown)=>unknown|Promise<unknown>;
 }
 const styleNumbers:Record<string,[number,number]>={fontSize:[8,400],fontWeight:[1,1000],strokeOpacity:[0,1],strokeWidth:[0,30],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],backgroundOpacity:[0,1],backgroundPadding:[0,100],backgroundRadius:[0,200],positionX:[0,1],positionY:[0,1],maxWidth:[.1,1],lineHeight:[.6,3],wordSpacing:[0,300]};
-const stateNumbers:Record<string,[number,number]>={fontSize:[8,1200],letterSpacing:[-10,40],strokeWidth:[0,30],strokeOpacity:[0,1],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],fontWeight:[1,1000],sizeScale:[.4,3],opacity:[0,1],bubbleOpacity:[0,1],padding:[0,100],bubblePaddingInline:[0,100],bubblePaddingBlock:[0,100],radius:[0,200]};
+const stateNumbers:Record<string,[number,number]>={fontSize:[8,1200],letterSpacing:[-10,40],strokeWidth:[0,30],strokeOpacity:[0,1],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],fontWeight:[1,1000],sizeScale:[.4,3],opacity:[0,1],bubbleOpacity:[0,1],padding:[0,100],paddingTop:[0,100],paddingRight:[0,100],paddingBottom:[0,100],paddingLeft:[0,100],radiusTL:[0,200],radiusTR:[0,200],radiusBR:[0,200],radiusBL:[0,200],marginTop:[-100,100],marginRight:[-100,100],marginBottom:[-100,100],marginLeft:[-100,100],bubblePaddingInline:[0,100],bubblePaddingBlock:[0,100],radius:[0,200]};
 function object(value:unknown):asserts value is Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Expected a JSON object.');for(const key of Object.keys(value))if(['__proto__','prototype','constructor'].includes(key))throw new Error('Invalid property name.');}
 function number(value:unknown,min:number,max:number){if(typeof value!=='number'||!Number.isFinite(value)||value<min||value>max)throw new Error(`Expected a finite number between ${min} and ${max}.`);}
 function font(value:unknown){if(typeof value!=='string'||value.length>4096||/[\u0000-\u001f]/.test(value))throw new Error('Invalid font family.');}
@@ -73,11 +76,17 @@ export function validateCaptionPatch(value:unknown,current:CaptionItem[]):Captio
     object(item);if(typeof item.id!=='string'||!/^[\w-]{1,160}$/.test(item.id))throw new Error('Invalid caption identity.');
     if(typeof item.text!=='string'||item.text.length>250000)throw new Error('Invalid caption text.');
     if(!Array.isArray(item.words)||(totalWords+=item.words.length)>50000)throw new Error('Expected at most 50000 words across the caption transcript.');
-    const original=existing.get(item.id),next={...original,id:item.id,text:item.text,startTime:item.startTime,endTime:item.endTime,words:item.words.map(w=>{
+    const original=existing.get(item.id),next={...original,id:item.id,text:item.text,startTime:item.startTime,endTime:item.endTime,words:item.words.map((w,index)=>{
       object(w);if(typeof w.text!=='string'||w.text.length>500)throw new Error('Invalid word text.');
-      const endOfSentence=w.endOfSentence;
+      const previous=original?.words[index];
+      const matched=previous?.text===w.text?previous:undefined;
+      const endOfSentence=w.endOfSentence===undefined?matched?.endOfSentence:w.endOfSentence;
+      const pauseLinesRemoved=w.pauseLinesRemoved===undefined?matched?.pauseLinesRemoved:w.pauseLinesRemoved;
+      if(pauseLinesRemoved!==undefined&&(!Number.isInteger(pauseLinesRemoved)||Number(pauseLinesRemoved)<0||Number(pauseLinesRemoved)>8))throw new Error('Invalid removed pause-line count.');
+      const lineBreakBefore=w.lineBreakBefore===undefined?matched?.lineBreakBefore:w.lineBreakBefore;
+      if(lineBreakBefore!==undefined&&lineBreakBefore!=='break'&&lineBreakBefore!=='join'&&lineBreakBefore!=='edge')throw new Error('Invalid line boundary.');
       if(endOfSentence!==undefined)bool(endOfSentence);
-      return {text:w.text,startTime:w.startTime,endTime:w.endTime,isActive:false,...(typeof endOfSentence==='boolean'?{endOfSentence}:{})};
+      return {text:w.text,startTime:w.startTime,endTime:w.endTime,isActive:false,...(typeof endOfSentence==='boolean'?{endOfSentence}:{}),...(lineBreakBefore===undefined?{}:{lineBreakBefore:lineBreakBefore as 'break'|'join'|'edge'}),...(pauseLinesRemoved===undefined?{}:{pauseLinesRemoved:Number(pauseLinesRemoved)})};
     })} as CaptionItem;
     if(item.position!==undefined){object(item.position);number(item.position.x,0,1);number(item.position.y,0,1);next.position={x:item.position.x as number,y:item.position.y as number};}
     next.text=next.words.map(word=>word.text).join(' ');

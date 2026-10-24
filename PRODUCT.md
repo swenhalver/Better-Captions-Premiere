@@ -1,4 +1,4 @@
-# Better Captions
+# S-Captions
 
 <!-- impeccable:product-schema 1 -->
 
@@ -29,7 +29,7 @@ One visible UXP panel and an invisible CEP renderer. The Svelte browser preview 
 
 ## Brand Commitments
 
-Better Captions is a calm usable editing tool. The user explicitly wants it to feel Premiere native: neutral host surfaces, compact familiar controls and restrained blue selection. Concise copy, deliberate help disclosure, actionable errors and a clear primary workflow. Premiere only.
+S-Captions is a calm usable editing tool. The user explicitly wants it to feel Premiere native: neutral host surfaces, compact familiar controls and restrained blue selection. Concise copy, deliberate help disclosure, actionable errors and a clear primary workflow. Premiere only.
 
 ## Evidence on Hand
 

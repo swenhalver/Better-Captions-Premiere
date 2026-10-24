@@ -211,12 +211,25 @@ test('connection visibility must be an actual boolean when supplied',()=>{
  for(const disabled of ['true',0,null])assert.throws(()=>reconnect([caption()],snapshot([legacy({disabled})])),/malformed/);
 });
 
-test('native Smart fit state samples are complete bounded metadata and do not mutate saved edits', () => {
+test('native line fit state samples are complete bounded metadata and do not mutate saved edits', () => {
   const defaults={sizeScale:1,bubbleMode:1,paddingScale:1};
   const states={upcoming:{...defaults,sizeScale:.01},current:{...defaults,bubbleMode:2},spoken:{...defaults,paddingScale:4}};
   const input=freeze([caption()]);
   assert.doesNotThrow(()=>reconnect(input,snapshot([],[native({lineFitStates:states})])));
+  assert.doesNotThrow(()=>reconnect(input,snapshot([],[native({lineFitWidth:1536,lineFitFontScale:1,lineFitStates:states})])));
   for(const lineFitStates of [null,{}, {...states,current:undefined},{...states,current:{...defaults,sizeScale:0}},{...states,current:{...defaults,bubbleMode:0}},{...states,current:{...defaults,paddingScale:Infinity}}])
     assert.throws(()=>reconnect(input,snapshot([],[native({lineFitStates})])),/malformed/);
   assert.equal(input[0].text,'Keep these words');
+});
+
+test('sole enabled native layer reconnects despite missing movie links, without guessing between live versions', async () => {
+  const { chooseNativeCaptionConnection: choose } = await import('../webview-ui/src/lib/clip-connections.ts');
+  const value = snapshot([], [native()]);
+  const saved = caption(); const before = clone(saved);
+  const plan = reconnect([saved], value);
+  assert.equal(plan.unresolved.length, 1);
+  assert.equal(choose(value, plan.selectedId)?.clipNodeId, 'native-node');
+  assert.deepEqual(saved, before);
+  for (const unsafe of [snapshot([], [native({disabled:true})]), snapshot([], [native(),native({clipNodeId:'second'})]), snapshot([legacy()],[native()]), snapshot([], [native()],['footage-node'])]) assert.equal(choose(unsafe,null),undefined);
+  assert.equal(choose(snapshot([legacy()],[native({selected:true})],['native-node']),null)?.clipNodeId,'native-node');
 });

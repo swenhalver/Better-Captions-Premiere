@@ -20,7 +20,7 @@ symlinkSync(fileURLToPath(new URL('../webview-ui/node_modules', import.meta.url)
 const pickerUrl = new URL('../webview-ui/src/components/FontPicker.svelte', import.meta.url);
 const picker = compile(readFileSync(pickerUrl, 'utf8'), { generate: 'server', filename: 'FontPicker.svelte' });
 assert.deepEqual(picker.warnings, [], 'Compile the installed font picker without accessibility warnings');
-const imports = base => (_match, quote, specifier) => `from ${quote}${specifier.endsWith('.svelte') ? specifier.replace(/\.svelte$/, '.mjs') : new URL(specifier.endsWith('.ts') ? specifier : `${specifier}.ts`, base).href}${quote}`;
+const imports = base => (_match, quote, specifier) => `from ${quote}${specifier.endsWith('.svg?raw') ? 'data:text/javascript,'+encodeURIComponent('export default '+JSON.stringify(readFileSync(new URL(specifier.replace('?raw',''),base),'utf8'))) : specifier.endsWith('.svelte') ? specifier.replace(/\.svelte$/, '.mjs') : new URL(specifier.endsWith('.ts') ? specifier : `${specifier}.ts`, base).href}${quote}`;
 writeFileSync(join(folder, 'FontPicker.mjs'), picker.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(pickerUrl)));
 const alignmentUrl=new URL('../webview-ui/src/components/AlignmentButtons.svelte',import.meta.url);
 const alignment=compile(readFileSync(alignmentUrl,'utf8'),{generate:'server',filename:'AlignmentButtons.svelte'});
@@ -42,10 +42,14 @@ const backgroundUrl = new URL('../webview-ui/src/components/WordBackgroundPrevie
 const background = compile(readFileSync(backgroundUrl, 'utf8'), { generate: 'server', filename: 'WordBackgroundPreview.svelte' });
 assert.deepEqual(background.warnings, []);
 writeFileSync(join(folder, 'WordBackgroundPreview.mjs'), background.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(backgroundUrl)));
+const spacingUrl=new URL('../webview-ui/src/components/SpacingInspector.svelte',import.meta.url);
+const spacing=compile(readFileSync(spacingUrl,'utf8'),{generate:'server',filename:'SpacingInspector.svelte'});
+assert.deepEqual(spacing.warnings,[]);
+writeFileSync(join(folder,'SpacingInspector.mjs'),spacing.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g,imports(spacingUrl)));
 const code = compiled.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, imports(sourceUrl));
 writeFileSync(join(folder, 'TextStyleToolbar.mjs'), code);
 const { default: TextStyleToolbar, textStylePatch, textStyleAppearance, textStyleMixed,
-  textStyleBoldState, textStyleBoldDisabled, textStyleBoldPatch, textStyleColorPatch, textStyleSizeStep } = await import(pathToFileURL(join(folder, 'TextStyleToolbar.mjs')));
+  textStyleBoldState, textStyleBoldDisabled, textStyleBoldPatch, textStyleColorPatch, textStyleSizeStep, textStyleResetPatch } = await import(pathToFileURL(join(folder, 'TextStyleToolbar.mjs')));
 const { default: awaitPicker } = await import(pathToFileURL(join(folder, 'HslaColorPicker.mjs')));
 const { render } = await import(pathToFileURL(require.resolve('svelte/server')));
 const fresh = () => structuredClone(DEFAULT_STYLE);
@@ -264,25 +268,17 @@ test('the installed font control is a searchable combobox and Italic stays enabl
   assert.doesNotMatch(italic, /disabled/); assert.match(italic, /synthetic slant/);
 });
 
-test('advanced styling uses four real tabs with Spacing selected and bubble settings in the ribbon', () => {
-  const html = view({});
-  assert.match(html,/role="tablist"[^>]*aria-label="Text settings"/);
-  assert.equal((html.match(/role="tab"/g)??[]).length,4);
-  assert.equal((html.match(/aria-selected="true"/g)??[]).length,1);
-  assert.match(html,/role="tabpanel"/);assert.match(html,/Word spacing, %/);
-  assert.doesNotMatch(html,/text-style__more-button/);
-  for (const label of ['Font family','Bold','Italic','Font weight','Text case','Text color and opacity','Word background and bubble settings','Line height'])assert.match(html,new RegExp(`aria-label="${label}"`));
+test('toolbar replaces detail tabs with exclusive shadow, spacing and layout popups',()=>{
+ const html=view({nativeMode:true});
+ assert.doesNotMatch(html,/role="tablist"|role="tab"|role="tabpanel"/);
+ assert.match(html,/class="text-style__layout-controls[^"]*"[^>]*aria-label="Caption layout"/);
+ assert.doesNotMatch(html,/aria-label="Layout controls"/);
+ for(const label of ['Shadow settings','Padding and margin','Outline settings'])assert.match(html,new RegExp(`<button[^>]*aria-label="${label}"[^>]*aria-expanded="false"`));
+ const source=readFileSync(sourceUrl,'utf8');
+ assert.match(source,/{@render nativeLayout\?\.\(\)}/);
+ assert.match(source,/Word spacing, px/);
+ for(const field of ['shadowBlur','shadowOffsetX','shadowOffsetY','shadowOpacity'])assert.match(source,new RegExp(field));
 });
-test('native Spacing and Layout tabs are enabled and native word spacing is editable in pixels',()=>{
-  const html=view({nativeMode:true,style:{...fresh(),wordSpacing:12}});
-  for(const label of ['Spacing','Outline','Layout']){
-    const tab=html.match(new RegExp(`<button[^>]*role="tab"[^>]*>${label}</button>`))[0];assert.doesNotMatch(tab,/disabled/);
-  }
-  assert.match(html,/Word spacing, px/);assert.doesNotMatch(html,/Letter spacing, px|Word spacing, %/);
-  const value=html.match(/<button[^>]*aria-label="Word spacing, px"[^>]*>/)?.[0];
-  assert.ok(value);assert.doesNotMatch(value,/disabled/);
-});
-
 
 test('left center and right alignment icons live in normal All words controls only',()=>{
  const html=view({style:{...fresh(),textAlign:'right'}});
@@ -301,13 +297,13 @@ test('ribbon uses complete case option names while its closed trigger stays comp
   assert.match(html, /aria-label="Line height"[^>]*aria-valuenow="1.3"/);
 });
 
-test('the HSLA picker exposes editable hue, saturation, lightness and separate alpha directly', () => {
+test('the color picker exposes a color field, hue strip, hex and separate alpha beneath it', () => {
   const HslaColorPicker = awaitPicker;
   const html = render(HslaColorPicker, {props:{value:'#993fa0',opacity:.6,label:'Word background',onChange(){}}}).body;
-  for (const channel of ['hue','saturation','lightness','opacity']) assert.match(html,new RegExp(`aria-label="Word background ${channel}"`));
-  assert.equal((html.match(/type="range"/g)||[]).length,4);
+  for (const channel of ['saturation and brightness','hue','opacity','hex']) assert.match(html,new RegExp(`aria-label="Word background ${channel}"`));
+  assert.equal((html.match(/type="range"/g)||[]).length,2);
   assert.doesNotMatch(html,/type="color"/);
-  assert.match(html, /60%/);
+  assert.match(html, /aria-label="Word background opacity, %" aria-valuenow="60"/);
 });
 
 
@@ -342,10 +338,10 @@ test('color-only All words edits preserve every different word-state opacity', (
   }
 });
 
-test('the normal ribbon opens outline settings and retains its detailed Outline tab', () => {
+test('the normal ribbon retains the outline popup without an Outline tab', () => {
   const html=view({nativeMode:true});
   assert.match(html,/<button[^>]*aria-label="Outline settings"[^>]*aria-expanded="false"/);
-  assert.match(html,/<button[^>]*role="tab"[^>]*>Outline<\/button>/);
+  assert.doesNotMatch(html,/role="tab"/);
 });
 
 
@@ -367,14 +363,19 @@ test('font size arrows change exactly one pixel within the correct scope bounds'
   assert.equal(resolveAppearance(apply(current,textStyleSizeStep(current,'current',1)),'activeWord').fontSize,1200);
 });
 
-test('font size buttons surround the number without a visible px suffix and line height follows alignment',()=>{
+test('font size buttons surround the number without a visible px suffix and alignment comes last',()=>{
   const html=view({style:{...fresh(),fontSize:8}});
   assert.match(html,/<button[^>]*aria-label="Decrease font size"[^>]*disabled/);
   assert.match(html,/<button[^>]*aria-label="Increase font size"/);
   assert.ok(html.indexOf('aria-label="Decrease font size"')<html.indexOf('aria-label="Base font size, px"'));
   assert.ok(html.indexOf('aria-label="Increase font size"')>html.indexOf('aria-label="Base font size, px"'));
   assert.doesNotMatch(html,/aria-hidden="true">px<\/span>/);
-  assert.ok(html.indexOf('aria-label="Line height"')>html.indexOf('aria-label="Align right"'));
+  assert.match(html,/class="text-style__size-icon[^"]*" aria-hidden="true"/);
+  const narrow=readFileSync(sourceUrl,'utf8').split('@container text-style (max-width: 47.99rem) {')[1]?.split('\n  }')[0]??'';
+  assert.match(narrow,/\.text-style__size-step \{display:none;\}/);
+  assert.match(narrow,/\.text-style__size-icon \{display:block;\}/);
+  assert.ok(html.indexOf('aria-label="Align left"')>html.indexOf('aria-label="Line height"'));
+  assert.ok(html.indexOf('aria-label="Align left"')>html.indexOf('aria-label="Padding and margin"'));
 });
 
 test('a separate padding-axis edit keeps legacy uniform padding and the other axis intact',()=>{
@@ -469,7 +470,7 @@ test('unchecked word background shows supplied Type Off on a neutral base withou
   assert.doesNotMatch(html,/background-color:\s*#5a35bc/);
   assert.match(html,/<path[^>]*d="M2,2L22,22"[^>]*stroke="var\(--color-error,#ffb4a9\)"[^>]*stroke-opacity="1"/);
   assert.doesNotMatch(html,/word-background-preview--enabled/);
-  assert.match(html,/<svg[^>]*stroke="#a1b2c3"[^>]*stroke-opacity="0.4"/);
+  assert.match(html,/<svg[^>]*stroke="currentColor"[^>]*stroke-opacity="1"/);
 });
 
 
@@ -479,5 +480,49 @@ test('inactive or invisible outlines use an unfilled neutral outline-control ico
     const html=view({style,scope:'current'});
     const trigger=html.match(/<button[^>]*aria-label="Outline settings"[\s\S]*?<\/button>/)?.[0];
     assert.match(trigger,/<svg[^>]*fill="none"[^>]*stroke="currentColor"[^>]*fill-opacity="1"[^>]*stroke-opacity="1"/);
+  }
+});
+
+
+test('scoped font-size reset follows current All words 20, not stale factory or scoped values',()=>{
+  const style=fresh();style.fontSize=20;style.activeWord={...style.activeWord,fontSize:90,color:'#1a2b3c'};
+  const before=structuredClone(style);
+  assert.notEqual(DEFAULT_STYLE.fontSize,20);
+  const next=apply(style,textStyleResetPatch(style,'current',['fontSize']));
+  assert.equal(next.fontSize,20);
+  assert.equal(textStyleAppearance(next,'current').fontSize,20);
+  assert.equal(next.activeWord.sizeScale,1);
+  assert.equal(next.activeWord.color,'#1a2b3c');
+  assert.deepEqual(next.spokenWord,before.spokenWord);
+  assert.deepEqual(next.upcomingWord,before.upcomingWord);
+  const later=apply(next,textStylePatch(next,'all',{fontSize:32}));
+  assert.equal(textStyleAppearance(later,'current').fontSize,32,'The reset state continues following later All words size changes');
+  assert.deepEqual(style,before);
+});
+
+test('scoped spacing and alpha resets copy current All values without flattening unrelated fields',()=>{
+  let style=fresh();
+  style=apply(style,textStylePatch(style,'all',{paddingTop:17,shadowOpacity:.8}));
+  style.activeWord={...style.activeWord,paddingTop:3,paddingRight:29,marginLeft:7,shadowOpacity:.2,shadowColor:'#123456'};
+  const next=apply(style,textStyleResetPatch(style,'current',['paddingTop','shadowOpacity']));
+  assert.equal(next.activeWord.paddingTop,17);
+  assert.equal(next.activeWord.shadowOpacity,.8);
+  assert.equal(next.activeWord.paddingRight,29);
+  assert.equal(next.activeWord.marginLeft,7);
+  assert.equal(next.activeWord.shadowColor,'#123456');
+  assert.deepEqual(next.spokenWord,style.spokenWord);
+  assert.deepEqual(next.upcomingWord,style.upcomingWord);
+});
+
+test('All words reset uses known factory values only for the requested fields',()=>{
+  let style=fresh();style.fontSize=20;
+  style=apply(style,textStylePatch(style,'all',{paddingTop:37,strokeWidth:9}));
+  const next=apply(style,textStyleResetPatch(style,'all',['paddingTop','strokeWidth']));
+  assert.equal(next.fontSize,20);
+  assert.equal(next.strokeWidth,DEFAULT_STYLE.strokeWidth);
+  for(const key of ['spokenWord','activeWord','upcomingWord']){
+    assert.equal(next[key].paddingTop,resolveAppearance(DEFAULT_STYLE,key).paddingTop);
+    assert.equal(next[key].strokeWidth,resolveAppearance(DEFAULT_STYLE,key).strokeWidth);
+    assert.equal(next[key].color,style[key].color);
   }
 });

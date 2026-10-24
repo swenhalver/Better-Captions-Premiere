@@ -5,8 +5,11 @@ export function startCaptionReconnect(options: {
   inspect: () => Promise<void>;
   onError: (error: unknown) => void;
   interval?: number;
+  /** A shorter interval while it returns a number, e.g. while the line editor follows Premiere Undo. */
+  fast?: () => number | null;
 }) {
-  const interval = Math.max(1000, options.interval ?? 2500);
+  const base = Math.max(1000, options.interval ?? 2500);
+  const period = () => { const fast = options.fast?.(); return typeof fast === 'number' && fast >= 100 ? Math.min(base, fast) : base; };
   let stopped = false, inFlight = false, requested = false, failures = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   function schedule(delay: number) {
@@ -16,16 +19,16 @@ export function startCaptionReconnect(options: {
   }
   async function inspect() {
     if (stopped || inFlight) return;
-    if (!options.ready()) { schedule(interval); return; }
+    if (!options.ready()) { schedule(period()); return; }
     inFlight = true; requested = false;
     try { await options.inspect(); failures = 0; }
     catch (error) { failures++; if (!stopped) options.onError(error); }
     finally {
       inFlight = false;
-      if (!stopped) schedule(requested ? 0 : Math.min(15000, interval * Math.max(1, failures)));
+      if (!stopped) schedule(requested ? 0 : Math.min(15000, period() * Math.max(1, failures)));
     }
   }
-  schedule(interval);
+  schedule(period());
   return {
     notify() { if (stopped) return; if (inFlight) requested = true; else schedule(0); },
     stop() { stopped = true; clearTimeout(timer); },

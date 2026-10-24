@@ -1,93 +1,168 @@
 <script lang="ts">
-  import { tick, onDestroy } from 'svelte';
+  import { tick, onDestroy, untrack, type Snippet } from 'svelte';
+  import { numericInput, numericInputValue } from '../lib/numeric-input';
+  import ScrubbableNumber from "./ScrubbableNumber.svelte";
   import WordTimeline from "./WordTimeline.svelte";
-  import type { CaptionItem, CaptionSegment } from "../lib/types";
-  import { captionSentenceCount, formatTime, regroupCaptions, validateCharacterLimit } from "../lib/transcript/parser";
-  import { MAX_CAPTION_CHARS } from '../lib/types';
-  import { replaceText, retime, split, validateCaptions } from "../lib/transcript/edit";
-  import { captionSegmentRange, replaceCaptionSegment } from "../lib/transcript/segments";
+  import type { CaptionItem } from "../lib/types";
+  import { formatTime, validateCharacterLimit } from "../lib/transcript/parser";
+  import { replaceText, retime, validateCaptions } from "../lib/transcript/edit";
+  import { captionWordOffset, changeTranscriptLineBreak, lineSegment, replaceTranscriptLine, replaceTranscriptWords, transcriptLineCaption, transcriptLineLane, transcriptLines, transcriptWords, withTranscriptLines, type TranscriptLine } from "../lib/transcript/lines";
   import type { WordEdge } from '../lib/transcript/timing';
-  interface SentenceRow { key: string; caption: CaptionItem; segment?: CaptionSegment; }
+  import { applyTypingText, typingAnchor, typingRange, typingText, type TypingAnchor } from '../lib/transcript/typing';
+  import { derivePauseLines, removePauseLine, type PauseLine, type PauseLineSettings } from '../lib/native-effect/pause-lines';
+  type SentenceRow = TranscriptLine;
+  type TranscriptRow = { kind: 'text'; key: string; line: SentenceRow } | { kind: 'pause'; key: string; pause: PauseLine };
+  /** Line editor typing on a native layer: Premiere history steps while it is open (main-webview). */
+  export interface TranscriptTyping {
+    open(anchor: TypingAnchor, captions: CaptionItem[], text: string, caret: number, show: (draft: string, caret: number) => void): void;
+    input(draft: string, caret: number): void;
+    /** Cmd/Ctrl went down: commit pending typing now, before a Premiere shortcut such as Undo. */
+    flush(): void;
+    /** Cmd/Ctrl came up: Premiere may just have run Undo or Redo. */
+    hint(): void;
+    end(mode: 'commit' | 'cancel' | 'abandon', reason?: string): Promise<void>;
+  }
   interface Props {
     frameRate: number; selectedWord?: number; onSelectWord?: (index:number)=>void;
     sequenceId: string; captions: CaptionItem[]; currentTime: number; maxChars: number; selectedId?: string | null;
     onSeek: (time: number) => void; onSelect: (id: string) => void;
-    onMaxCharsChange: (maxChars: number) => void; onUpdate: (captions: CaptionItem[]) => void;
+    onMaxCharsChange: (maxChars: number) => void; onUpdate: (captions: CaptionItem[], historyLabel?: string) => void;
     onEditingChange?: (active:boolean)=>void;
-    onShowInPremiere?: (time: number) => void; isDemo?: boolean; disabled?: boolean; groupingDisabled?: boolean; onRegroup?: () => void; smartCharacterCapacity?:number|null; smartLineFit?:boolean; onSmartLineFitChange?:(enabled:boolean)=>void;
+    onShowInPremiere?: (time: number) => void; isDemo?: boolean; disabled?: boolean; groupingDisabled?: boolean; lineFitCapacity?:number|null; onSmartLineFit?:()=>void;
+    typing?: TranscriptTyping | null;
+    nativeGrouping?: Snippet;
+    pauseSettings?: PauseLineSettings | null;
   }
-  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, disabled = false, groupingDisabled = false, onRegroup, onEditingChange=()=>{}, smartCharacterCapacity=null, smartLineFit=false, onSmartLineFitChange }: Props = $props();
+  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, disabled = false, groupingDisabled = false, onEditingChange=()=>{}, lineFitCapacity=null, onSmartLineFit, typing = null, nativeGrouping, pauseSettings = null }: Props = $props();
   let activeId = $derived(captions.find((caption) => currentTime >= caption.startTime && currentTime < caption.endTime)?.id ?? null);
   let selectedContainer = $derived(captions.find((caption) => caption.id === selectedId) ?? captions[0]);
   let selectedRowKey = $state<string | null>(null);
-  let sentenceRows = $derived.by((): SentenceRow[] => captions.flatMap(caption => {
-    // A sentence crossing a legacy native cut is shown within that clip's
-    // original editor. A new whole-transcript bundle has one row per sentence.
-    const groups = caption.renderSegments;
-    if (groups?.length && groups.every(group => captionSegmentRange(caption, group))) return groups.map(segment => ({ key: caption.id + ':' + segment.id, caption, segment }));
-    return [{ key: caption.id, caption }];
+  let selectedPauseKey = $state<string | null>(null);
+  // The words an open typing editor replaces. Typing steps regroup the phrases
+  // around it, so its row is pinned to exactly these words while it is open.
+  let typingAt = $state<TypingAnchor | null>(null);
+  // Blur runs before a pause button's click. Retain its history merge so that
+  // a subsequent deletion waits even after the editor has already closed.
+  let typingFinished: Promise<void> | null = null;
+  let sentenceRows = $derived.by((): SentenceRow[] => {
+    const rows = transcriptLines(captions);
+    return typingAt && editingRowKey ? pinTypingRow(rows, editingRowKey, typingAt) : rows;
+  });
+  let pauseRows = $derived(pauseSettings ? derivePauseLines(captions, pauseSettings) : []);
+  let transcriptRows = $derived.by((): TranscriptRow[] => sentenceRows.flatMap(line => [
+    ...pauseRows.filter(pause => pause.nextWordIndex === line.start).map(pause => ({ kind: 'pause' as const, key: pause.key, pause })),
+    { kind: 'text' as const, key: line.key, line },
+  ]));
+  let selectedPause = $derived(pauseRows.find(pause => pause.key === selectedPauseKey));
+  let filteredRows = $derived(transcriptRows.filter((row, index) => {
+    const text = row.kind === 'pause' ? `Pause ${formatTime(row.pause.startTime)} ${formatTime(row.pause.endTime)}` : rowCaption(row.line).text;
+    return `${index + 1} ${text}`.toLowerCase().includes(query.toLowerCase());
   }));
-  let selectedRow = $derived(sentenceRows.find(row => row.key === selectedRowKey && row.caption.id === selectedContainer?.id) ?? sentenceRows.find(row => row.caption.id === selectedContainer?.id));
-  let selectedSegment = $derived(selectedRow?.segment);
-  let selected = $derived(selectedContainer && selectedSegment ? { ...selectedContainer, ...selectedSegment, id: selectedContainer.id,
-    startTime: Math.max(selectedContainer.startTime, selectedSegment.startTime), endTime: Math.min(selectedContainer.endTime, selectedSegment.endTime) } : selectedContainer);
-  let selectedWordOffset = $derived(selectedContainer && selectedSegment ? captionSegmentRange(selectedContainer, selectedSegment)?.start ?? 0 : 0);
+  function pinTypingRow(rows: SentenceRow[], key: string, anchor: TypingAnchor): SentenceRow[] {
+    const range = typingRange(captions, anchor);
+    if (!range) return rows;
+    const start = range.transcriptStart, end = start + range.words.length, result: SentenceRow[] = [];
+    let pinned = false;
+    for (const row of rows) {
+      if (row.end <= start || row.start >= end) { result.push(row); continue; }
+      if (row.start < start) result.push({ ...row, key: row.key + ':before', end: start, segment: lineSegment(transcriptWords(captions).slice(row.start, start), row.key + ':before') });
+      if (!pinned) { result.push({ key, caption: range.owner, start, end, segment: lineSegment(range.words, key + ':typing') }); pinned = true; }
+      if (row.end > end) result.push({ ...row, key: row.key + ':after', start: end, segment: lineSegment(transcriptWords(captions).slice(end, row.end), row.key + ':after') });
+    }
+    return pinned ? result : rows;
+  }
+  let selectedGlobalWord = $derived(selectedContainer ? captionWordOffset(captions, selectedContainer.id) + selectedWord : 0);
+  let selectedRow = $derived(sentenceRows.find(row => row.key === selectedRowKey && (row.caption.id === selectedContainer?.id || row.start <= selectedGlobalWord && row.end > selectedGlobalWord)) ?? sentenceRows.find(row => row.start <= selectedGlobalWord && row.end > selectedGlobalWord) ?? sentenceRows.find(row => row.caption.id === selectedContainer?.id));
+  // One neighbour on either side, including across a storage boundary.
+  let selectedLane = $derived(!selectedPause && selectedRow ? transcriptLineLane(captions, selectedRow) : null);
+  let selected = $derived(selectedLane?.caption);
+  let selectedWordOffset = $derived(selectedLane && selectedRow ? selectedLane.start - captionWordOffset(captions, selectedContainer!.id) : 0);
   let query = $state("");
   let draftText = $state("");
   let editingRowKey = $state<string | null>(null);
   let editingSource = $state("");
   let editingError = $state("");
   let editingCaret = $state(0);
+  let textEditorFocused = $state(false);
+  let textEditor = $state<HTMLTextAreaElement | undefined>();
+  let caretSplitIndex = $derived.by(() => {
+    const row = sentenceRows.find(row => row.key === editingRowKey);
+    if (!row || !textEditorFocused) return null;
+    const index = wordBoundaryAtCaret(draftText, editingCaret);
+    const count = draftText.match(/\S+/g)?.length ?? 0;
+    if (index <= 0 || index >= count) return 0;
+    return index + row.start - captionWordOffset(captions, selectedContainer!.id);
+  });
+  function wordBoundaryAtCaret(text: string, caret: number): number {
+    const words = [...text.matchAll(/\S+/g)];
+    for (let i = 0; i < words.length; i++) {
+      const start = words[i].index!, end = start + words[i][0].length;
+      if (caret <= start) return i;
+      if (caret < end) return caret - start < end - caret ? i : i + 1;
+    }
+    return words.length;
+  }
+  function trackTextCaret(event: Event) {
+    textEditorFocused = true;
+    editingCaret = (event.currentTarget as HTMLTextAreaElement).selectionStart ?? 0;
+  }
   let draftStart = $state(0);
   let draftEnd = $state(0);
   let timingRowKey = $state<string | null>(null);
   let timingSource = $state('');
   $effect(()=>onEditingChange(editingRowKey!==null||timingRowKey!==null));
-  onDestroy(()=>onEditingChange(false));
+  onDestroy(()=>{ if (typingAt) { typingAt = null; void typing?.end('abandon', 'editor closed'); } onEditingChange(false); });
+  // Something other than typing (an Undo past it, another tool) changed the
+  // words around the open editor: close it without merging its steps.
+  $effect(() => { if (typingAt && editingRowKey && !typingRange(captions, typingAt)) { closeTextEdit(); void typing?.end('abandon', 'words around the line changed'); } });
   let timingError = $state('');
   let timingFocus = $state<WordEdge>('startTime');
   let timingChanged = $state({ startTime: false, endTime: false });
   let timingInvalid = $state({ startTime: false, endTime: false });
   let error = $state("");
   let notice = $state("");
-  let previous = $state<CaptionItem[] | null>(null);
-  let hasLinked = $derived(captions.some((caption) => caption.clipNodeId));
-  let sentenceCount = $derived(captionSentenceCount(captions));
-  let canUndo = $derived(!!previous && captions.every((caption) => !caption.clipNodeId || previous!.some((old) => old.id === caption.id && (!caption.captionBundle || old.captionBundle))));
-  let nextIsLinked = $derived(!!captions[captions.findIndex((caption) => caption.id === selected?.id) + 1]?.clipNodeId);
+  let sentenceCount = $derived(transcriptRows.length);
+  let hasNextLine = $derived(!!selectedRow && sentenceRows.indexOf(selectedRow) < sentenceRows.length - 1);
   let listEl: HTMLDivElement | undefined = $state();
-  $effect(() => { sequenceId; query = ""; previous = null; selectedRowKey = null; editingRowKey = null; editingSource = ""; editingError = ""; timingRowKey = null; timingSource = ''; timingError = ''; error = ""; notice = ""; });
+  // Reset only when the sequence really changes: the parent's session object is
+  // replaced on every Premiere Undo/Redo restore, which re-runs this effect.
+  let shownSequence: string | null = null;
   $effect(() => {
-    const visibleId = selectedId ?? activeId;
+    if (sequenceId === shownSequence) return;
+    shownSequence = sequenceId;
+    query = ""; selectedRowKey = null; selectedPauseKey = null; editingRowKey = null; editingSource = ""; editingError = ""; timingRowKey = null; timingSource = ''; timingError = ''; error = ""; notice = "";
+    if (untrack(() => typingAt)) { typingAt = null; void untrack(() => typing)?.end('abandon', 'sequence changed'); }
+  });
+  $effect(() => {
+    const visibleId = selectedPause?.key ?? selectedId ?? activeId;
     if (!visibleId || !listEl) return;
-    const el = [...listEl.querySelectorAll<HTMLElement>("[data-caption-id]")].find((node) => node.dataset.rowKey === selectedRow?.key) ?? [...listEl.querySelectorAll<HTMLElement>("[data-caption-id]")].find((node) => node.dataset.captionId === visibleId);
+    const el = [...listEl.querySelectorAll<HTMLElement>("[data-row-key]")].find((node) => node.dataset.rowKey === (selectedPause?.key ?? selectedRow?.key)) ?? [...listEl.querySelectorAll<HTMLElement>("[data-caption-id]")].find((node) => node.dataset.captionId === visibleId);
     el?.scrollIntoView({ block: "nearest" });
   });
-  function commit(next: CaptionItem[], message: string) {
+  function commit(next: CaptionItem[], message: string, historyLabel?: string) {
     error = "";
     try {
       if (next.length) validateCaptions(next);
-      if (captions.some((caption) => caption.clipNodeId && !next.some((item) => item.id === caption.id))) throw new Error("A linked Premiere caption cannot be removed by this edit.");
-      previous = JSON.parse(JSON.stringify(captions));
-      onUpdate(next);
+      onUpdate(next, historyLabel);
       notice = message;
       return true;
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); return false; }
   }
   function updateCaption(updated: CaptionItem, message: string) {
     try {
-      const next = selectedContainer && selectedSegment ? replaceCaptionSegment(selectedContainer, selectedSegment, updated) : updated;
-      commit(captions.map((caption) => caption.id === updated.id ? next : caption), message);
+      if (!selectedLane) return;
+      const rows = transcriptLines(captions);
+      const next = replaceTranscriptWords(captions, selectedLane.start, selectedLane.end, updated.words, updated.timingEstimated);
+      commit(withTranscriptLines(next, rows.map(row => ({ start: row.start, end: row.end, key: row.segment?.id ?? row.key }))), message);
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
   }
   function rowCaption(row: SentenceRow): CaptionItem {
-    return row.segment ? { ...row.caption, ...row.segment, id: row.caption.id,
-      startTime: Math.max(row.caption.startTime, row.segment.startTime), endTime: Math.min(row.caption.endTime, row.segment.endTime) } : row.caption;
+    return transcriptLineCaption(captions, row);
   }
   function textSource(row: SentenceRow) {
     const current = rowCaption(row);
     return JSON.stringify([sequenceId, current.id, row.segment?.id, current.startTime, current.endTime, current.text,
-      current.words.map(word => [word.text, word.startTime, word.endTime])]);
+      current.words.map(word => [word.text, word.startTime, word.endTime, word.lineBreakBefore, word.pauseLinesRemoved])]);
   }
   function textCaretOffset(event?: MouseEvent): number | null {
     if (!event || !event.detail) return null;
@@ -122,16 +197,49 @@
     editingSource = textSource(current);
     editingError = '';
     editingRowKey = row.key;
+    const span = typing && { start: current.start, end: current.end };
+    if (typing && span) {
+      typingAt = typingAnchor(captions, current.caption.id, span.start, span.end, true);
+      typing.open(typingAt, captions, draftText, editingCaret, showTypingDraft);
+    }
   }
+  // Premiere Undo/Redo of a typing step, while the editor stays open.
+  function showTypingDraft(draft: string, caret: number) {
+    draftText = draft; editingCaret = caret; editingError = '';
+    void tick().then(() => {
+      if (!textEditor) return;
+      if (textEditor.value !== draft) textEditor.value = draft;
+      textEditor.setSelectionRange(caret, caret);
+      resizeTextEditor(textEditor);
+    });
+  }
+  // Checks the draft as saving would, without changing anything.
+  function typingProblem(): string {
+    try {
+      const range = typingAt && typingRange(captions, typingAt);
+      if (!typingAt || !range) throw new Error('This line changed while you were editing. Cancel and select it again.');
+      if (typingText(draftText) !== range.text) applyTypingText(captions, typingAt, draftText);
+      return '';
+    } catch (problem) { return problem instanceof Error ? problem.message : String(problem); }
+  }
+  function closeTextEdit() { textEditorFocused = false; editingRowKey = null; editingSource = ''; editingError = ''; typingAt = null; }
   function saveInlineText(row: SentenceRow) {
     if (editingRowKey !== row.key) return true;
+    if (typing && typingAt) {
+      // Typing steps already hold the text; closing merges them into one step.
+      const problem = typingProblem();
+      if (problem) { editingError = problem; return false; }
+      closeTextEdit();
+      typingFinished = typing.end('commit');
+      return true;
+    }
     try {
       const current = sentenceRows.find(item => item.key === row.key);
-      if (!current || textSource(current) !== editingSource) throw new Error('This sentence changed while you were editing. Cancel and select it again.');
+      if (!current || textSource(current) !== editingSource) throw new Error('This line changed while you were editing. Cancel and select it again.');
       const source = rowCaption(current), updated = replaceText(source, draftText);
       if (updated.text !== source.text) {
-        const next = current.segment ? replaceCaptionSegment(current.caption, current.segment, updated) : updated;
-        if (!commit(captions.map(caption => caption.id === next.id ? next : caption), updated.timingEstimated ? 'Text saved. Review the estimated word timings.' : 'Text saved with existing word timings.')) { editingError = error; return false; }
+        const next = replaceTranscriptLine(captions, current, updated);
+        if (!commit(next, updated.timingEstimated ? 'Text saved. Review the estimated word timings.' : 'Text saved with existing word timings.')) { editingError = error; return false; }
       }
       editingRowKey = null;
       editingSource = '';
@@ -139,15 +247,23 @@
       return true;
     } catch (problem) { editingError = problem instanceof Error ? problem.message : String(problem); return false; }
   }
-  function cancelTextEdit() { editingRowKey = null; editingSource = ''; editingError = ''; }
+  function cancelTextEdit() {
+    const typed = !!typingAt;
+    closeTextEdit();
+    // Escape takes back every typing step of this editor.
+    if (typed) void typing?.end('cancel');
+  }
   function resizeTextEditor(node: HTMLTextAreaElement) { node.style.blockSize = 'auto'; node.style.blockSize = `${node.scrollHeight}px`; }
   function focusTextEditor(node: HTMLTextAreaElement) {
     resizeTextEditor(node);
     node.focus({ preventScroll: true });
+    textEditorFocused = true;
     const caret = Math.min(editingCaret, node.value.length);
     node.setSelectionRange(caret, caret);
   }
   function textKeydown(event: KeyboardEvent, row: SentenceRow) {
+    // Premiere handles Cmd+Z itself; only the bare Cmd key reaches the panel.
+    if (event.key === 'Meta' || event.key === 'Control') { typing?.flush(); return; }
     if (event.isComposing) return;
     if (event.key !== 'Escape' && !((event.ctrlKey || event.metaKey) && event.key === 'Enter')) return;
     event.preventDefault();
@@ -182,9 +298,9 @@
     timingRowKey = current.key;
   }
   function timingRange(row: SentenceRow, edge: WordEdge) {
-    const position = captions.findIndex(caption => caption.id === row.caption.id);
-    const lower = row.segment ? row.caption.startTime : captions[position - 1]?.endTime ?? 0;
-    const upper = row.segment ? row.caption.endTime : captions[position + 1]?.startTime;
+    const position = sentenceRows.findIndex(line => line.key === row.key);
+    const lower = position > 0 ? rowCaption(sentenceRows[position - 1]).endTime : 0;
+    const upper = position + 1 < sentenceRows.length ? rowCaption(sentenceRows[position + 1]).startTime : undefined;
     const time = edge === 'startTime' ? draftStart : draftEnd, frame = Math.round(time * frameRate), value = secondsValue(time);
     const minimum = edge === 'startTime' ? lower : draftStart + 1 / frameRate;
     const maximum = edge === 'startTime' ? draftEnd - 1 / frameRate : upper;
@@ -193,9 +309,9 @@
   }
   function inputCaptionTime(edge: WordEdge, event: Event) {
     const input = event.currentTarget as HTMLInputElement;
-    timingInvalid[edge] = !Number.isFinite(input.valueAsNumber);
+    timingInvalid[edge] = !Number.isFinite(numericInputValue(input));
     if (timingInvalid[edge]) return;
-    const time = Math.round(input.valueAsNumber * frameRate) / frameRate;
+    const time = Math.round(numericInputValue(input) * frameRate) / frameRate;
     if (edge === 'startTime') draftStart = time; else draftEnd = time;
     timingChanged[edge] = true;
     timingError = '';
@@ -205,16 +321,16 @@
     if (timingRowKey !== row.key) return true;
     try {
       const current = sentenceRows.find(item => item.key === row.key);
-      if (!current || textSource(current) !== timingSource) throw new Error('This sentence changed while you were editing. Cancel and select its timing again.');
+      if (!current || textSource(current) !== timingSource) throw new Error('This line changed while you were editing. Cancel and select its timing again.');
       if (timingInvalid.startTime || timingInvalid.endTime) throw new Error('Enter a valid start and end time.');
       if (timingChanged.startTime || timingChanged.endTime) {
         const source = rowCaption(current);
         const start = timingChanged.startTime ? Math.round(draftStart * frameRate) / frameRate : source.startTime;
         const end = timingChanged.endTime ? Math.round(draftEnd * frameRate) / frameRate : source.endTime;
-        if ((end - start) * frameRate < 1 - 1e-7) throw new Error('Keep at least one frame between caption start and end.');
+        if ((end - start) * frameRate < 1 - 1e-7) throw new Error('Keep at least one frame between line start and end.');
         const updated = retime(source, start, end);
-        const next = current.segment ? replaceCaptionSegment(current.caption, current.segment, updated) : updated;
-        if (!commit(captions.map(caption => caption.id === next.id ? next : caption), 'Caption timing saved.')) { timingError = error; return false; }
+        const next = replaceTranscriptLine(captions, current, updated);
+        if (!commit(next, 'Line timing saved.')) { timingError = error; return false; }
       }
       cancelTimingEdit();
       return true;
@@ -233,121 +349,181 @@
     else if (!saveInlineTiming(row)) return;
     void tick().then(() => [...(listEl?.querySelectorAll<HTMLElement>('[data-row-key]') ?? [])].find(node => node.dataset.rowKey === row.key)?.querySelector<HTMLButtonElement>('.transcript-editor__timestamp')?.focus({ preventScroll: true }));
   }
-  function splitCaption(wordIndex: number) {
-    if (disabled || !selectedContainer) return;
-    if (selectedContainer.clipNodeId) { error = "Use Premiere’s Razor tool to split an applied caption clip. Its native keyframes stay with the source."; return; }
+  function splitCaption(wordIndex: number, typed = false) {
+    if (disabled || !selectedRow) return;
+    const row = selectedRow, splitAt = wordIndex + captionWordOffset(captions, selectedContainer!.id);
+    if (!typed && typing && typingAt && editingRowKey) {
+      const problem = typingProblem();
+      if (problem) { error = problem; return; }
+      void typing.end('commit').then(() => splitCaption(wordIndex, true)).catch(problem => { error = problem instanceof Error ? problem.message : String(problem); });
+      return;
+    }
     try {
-      const parts = split(selectedContainer, wordIndex);
-      if (!commit(captions.flatMap((caption) => caption.id === selectedContainer.id ? parts : [caption]), "Caption clip split at the selected word.")) return;
-      selectedRowKey = null;
-      onSelect(parts[1].id);
-      onSelectWord(0);
+      let source = captions;
+      const editing = typed ? undefined : sentenceRows.find(row => row.key === editingRowKey);
+      if (editing) {
+        if (textSource(editing) !== editingSource) throw new Error('This line changed while you were editing. Cancel and select it again.');
+        source = replaceTranscriptLine(captions, editing, replaceText(rowCaption(editing), draftText));
+      }
+      const current = typed ? row : transcriptLines(source).find(item => item.start === row.start);
+      if (!current) throw new Error('Select the line again.');
+      const next = changeTranscriptLineBreak(source, current, splitAt);
+      if (!commit(next, editing ? 'Line split at the text cursor.' : 'Line split before the selected word.')) return;
+      cancelTextEdit();
+      const right = transcriptLines(next).find(item => item.start === splitAt)!;
+      selectedRowKey = right.key;
+      onSelect(right.caption.id);
+      onSelectWord(splitAt - captionWordOffset(next, right.caption.id));
+      void tick().then(() => listEl?.querySelector<HTMLButtonElement>('.transcript-editor__cue--selected .transcript-editor__cue-text')?.focus({ preventScroll: true }));
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
   }
-  function mergeNext() {
-    if (disabled || !selectedContainer) return;
-    const index = captions.findIndex((caption) => caption.id === selectedContainer.id);
-    const next = captions[index + 1];
-    if (!next) return;
-    if (next.clipNodeId) { error = "Merge captions before applying them to Premiere. This next caption is already linked to a timeline clip."; return; }
-    const words = [...selectedContainer.words, ...next.words];
-    const merged = { ...selectedContainer, words, text: words.map((word) => word.text).join(" "), endTime: next.endTime, timingEstimated: selectedContainer.timingEstimated || next.timingEstimated };
-    commit(captions.flatMap((caption, i) => i === index ? [merged] : i === index + 1 ? [] : [caption]), "Captions merged. Apply captions to update Premiere.");
+  function mergeNext(typed = false) {
+    if (disabled || !selectedRow || !hasNextLine) return;
+    if (!typed && typing && typingAt && editingRowKey) {
+      const problem = typingProblem();
+      if (problem) { error = problem; return; }
+      void typing.end('commit').then(() => mergeNext(true)).catch(problem => { error = problem instanceof Error ? problem.message : String(problem); });
+      return;
+    }
+    try {
+      let source = captions;
+      const row = selectedRow, editing = typed ? undefined : sentenceRows.find(row => row.key === editingRowKey);
+      if (editing) {
+        if (textSource(editing) !== editingSource) throw new Error('This line changed while you were editing. Cancel and select it again.');
+        source = replaceTranscriptLine(source, editing, replaceText(rowCaption(editing), draftText));
+      }
+      const current = typed ? row : transcriptLines(source).find(item => item.start === row.start);
+      if (!current) throw new Error('Select the line again.');
+      const next = changeTranscriptLineBreak(source, current);
+      if (!commit(next, 'Lines merged.')) return;
+      cancelTextEdit();
+      selectedRowKey = transcriptLines(next).find(item => item.start === current.start)!.key;
+      void tick().then(() => listEl?.querySelector<HTMLButtonElement>('.transcript-editor__cue--selected .transcript-editor__cue-text')?.focus({ preventScroll: true }));
+    } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
   }
-  function regroup() {
+  function changeCharacterLimit(value: number) {
+    if (disabled || value === maxChars) return;
+    try { onMaxCharsChange(validateCharacterLimit(value)); error = ''; }
+    catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
+  }
+  function choose(row: SentenceRow) { selectedPauseKey = null; selectedRowKey = row.key; onSelect(row.caption.id); onSelectWord(row.start - captionWordOffset(captions, row.caption.id)); onSeek(row.segment?.startTime ?? row.caption.startTime); error = ""; notice = ""; }
+  async function finishPauseEditing(): Promise<boolean> {
+    const timingRow = sentenceRows.find(row => row.key === timingRowKey);
+    if (timingRow && !saveInlineTiming(timingRow)) return false;
+    if (typing && typingAt) {
+      const problem = typingProblem();
+      if (problem) { editingError = problem; return false; }
+      closeTextEdit();
+      typingFinished = typing.end('commit');
+    } else {
+      const textRow = sentenceRows.find(row => row.key === editingRowKey);
+      if (textRow && !saveInlineText(textRow)) return false;
+    }
+    await typingFinished;
+    return true;
+  }
+  async function choosePause(pause: PauseLine) {
+    const nextWordTime = transcriptWords(captions)[pause.nextWordIndex]?.startTime;
+    try {
+      if (!await finishPauseEditing()) return;
+      const nextWordIndex = transcriptWords(captions).findIndex(word => word.startTime === nextWordTime);
+      const current = pauseRows.find(row => row.nextWordIndex === nextWordIndex && row.index === pause.index);
+      if (!current) throw new Error('This pause changed. Select it again.');
+      selectedPauseKey = current.key;
+      onSeek(current.startTime);
+      error = ''; notice = '';
+    } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
+  }
+  async function deletePause(pause: PauseLine) {
     if (disabled) return;
+    const nextWordTime = transcriptWords(captions)[pause.nextWordIndex]?.startTime;
     try {
-      if (onRegroup) { onRegroup(); selectedRowKey = null; return; }
-      const next = regroupCaptions(captions, maxChars);
-      commit(next, `${captionSentenceCount(next)} caption groups updated.`);
-      selectedRowKey = null;
-      if (next[0]) onSelect(next[0].id);
+      if (!await finishPauseEditing()) return;
+      const nextWordIndex = transcriptWords(captions).findIndex(word => word.startTime === nextWordTime);
+      const current = pauseRows.find(row => row.nextWordIndex === nextWordIndex && row.index === pause.index);
+      if (!current) throw new Error('This pause changed. Select it again.');
+      selectedPauseKey = current.key;
+      commit(removePauseLine(captions, nextWordIndex), 'Pause line deleted.', 'Delete pause line');
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
-  }
-  function changeCharacterLimit(event: Event) {
-    const input = event.target as HTMLInputElement;
-    try { onMaxCharsChange(validateCharacterLimit(input.valueAsNumber)); error = ''; }
-    catch (problem) { input.value = String(maxChars); error = problem instanceof Error ? problem.message : String(problem); }
-  }
-  function choose(row: SentenceRow) { selectedRowKey = row.key; onSelect(row.caption.id); onSelectWord(row.segment ? captionSegmentRange(row.caption, row.segment)?.start ?? 0 : 0); onSeek(row.segment?.startTime ?? row.caption.startTime); error = ""; notice = ""; }
-  function undo() {
-    if (!previous || !canUndo) return;
-    const restore = previous.map((caption) => { const current = captions.find((item) => item.id === caption.id); return current?.clipNodeId ? { ...caption, clipNodeId: current.clipNodeId, projectItemId: current.projectItemId, mediaPath: current.mediaPath } : caption; });
-    previous = JSON.parse(JSON.stringify(captions));
-    onUpdate(restore);
-    if (restore[0]) onSelect(restore.some((caption) => caption.id === selectedId) ? selectedId! : restore[0].id);
-    notice = "Previous edit restored.";
-    error = "";
   }
 </script>
 
 <section class="transcript-editor" aria-label="Transcript editor">
-  <div class="transcript-editor__heading"><label class="transcript-editor__search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.5 12.5 4 4"/></svg><input type="search" aria-label="Search captions" placeholder="Search captions" bind:value={query} /></label><button class="caption-button" onclick={undo} disabled={!canUndo} title="Restore the previous transcript edit">Undo edit</button></div>
+  <div class="transcript-editor__heading"><label class="transcript-editor__search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.5 12.5 4 4"/></svg><input type="search" aria-label="Search lines" placeholder="Search lines" bind:value={query} /></label></div>
   {#if captions.length}
     {#if !groupingDisabled}
-    <details class="transcript-editor__grouping">
-      <summary>Caption grouping <span>{smartLineFit ? smartCharacterCapacity===null?"Smart line fit":`Smart · ≈${smartCharacterCapacity} chars` : `${maxChars} characters`} · {sentenceCount} groups</span></summary>
+    <section class="transcript-editor__grouping" aria-label="Caption grouping">
+      <div class="transcript-editor__grouping-heading"><h3>Caption grouping</h3><span>{maxChars} characters · {sentenceCount} {sentenceCount === 1 ? 'line' : 'lines'}</span></div>
       <div class="transcript-editor__grouping-body">
-        {#if onSmartLineFitChange}<label class="caption-check transcript-editor__smart-fit" title="Measure the text to fit one line, with a 5% safety margin for letter widths and highlighting"><input type="checkbox" checked={smartLineFit} disabled={disabled} onchange={event=>onSmartLineFitChange?.(event.currentTarget.checked)}/><span>Smart line fit</span></label>{/if}
-        <div class="transcript-editor__grouping-controls"><label class="caption-field"><span>{smartLineFit?"Characters per line (estimated)":"Characters per caption"}</span><input type="number" min="1" max={MAX_CAPTION_CHARS} step="1" value={smartLineFit ? smartCharacterCapacity ?? "" : maxChars} placeholder={smartLineFit?"—":undefined} readonly={smartLineFit} title={smartLineFit?"Estimated capacity for this width and font. Actual phrases use measured whole words.":undefined} onchange={changeCharacterLimit} disabled={disabled} /></label><button class="caption-button" onclick={regroup} disabled={disabled||smartLineFit} title="Apply the character limit to the edited transcript">Regroup</button></div>
-        <p class="caption-help">{smartLineFit ? "Fits the selected width using font measurements and a 5% safety margin. Updates as width or styling changes." : "Includes spaces and punctuation. A word longer than the limit stays whole."}</p>
-        <p class="caption-help">{hasLinked ? `${sentenceCount} caption groups across ${captions.length} timeline ${captions.length === 1 ? 'clip' : 'clips'}. Keyframes stay with their clips.` : "Regroup splits or joins captions, respecting sentences, pauses and placement."}</p>
+        <div class="transcript-editor__grouping-controls"><div class="caption-field"><span>Characters per line</span><ScrubbableNumber label="Characters per line" min={15} max={150} step={1} decimals={0} value={maxChars} defaultValue={56} inputRealtime disabled={disabled} onChange={changeCharacterLimit}/></div><button type="button" class="caption-button transcript-editor__smart-fit" title="Measure the text to fit one line, with a 5% safety margin for letter widths and highlighting" disabled={disabled} onclick={() => onSmartLineFit?.()}>Smart line fit</button></div>
+        {@render nativeGrouping?.()}
       </div>
-    </details>
+    </section>
     {/if}
     <div class="transcript-editor__workspace">
       <div class="transcript-editor__browse">
 
-        <div class="transcript-editor__list" bind:this={listEl} aria-label="Caption list">
-          {#each sentenceRows.filter((row) => (row.segment?.text ?? row.caption.renderSegments?.map(group => group.text).join(' ') ?? row.caption.text).toLowerCase().includes(query.toLowerCase())) as row (row.key)}
-            <div class="transcript-editor__cue" class:transcript-editor__cue--selected={selectedRow?.key === row.key} class:transcript-editor__cue--playing={row.segment ? currentTime >= row.segment.startTime && currentTime < row.segment.endTime : activeId === row.caption.id} data-caption-id={row.caption.id} data-row-key={row.key}>
-              <button class="transcript-editor__cue-select" aria-label="Select caption {sentenceRows.indexOf(row) + 1}" aria-pressed={selectedRow?.key === row.key} onclick={() => choose(row)}><span class="transcript-editor__cue-number">{String(sentenceRows.indexOf(row) + 1).padStart(2,"0")}</span></button>
+        <div class="transcript-editor__list" bind:this={listEl} aria-label="Line list">
+          {#each filteredRows as entry (entry.key)}
+            {@const number = transcriptRows.findIndex(row => row.key === entry.key) + 1}
+            {#if entry.kind === 'pause'}
+              {@const pause = entry.pause}
+              <div class="transcript-editor__cue transcript-editor__cue--pause" class:transcript-editor__cue--selected={selectedPause?.key === pause.key} class:transcript-editor__cue--playing={currentTime >= pause.startTime && currentTime < pause.endTime} data-row-key={pause.key}>
+                <button class="transcript-editor__cue-select" aria-label="Select pause line {number}" aria-pressed={selectedPause?.key === pause.key} onclick={() => choosePause(pause)}><span class="transcript-editor__cue-number">{String(number).padStart(2,"0")}</span></button>
+                <button class="transcript-editor__pause-select" aria-label="Seek to pause line {number}" onclick={() => choosePause(pause)}><span class="transcript-editor__cue-time">{formatTime(pause.startTime)}<span aria-hidden="true">—</span>{formatTime(pause.endTime)}</span><span class="transcript-editor__pause-label">Pause</span></button>
+                <button type="button" class="transcript-editor__pause-delete" aria-label="Delete pause line {number}" title="Delete pause line" disabled={disabled} onclick={() => deletePause(pause)}>Delete</button>
+              </div>
+            {:else}
+            {@const row = entry.line}
+            <div class="transcript-editor__cue" class:transcript-editor__cue--selected={!selectedPause && selectedRow?.key === row.key} class:transcript-editor__cue--playing={row.segment ? currentTime >= row.segment.startTime && currentTime < row.segment.endTime : activeId === row.caption.id} data-caption-id={row.caption.id} data-row-key={row.key}>
+              <button class="transcript-editor__cue-select" aria-label="Select line {number}" aria-pressed={!selectedPause && selectedRow?.key === row.key} onclick={() => choose(row)}><span class="transcript-editor__cue-number">{String(number).padStart(2,"0")}</span></button>
               <div class="transcript-editor__cue-body">
                 {#if timingRowKey === row.key}
                   <div class="transcript-editor__timing-inputs">
                     {#each ['startTime','endTime'] as raw}{@const edge = raw as WordEdge}{@const range = timingRange(row,edge)}
-                      <input type="number" aria-label="Caption {sentenceRows.indexOf(row) + 1} {edge === 'startTime' ? 'start' : 'end'} in seconds" aria-invalid={!!timingError} aria-describedby={timingError ? 'caption-timing-error' : undefined} min={range.min} max={range.max} step={1/frameRate} value={secondsValue(edge === 'startTime' ? draftStart : draftEnd)} use:focusTimingEditor={edge} oninput={(event) => inputCaptionTime(edge,event)} onkeydown={(event) => timingKeydown(event,row)} onblur={(event) => timingBlur(event,row)} />
+                      <input type="text" inputmode="decimal" use:numericInput={{ managedKeys: true }} role="spinbutton" aria-valuemin={range.min} aria-valuemax={range.max} aria-valuenow={secondsValue(edge === 'startTime' ? draftStart : draftEnd)} aria-label="Line {number} {edge === 'startTime' ? 'start' : 'end'} in seconds" aria-invalid={!!timingError} aria-describedby={timingError ? 'caption-timing-error' : undefined} min={range.min} max={range.max} step={1/frameRate} value={secondsValue(edge === 'startTime' ? draftStart : draftEnd)} use:focusTimingEditor={edge} oninput={(event) => inputCaptionTime(edge,event)} onkeydown={(event) => timingKeydown(event,row)} onblur={(event) => timingBlur(event,row)} />
                     {/each}
                   </div>
                   {#if timingError}<p class="transcript-editor__text-error" id="caption-timing-error" role="alert">{timingError}</p>{/if}
                 {:else}
-                  <div class="transcript-editor__cue-time"><button class="transcript-editor__timestamp" aria-label="Edit caption {sentenceRows.indexOf(row) + 1} start time" onclick={() => beginTimingEdit(row,'startTime')} disabled={disabled}>{formatTime(row.segment?.startTime ?? row.caption.startTime)}</button><span aria-hidden="true">—</span><button class="transcript-editor__timestamp" aria-label="Edit caption {sentenceRows.indexOf(row) + 1} end time" onclick={() => beginTimingEdit(row,'endTime')} disabled={disabled}>{formatTime(row.segment?.endTime ?? row.caption.endTime)}</button></div>
+                  <div class="transcript-editor__cue-time"><button class="transcript-editor__timestamp" aria-label="Edit line {number} start time" onclick={() => beginTimingEdit(row,'startTime')} disabled={disabled}>{formatTime(row.segment?.startTime ?? row.caption.startTime)}</button><span aria-hidden="true">—</span><button class="transcript-editor__timestamp" aria-label="Edit line {number} end time" onclick={() => beginTimingEdit(row,'endTime')} disabled={disabled}>{formatTime(row.segment?.endTime ?? row.caption.endTime)}</button></div>
                 {/if}
                 {#if editingRowKey === row.key}
-                  <textarea class="transcript-editor__cue-input" aria-label="Edit caption {sentenceRows.indexOf(row) + 1} text" aria-invalid={!!editingError} aria-describedby={editingError ? 'caption-inline-error' : undefined} rows="1" bind:value={draftText} spellcheck="true" use:focusTextEditor oninput={(event) => { editingError = ''; resizeTextEditor(event.currentTarget); }} onkeydown={(event) => textKeydown(event,row)} onblur={() => saveInlineText(row)}></textarea>
+                  <textarea class="transcript-editor__cue-input" aria-label="Edit line {number} text" aria-invalid={!!editingError} aria-describedby={editingError ? 'caption-inline-error' : undefined} rows="1" bind:value={draftText} bind:this={textEditor} spellcheck="true" use:focusTextEditor onselect={trackTextCaret} onclick={trackTextCaret} onkeyup={(event) => { if (event.key === 'Meta' || event.key === 'Control') typing?.hint(); trackTextCaret(event); }} oninput={(event) => { editingError = ''; trackTextCaret(event); resizeTextEditor(event.currentTarget); typing?.input(event.currentTarget.value, event.currentTarget.selectionStart ?? 0); }} onkeydown={(event) => textKeydown(event,row)} onfocus={() => textEditorFocused = true} onblur={() => { textEditorFocused = false; saveInlineText(row); }}></textarea>
                   {#if editingError}<p class="transcript-editor__text-error" id="caption-inline-error" role="alert">{editingError}</p>{:else if draftText !== rowCaption(row).text}<span class="transcript-editor__text-pending" role="status">Unsaved</span>{/if}
                 {:else}
-                  <button class="transcript-editor__cue-text" aria-label="Edit caption {sentenceRows.indexOf(row) + 1} text" onclick={(event) => beginTextEdit(row,event)} disabled={disabled}>{#if row.segment}{row.segment.text}{:else if row.caption.renderSegments}{#each row.caption.renderSegments as group (group.id)}<span class="transcript-editor__cue-phrase">{group.text}</span>{/each}{:else}{row.caption.text}{/if}</button>
+                  <button class="transcript-editor__cue-text" aria-label="Edit line {number} text" onclick={(event) => beginTextEdit(row,event)} disabled={disabled}>{#if row.segment}{row.segment.text}{:else if row.caption.renderSegments}{#each row.caption.renderSegments as group (group.id)}<span class="transcript-editor__cue-phrase">{group.text}</span>{/each}{:else}{row.caption.text}{/if}</button>
                 {/if}
               </div>
             </div>
-          {:else}<p class="transcript-editor__empty">No captions match “{query}”. Clear the search to see all captions.</p>{/each}
+            {/if}
+          {:else}<p class="transcript-editor__empty">No lines match “{query}”. Clear the search to see all lines.</p>{/each}
         </div>
       </div>
-      {#if selected}
+      {#if selectedPause}
+        <div class="transcript-editor__edit"><p class="transcript-editor__pause-description">Pause · {formatTime(selectedPause.startTime)} — {formatTime(selectedPause.endTime)}</p>{#if error}<p class="caption-message caption-message--error" role="alert">{error}</p>{/if}{#if notice}<p class="caption-message" role="status">{notice}</p>{/if}</div>
+      {:else if selected}
         <div class="transcript-editor__edit">
           <WordTimeline caption={selected} fps={frameRate} {currentTime} selectedWord={Math.max(0, selectedWord-selectedWordOffset)} onSelectWord={(index) => onSelectWord(index+selectedWordOffset)} onSeek={onSeek} onChange={(caption) => updateCaption(caption,"Word timing saved.")}
-            wordOffset={selectedWordOffset} onSplitBefore={splitCaption} splitDisabled={disabled || !!selectedContainer?.clipNodeId} splitTitle={selectedContainer?.clipNodeId ? 'Use Premiere’s Razor tool to split the applied clip; its keyframes stay with the source' : undefined}
-            onMergeNext={mergeNext} mergeDisabled={disabled || captions[captions.length - 1].id === selected.id || nextIsLinked} mergeTitle={nextIsLinked ? 'The next caption is already linked to Premiere' : 'Merge with the next unlinked caption'} />
+            wordOffset={selectedWordOffset} focusStart={selectedLane?.focusStart} focusEnd={selectedLane?.focusEnd} onSplitBefore={splitCaption} {caretSplitIndex} splitDisabled={disabled}
+            onMergeNext={mergeNext} mergeDisabled={disabled || !hasNextLine} mergeTitle="Merge with the next line" />
           {#if error}<p class="caption-message caption-message--error" role="alert">{error}</p>{/if}
           {#if notice}<p class="caption-message" role="status">{notice}</p>{/if}
           {#if selected.timingEstimated}<p class="transcript-editor__estimated">Word timings are estimated. Review them in the word lane.</p>{/if}
         </div>
       {/if}
     </div>
-  {:else}<div class="transcript-editor__empty"><h3>Ready for your first words</h3><p>Use Transcribe in Premiere to load timed speech. Then select a caption to edit its text and timing.</p></div>{/if}
+  {:else}<div class="transcript-editor__empty"><h3>Ready for your first words</h3><p>Use Transcribe in Premiere to load timed speech. Then select a line to edit its text and timing.</p></div>{/if}
 </section>
 <style>
   .transcript-editor { container-type: inline-size; }
   .transcript-editor__heading { display: flex; justify-content: space-between; align-items: center; gap: var(--caption-space-s); padding: var(--caption-space-m) var(--caption-space-l); }
 
 
-  .transcript-editor__heading button { background: transparent; }
   .transcript-editor__grouping { border-block: 1px solid var(--color-panel-border); font-size: var(--caption-type-s); }
-  .transcript-editor__grouping > summary { cursor: pointer; padding: var(--caption-space-m) var(--caption-space-l); }
-  .transcript-editor__grouping summary span { float: right; color: var(--color-panel-secondary); font-size: var(--caption-type-xs); }
-  .transcript-editor__grouping-body { clear: both; padding: 0 var(--caption-space-l) var(--caption-space-m); }
-  .transcript-editor__smart-fit { margin-block:var(--caption-space-s);font-size:var(--caption-type-s); }
+  .transcript-editor__grouping-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--caption-space-xs) var(--caption-space-s); padding: var(--caption-space-m) var(--caption-space-l); & h3 { margin: 0; font: inherit; } & span { color: var(--color-panel-secondary); font-size: var(--caption-type-xs); } }
+  .transcript-editor__grouping-body { padding: 0 var(--caption-space-l) var(--caption-space-m); }
+  .transcript-editor__smart-fit { font-size:var(--caption-type-s);font-variant-numeric:tabular-nums; }
   .transcript-editor__grouping-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--caption-space-s); align-items: end; margin-block-end: var(--caption-space-s); }
   .transcript-editor__search { display: flex; align-items: center; gap: var(--caption-space-s); flex: 1; min-inline-size: 0; margin: 0; padding-inline: .5rem; border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); background: var(--color-input); }
   .transcript-editor__search svg { inline-size: 1.1rem; block-size: 1.1rem; color: var(--color-panel-secondary); flex-shrink: 0; }
@@ -360,6 +536,11 @@
   .transcript-editor__cue--playing .transcript-editor__cue-time { color: var(--color-accent); }
   .transcript-editor__cue-number { color: var(--color-panel-secondary); font-variant-numeric: tabular-nums; font-size: var(--caption-type-xs); padding-block-start: .1rem; }
   .transcript-editor__cue-select { flex-shrink: 0; background: transparent; border: 0; padding: 0; min-inline-size: 1.5rem; min-block-size: 2rem; text-align: start; cursor: pointer; }
+  .transcript-editor__cue--pause { color: var(--color-panel-secondary); }
+  .transcript-editor__pause-select { flex: 1; min-inline-size: 0; background: transparent; border: 0; padding: 0; color: inherit; text-align: start; cursor: pointer; }
+  .transcript-editor__pause-label { font-size: var(--caption-type-m); line-height: 1.5; }
+  .transcript-editor__pause-delete { align-self: center; padding: var(--caption-space-xs) var(--caption-space-s); background: transparent; color: var(--color-panel-secondary); border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); font-size: var(--caption-type-xs); cursor: pointer; &:hover { color: var(--color-panel-text); background: var(--color-surface-raised); } &:disabled { opacity: .5; cursor: default; } }
+  .transcript-editor__pause-description { margin: 0; font-size: var(--caption-type-s); color: var(--color-panel-secondary); }
   .transcript-editor__cue-body { flex: 1; min-inline-size: 0; }
   .transcript-editor__cue-time { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; font-variant-numeric: tabular-nums; color: var(--color-panel-secondary); font-size: var(--caption-type-xs); margin-block-end: .3rem; }
   .transcript-editor__timestamp { color: inherit; font: inherit; font-variant-numeric: inherit; background: transparent; border: 0; padding: 0; cursor: text; }

@@ -48,3 +48,6 @@ artifacts/
 work/
 webview-ui/.qa/
 .impeccable/review/
+
+# Adobe SDKs (licensed, local only)
+sdk/

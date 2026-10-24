@@ -20,7 +20,7 @@ export interface ParameterProbe {
  * never evidence of rendering, write support, serialization, or arbitrary SCAN support. */
 export async function probeNativeComponent(component: UxpComponent) {
   const matchName = await component.getMatchName();
-  if (!normalizeNativeMatchName(matchName)) throw new Error('Select the experimental Better Captions native component.');
+  if (!normalizeNativeMatchName(matchName)) throw new Error('Select the experimental S-Captions native component.');
   const count = component.getParamCount();
   if (!Number.isInteger(count) || count < 0 || count > 128) throw new Error('Native parameter count exceeds probe bounds.');
   const parameters: ParameterProbe[] = [];

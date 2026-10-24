@@ -1,12 +1,14 @@
+import { legacyNativeDocumentBytes, nativeCarrier } from './helpers/native-document.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { defaultNativeStyle, NATIVE_EFFECT_MATCH_NAME } from '../webview-ui/src/lib/native-effect/contract.ts';
 import { encodeNativeDocument, encodeNativeTransportText } from '../webview-ui/src/lib/native-effect/encode.ts';
-import { nativePanelSequenceId, decodeNativePanelDocument, rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate, deriveNativePanelPhrases, NATIVE_PANEL_CAPABILITIES } from '../webview-ui/src/lib/native-effect/panel.ts';
+import { nativePanelSequenceId, decodeNativePanelDocument, rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate, nativeLineFitCharacterCapacity, NATIVE_PANEL_CAPABILITIES } from '../webview-ui/src/lib/native-effect/panel.ts';
 import { registerFontCatalog } from '../webview-ui/src/lib/font-catalog.ts';
 import { moveWord, moveWordEdge } from '../webview-ui/src/lib/transcript/timing.ts';
+import { writeDocument } from './native-write-commit.mjs';
 
 const id = '12345678-1234-5678-abcd-123456789abc';
 const ticks = seconds => String(BigInt(Math.round(seconds * 254016000000)));
@@ -52,7 +54,7 @@ function nativeWriter(source) {
   const files = new Map(), writes = [], unexpected = [];
   let carrier = source.documentText;
   const forbid = name => () => { unexpected.push(name); assert.fail(`Word timing must not change native ${name}`); };
-  const parameter = (displayName, value, keys = []) => ({ displayName, value, keys, setValue: forbid(displayName), setValueAtKey: forbid(displayName + ' key'), addKey: forbid(displayName + ' key insertion'), removeKey: forbid(displayName + ' key removal') });
+  const parameter = (displayName, value, keys = []) => ({ displayName, value, keys, isTimeVarying: () => false, getValue() { return this.value; }, setValue: forbid(displayName), setValueAtKey: forbid(displayName + ' key'), addKey: forbid(displayName + ' key insertion'), removeKey: forbid(displayName + ' key removal') });
   const motion = collection([
     parameter('Position', [.5, .85], [{ ticks: ticks(3601), value: [.3, .8], interpolation: 'native-bezier', tangent: [.1, -.2] }]),
     parameter('Scale Height', 112, [{ ticks: ticks(3601), value: 98, interpolation: 'hold' }]),
@@ -62,33 +64,31 @@ function nativeWriter(source) {
   const controls = collection(['Position', 'Width', 'Height', 'Character limit', 'Upcoming opacity', 'Current opacity'].map((name, index) => parameter(name, index + .25, [{ ticks: ticks(3602), value: index + .5, interpolation: 'native' }])));
   const documentParam = { displayName: 'Caption document (experimental)', isTimeVarying: () => false, getValue: () => carrier,
     setValue(value, refresh) { writes.push({ value, refresh }); carrier = value; return 0; } };
-  controls.push(documentParam);
+  controls.push(documentParam, parameter('Global font size (64 = 1x)', 64));
   const clip = { nodeId: source.clipNodeId, projectItem: { nodeId: source.projectItemId },
     isAdjustmentLayer: () => true, isSelected: () => source.selected,
-    setSelected: forbid('selection'), remove: forbid('clip removal'),
+    setSelected: forbid('selection'), remove: forbid('clip removal'), getSpeed: () => 1, isSpeedReversed: () => false,
     components: collection([{ matchName: 'AE.ADBE Motion', properties: motion }, { matchName: source.matchName, properties: controls }]) };
   for (const [field, value] of [['start', source.startTicks], ['end', source.endTicks], ['inPoint', source.inTicks], ['outPoint', source.outTicks]]) {
     Object.defineProperty(clip, field, { enumerable: true, get: () => ({ ticks: value }), set: forbid(field) });
   }
   const tracks = collection([0, 1, 2].map(index => ({ clips: collection(index === 2 ? [clip] : []), isLocked: () => false, overwriteClip: forbid('clip insertion') })), 'numTracks');
-  const activeSequence = { sequenceID: source.locator.sequenceId, videoTracks: tracks, setPlayerPosition: forbid('playhead') };
+  const activeSequence = { sequenceID: source.locator.sequenceId, videoTracks: tracks, getPlayerPosition: () => ({ ticks: '0' }), setPlayerPosition: forbid('playhead') };
   const context = { app: { project: { path: source.locator.projectPath, activeSequence, importFiles: forbid('import') } }, JSON: undefined,
     File: function (path) { this.length = (files.get(path) ?? '').length; this.open = mode => mode === 'r' && files.has(path); this.read = () => files.get(path); this.close = () => {}; } };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(new URL('../cep/host/bridge.jsx', import.meta.url), 'utf8'), context);
   const physicalState = () => JSON.stringify({ clipNodeId: clip.nodeId, projectItemId: clip.projectItem.nodeId, start: clip.start, end: clip.end, inPoint: clip.inPoint, outPoint: clip.outPoint,
-    motion, controls: controls.slice(0, -1), tracks: tracks.map(track => track.clips.map(item => item.nodeId)) });
+    motion, controls: controls.filter(param => param !== documentParam), tracks: tracks.map(track => track.clips.map(item => item.nodeId)) });
   return { writes, unexpected, physicalState, get carrier() { return carrier; }, write(snapshot, documentText) {
-    files.set('/native-word-timing.json', JSON.stringify({ sequenceId: source.locator.sequenceId, projectPath: source.locator.projectPath, snapshot, documentText }));
-    return JSON.parse(context.BetterCaptionsHost.writeNativeCaptionDocument('/native-word-timing.json'));
+    const call = (method, data) => { files.set('/native-word-timing.json', JSON.stringify(data)); return JSON.parse(context.BetterCaptionsHost[method]('/native-word-timing.json')); };
+    return writeDocument(call, () => clip.components[snapshot.locator.componentIndex].properties, { sequenceId: source.locator.sequenceId, projectPath: source.locator.projectPath, snapshot, documentText });
   } };
 }
 
 test('the bounded native reader restores source Unicode, manual splits, styles and origin', () => {
-  assert.deepEqual(decodeNativePanelDocument(encodeNativeTransportText(document()), `{${id.toUpperCase()}}`), document());
-  const bytes = encodeNativeDocument({ ...document(), timeOriginSeconds: 0 }).slice(0, -8);
-  new DataView(bytes.buffer).setUint32(4, 1, true);
-  const text = 'BCDOC1:' + Buffer.from(bytes).toString('hex');
+  assert.deepEqual(decodeNativePanelDocument(encodeNativeTransportText(document()), `{${id.toUpperCase()}}`), { ...document(), binaryVersion: 10 });
+  const text = nativeCarrier(legacyNativeDocumentBytes({ ...document(), timeOriginSeconds: 0 }, 1));
   assert.equal(decodeNativePanelDocument(text, id).timeOriginSeconds, 0, 'Legacy v1 origin remains zero');
 });
 
@@ -235,14 +235,14 @@ test('relative B follows changed shared baseline and numeric state weights becom
   assert.equal(absoluteDocument.style.baseFontWeight,400);
 });
 
-test('untouched binary versions 1 and 2 remain byte exact and typography edits upgrade only the carrier', () => {
+test('legacy v1 and v2 reads upgrade losslessly to v9 before typography edits', () => {
   for(const binaryVersion of [1,2]){
     const source={...document(),timeOriginSeconds:0,binaryVersion};
-    const nativeEntry=entry(source), {session,binding:connected}=rehydrateNativePanel(nativeEntry,sequence());
-    assert.equal(encodeNativeTransportText(prepareNativePanelUpdate(connected,session)),nativeEntry.documentText);
+    const nativeEntry=entry(source,{documentText:nativeCarrier(legacyNativeDocumentBytes(source,binaryVersion))}), {session,binding:connected}=rehydrateNativePanel(nativeEntry,sequence());
+    assert.deepEqual(decodeNativePanelDocument(encodeNativeTransportText(prepareNativePanelUpdate(connected,session)),id),connected.document);
     const edited=clone(session);edited.style.activeWord.italic=true;
     const prepared=prepareNativePanelUpdate(connected,edited), bytes=encodeNativeDocument(prepared);
-    assert.equal(new DataView(bytes.buffer).getUint32(4,true),3);
+    assert.equal(new DataView(bytes.buffer).getUint32(4,true),10);
     assert.deepEqual(prepared.captions,connected.document.captions);
     assert.deepEqual(prepared.style.current.color,connected.document.style.current.color);
     assert.equal(prepared.timeOriginSeconds,0);
@@ -386,7 +386,7 @@ test('upper/lower display modes round trip without altering source words, times 
   const {session,binding:connected}=binding();const edited=clone(session);edited.style.textTransform=mode;
   for(const key of ['activeWord','upcomingWord','spokenWord'])edited.style[key].textTransform=mode;
   const prepared=prepareNativePanelUpdate(connected,edited),carrier=encodeNativeTransportText(prepared),decoded=decodeNativePanelDocument(carrier,id);
-  assert.equal(decoded.style.letterCase,mode);assert.equal(decoded.binaryVersion,4);assert.deepEqual(decoded.captions,connected.document.captions);
+  assert.equal(decoded.style.letterCase,mode);assert.equal(decoded.binaryVersion,10);assert.deepEqual(decoded.captions,connected.document.captions);
   assert.equal(decodeNativeTransportTimeOrigin(carrier),connected.document.timeOriginSeconds);assert.equal(encodeNativeTransportText(decoded),carrier);
   const restored=rehydrateNativePanel(entry(decoded),{id,name:'Native',frameWidth:1920,frameHeight:1080,frameRate:24,duration:7200});
   assert.equal(restored.session.style.textTransform,mode);assert.equal(restored.session.style.activeWord.textTransform,mode);
@@ -399,11 +399,11 @@ function confirmStyleEdit(connected,edited,prepared){
  const documentText=encodeNativeTransportText(prepared),revision=JSON.parse(connected.snapshot.revision);revision.documentText=documentText;
  return confirmNativePanelUpdate(connected,prepared,edited,{documentText,revision:JSON.stringify(revision)});
 }
-test('native pixel word spacing is editable without changing transcript or other native fields and immediately affects Smart groups',()=>{
+test('native pixel word spacing is editable without changing transcript or other native fields and immediately affects the line fit capacity',()=>{
  const {session,binding:connected}=binding();assert.equal(session.style.wordSpacing,connected.document.style.wordSpacing);
  const before=clone(connected.document),edited=clone(session);edited.style.wordSpacing=20.25;const next=prepareNativePanelUpdate(connected,edited);before.style.wordSpacing=20.25;assert.deepEqual(next,before);
- const smart={...connected,clip:{...connected.clip,smartLineFit:true,lineFitWidth:100,lineFitFontScale:1}};
- assert.equal(deriveNativePanelPhrases(smart,session,()=>10)[0].renderSegments.length,1);edited.style.wordSpacing=40;assert.equal(deriveNativePanelPhrases(smart,edited,()=>10)[0].renderSegments.length,2);
+ const fit={...connected,clip:{...connected.clip,lineFitWidth:100,lineFitFontScale:1}};
+ const tight=nativeLineFitCharacterCapacity(fit,session,()=>10);edited.style.wordSpacing=40;assert.ok(nativeLineFitCharacterCapacity(fit,edited,()=>10)<tight);
  for(const wordSpacing of [-1,4097,NaN,undefined,'12']){const bad=clone(session);bad.style.wordSpacing=wordSpacing;assert.throws(()=>prepareNativePanelUpdate(connected,bad),/word spacing/);}
  assert.equal(NATIVE_PANEL_CAPABILITIES.wordSpacing,'editable-native-pixels');assert.ok(!NATIVE_PANEL_CAPABILITIES.unsupportedGlobalStyleFields.includes('wordSpacing'));
 });
@@ -487,4 +487,61 @@ test('native underline changes only the requested state and explicit false reset
   const restored=rehydrateNativePanel(entry(next),sequence());assert.equal(restored.session.style[key].underline,underline);const reset=clone(restored.session);delete reset.style[key].underline;assert.deepEqual(prepareNativePanelUpdate(restored.binding,reset).style,connected.document.style);
  }
  assert.ok(NATIVE_PANEL_CAPABILITIES.supportedWordStyleFields.includes('underline'));
+});
+
+test('per-side padding, negative margins and corner radius survive native transport without rewriting old documents',()=>{
+ const old=document(),oldBytes=encodeNativeDocument(old),input=document();
+ const geometry={paddingTop:2,paddingRight:9,paddingBottom:7,paddingLeft:4,radiusTL:0,radiusTR:6,radiusBR:14,radiusBL:3,marginTop:6,marginRight:5,marginBottom:8,marginLeft:-3};
+ Object.assign(input.style.current,geometry);
+ const bytes=encodeNativeDocument(input);assert.equal(new DataView(bytes.buffer).getUint32(4,true),10);
+ const decoded=decodeNativePanelDocument(encodeNativeTransportText(input),id);
+ for(const [key,value] of Object.entries(geometry))assert.equal(decoded.style.current[key],value,key);
+ assert.deepEqual(encodeNativeDocument(decoded),bytes);
+ assert.deepEqual(encodeNativeDocument(old),oldBytes);
+ for(const patch of [{paddingTop:-2},{radiusBR:NaN},{marginLeft:4097}])assert.throws(()=>encodeNativeDocument({...input,style:{...input.style,current:{...input.style.current,...patch}}}));
+});
+
+test('word boundary-only edits preserve exact source times on a moved layer and survive readback', () => {
+  const source = document();
+  source.captions[0].words[0].start = .123456789012345;
+  source.captions[0].start = source.captions[0].words[0].start;
+  source.captions[0].words[1].lineBreakBefore = 'break';
+  const connection = entry(source, { startTicks: ticks(7.25), endTicks: ticks(17.25) });
+  const { session, binding: connected } = rehydrateNativePanel(connection, sequence());
+  const before = clone(connected.document), edited = clone(session);
+  edited.captions[0].words[0].lineBreakBefore = 'break';
+  edited.captions[0].words[1].lineBreakBefore = 'join';
+  const prepared = prepareNativePanelUpdate(connected, edited);
+  for (const [index, word] of prepared.captions[0].words.entries()) {
+    assert.equal(word.start, before.captions[0].words[index].start);
+    assert.equal(word.end, before.captions[0].words[index].end);
+    assert.equal(word.text, before.captions[0].words[index].text);
+  }
+  assert.deepEqual(prepared.captions[0].words.map(word => word.lineBreakBefore), ['break', 'join']);
+  const carrier = encodeNativeTransportText(prepared);
+  const restored = rehydrateNativePanel(entry(prepared, { startTicks: ticks(7.25), endTicks: ticks(17.25) }), sequence());
+  assert.deepEqual(restored.session.captions[0].words.map(word => word.lineBreakBefore), ['break', 'join']);
+  assert.equal(encodeNativeTransportText(prepareNativePanelUpdate(restored.binding, restored.session)), carrier);
+  delete edited.captions[0].words[1].lineBreakBefore;
+  assert.equal(prepareNativePanelUpdate(connected, edited).captions[0].words[1].lineBreakBefore, undefined, 'auto explicitly removes the stored override');
+  assert.deepEqual(connected.document, before, 'the binding is untouched until host confirmation');
+});
+
+test('pause deletion alone retains every exact source timestamp on a moved layer and survives readback', async () => {
+  const { removePauseLine } = await import('../webview-ui/src/lib/native-effect/pause-lines.ts');
+  const source = document();
+  source.captions[0].words[0].start = .123456789012345;
+  source.captions[0].start = source.captions[0].words[0].start;
+  source.captions[0].words[1].lineBreakBefore = 'break';
+  source.captions[0].words[1].pauseLinesRemoved = 1;
+  const patch = { startTicks: ticks(7.25), endTicks: ticks(17.25) };
+  const { session, binding: connected } = rehydrateNativePanel(entry(source, patch), sequence());
+  const before = clone(connected.document), edited = { ...session, captions: removePauseLine(session.captions, 1) };
+  const prepared = prepareNativePanelUpdate(connected, edited), expected = clone(before);
+  expected.captions[0].words[1].pauseLinesRemoved = 2;
+  assert.deepEqual(prepared, expected, 'only the anchored word deletion count changes');
+  const restored = rehydrateNativePanel(entry(prepared, patch), sequence());
+  assert.equal(restored.session.captions[0].words[1].pauseLinesRemoved, 2);
+  assert.deepEqual(prepareNativePanelUpdate(restored.binding, restored.session), prepared);
+  assert.deepEqual(connected.document, before);
 });

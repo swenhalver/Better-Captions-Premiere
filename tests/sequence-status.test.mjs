@@ -15,7 +15,7 @@ assert.deepEqual(compiled.warnings, [], 'The real component compiles without acc
 const folder = mkdtempSync(join(tmpdir(), 'better-captions-sequence-status-'));
 after(() => rmSync(folder, { recursive: true, force: true }));
 symlinkSync(fileURLToPath(new URL('../webview-ui/node_modules', import.meta.url)), join(folder, 'node_modules'), 'dir');
-writeFileSync(join(folder, 'SequenceStatus.mjs'), compiled.js.code);
+writeFileSync(join(folder, 'SequenceStatus.mjs'), compiled.js.code.replace("'../lib/transcript/parser'",JSON.stringify(new URL('../webview-ui/src/lib/transcript/parser.ts',import.meta.url).href)).replace("'../lib/native-effect/pause-lines'",JSON.stringify(new URL('../webview-ui/src/lib/native-effect/pause-lines.ts',import.meta.url).href)));
 const { default: SequenceStatus } = await import(pathToFileURL(join(folder, 'SequenceStatus.mjs')));
 const { render } = await import(pathToFileURL(require.resolve('svelte/server')));
 const session = patch => ({ sequenceId: 'sequence', sequenceName: 'A long sequence name for editing',
@@ -35,7 +35,7 @@ test('a ready transcript leaves one compact sequence row and hides the setup con
   const html = view({ session: session({ hasTranscript: true, captions: [{ id: 'one' }] }) });
   assert.match(html, /sequence-status--ready/);
   assert.match(html, /title="A long sequence name for editing"/);
-  assert.match(html, /1 caption</);
+  assert.match(html, /1 line</);
   assert.match(html, /aria-label="Sequence actions" aria-haspopup="menu" aria-expanded="false"/);
   assert.doesNotMatch(html, /<h1|sequence-status__detail|720 ×|Transcribe in Premiere/);
   assert.doesNotMatch(html, /role="menu"/, 'Secondary actions start closed');
@@ -43,7 +43,7 @@ test('a ready transcript leaves one compact sequence row and hides the setup con
 
 test('existing captions collapse setup even when a persisted transcript flag is absent', () => {
   const html = view({ session: session({ captions: [{ id: 'one' }, { id: 'two' }] }) });
-  assert.match(html, /2 captions</);
+  assert.match(html, /2 lines</);
   assert.doesNotMatch(html, /Transcribe in Premiere|sequence-status__detail/);
 });
 
@@ -67,4 +67,18 @@ test('compact mode preserves save feedback and synthetic-demo disclosure', () =>
   assert.match(view({ session: ready, saveStatus: 'Saving changes…' }), /Saving…/);
   assert.match(view({ session: ready, saveStatus: 'Save failed' }), /Save failed/);
   assert.match(view({ session: ready, isDemo: true }), /Browser demo · Synthetic captions\. Native actions require Premiere\./);
+});
+
+
+test('header counts rendered lines across storage containers',()=>{
+ const state=session();state.captions=[{id:'one',words:[],renderSegments:[{id:'line1'},{id:'line2'}]},{id:'two',words:[],renderSegments:[{id:'line2'},{id:'line3'}]}];
+ assert.match(view({session:state}),/>3 lines</);
+});
+
+
+test('sequence count includes derived pause lines and saved deletions',()=>{
+ const state=session({captions:[{id:'one',text:'Before.',startTime:0,endTime:1,words:[{text:'Before.',startTime:0,endTime:1}]},{id:'two',text:'After.',startTime:5,endTime:6,words:[{text:'After.',startTime:5,endTime:6}]}]});
+ assert.match(view({session:state,pauseSettings:{blankLineSeconds:1,visibleLines:3}}),/>5 lines</);
+ state.captions[1].words[0].pauseLinesRemoved=2;
+ assert.match(view({session:state,pauseSettings:{blankLineSeconds:1,visibleLines:3}}),/>3 lines</);
 });

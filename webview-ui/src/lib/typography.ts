@@ -5,9 +5,11 @@ export function transformCaptionText(text: string, transform: TextTransform, pre
   if (transform === 'uppercase') return text.toUpperCase();
   if (transform === 'lowercase') return text.toLowerCase();
   if (transform !== 'titlecase') return text;
-  const title = (value: string) => value.toLowerCase().replace(
+  // Capitalize lowercase words only. A word that already has a capital keeps
+  // its casing so acronyms (NASA) and brands (JunkYourVehicle.Net, iPhone) survive.
+  const title = (value: string) => value.replace(
     /[\p{L}\p{N}][\p{L}\p{N}\p{M}]*(?:['’][\p{L}\p{N}\p{M}]+)*/gu,
-    word => word.replace(/\p{L}/u, letter => letter.toUpperCase()),
+    word => /\p{Lu}/u.test(word) ? word : word.replace(/\p{L}/u, letter => letter.toUpperCase()),
   );
   // A wrapped fragment keeps its place in the original word. Starting a new
   // visual line must not capitalize the middle of an existing word.

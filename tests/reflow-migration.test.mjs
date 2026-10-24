@@ -11,6 +11,9 @@ vm.runInNewContext(transpile(readFileSync(new URL('../webview-ui/src/lib/program
 const { legacyMotionBaseline, legacyMotionIdentity, startProgramMonitorWatcher } = loaded;
 const liveOutput = {};
 vm.runInNewContext(transpile(readFileSync(new URL('../webview-ui/src/lib/live-output.ts', import.meta.url), 'utf8')), { exports: liveOutput });
+const edit = {}, typing = {};
+vm.runInNewContext(transpile(readFileSync(new URL('../webview-ui/src/lib/transcript/edit.ts', import.meta.url), 'utf8')), { exports: edit });
+vm.runInNewContext(transpile(readFileSync(new URL('../webview-ui/src/lib/transcript/typing.ts', import.meta.url), 'utf8')), { exports: typing, require: () => edit });
 const connections = {};
 vm.runInNewContext(transpile(readFileSync(new URL('../webview-ui/src/lib/clip-connections.ts', import.meta.url), 'utf8')), { exports: connections, require: () => ({ MAX_NATIVE_CARRIER_BYTES: 16 * 1024 * 1024 }) });
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -54,6 +57,7 @@ function harness(t, options = {}) {
       if (name === './lib/program-monitor') return loaded;
       if (name === './lib/live-output') return liveOutput;
       if (name === './lib/clip-connections') return connections;
+      if (name === './lib/transcript/typing') return typing;
       return {};
     }
   });

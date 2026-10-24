@@ -7,14 +7,19 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import * as timing from '../webview-ui/src/lib/transcript/timing.ts';
+import * as numericInput from '../webview-ui/src/lib/numeric-input.ts';
+import * as scrubbableNumber from '../webview-ui/src/lib/scrubbable-number.ts';
 import * as edit from '../webview-ui/src/lib/transcript/edit.ts';
 import * as parser from '../webview-ui/src/lib/transcript/parser.ts';
 import * as segments from '../webview-ui/src/lib/transcript/segments.ts';
+import * as lines from '../webview-ui/src/lib/transcript/lines.ts';
 import * as types from '../webview-ui/src/lib/types.ts';
+import * as typingModule from '../webview-ui/src/lib/transcript/typing.ts';
+import * as pauseLines from '../webview-ui/src/lib/native-effect/pause-lines.ts';
 
 const require = createRequire(new URL('../webview-ui/package.json', import.meta.url));
 const { compile } = require('svelte/compiler'), ts = require('typescript');
-const urls = Object.fromEntries(['WordTimeline', 'TranscriptPreview'].map(name => [name, new URL(`../webview-ui/src/components/${name}.svelte`, import.meta.url)]));
+const urls = Object.fromEntries(['WordTimeline', 'TranscriptPreview', 'ScrubbableNumber'].map(name => [name, new URL(`../webview-ui/src/components/${name}.svelte`, import.meta.url)]));
 const sources = Object.fromEntries(Object.entries(urls).map(([name, url]) => [name, readFileSync(url, 'utf8')]));
 const compiled = Object.fromEntries(Object.entries(sources).map(([name, source]) => {
   const result = compile(source, { generate: 'server', filename: `${name}.svelte` });
@@ -26,7 +31,7 @@ after(() => rmSync(folder, { recursive: true, force: true }));
 symlinkSync(fileURLToPath(new URL('../webview-ui/node_modules', import.meta.url)), join(folder, 'node_modules'), 'dir');
 for (const [name, result] of Object.entries(compiled)) {
   const code = result.js.code.replace(/from (["'])(\.\.?\/[^"']+)\1/g, (_match, quote, specifier) => {
-    const target = specifier.endsWith('.svelte') ? './WordTimeline.mjs' : new URL(specifier.endsWith('.ts') ? specifier : `${specifier}.ts`, urls[name]).href;
+    const target = specifier.endsWith('.svelte') ? './' + specifier.split('/').at(-1).replace('.svelte', '.mjs') : new URL(specifier.endsWith('.ts') ? specifier : `${specifier}.ts`, urls[name]).href;
     return `from ${quote}${target}${quote}`;
   });
   writeFileSync(join(folder, `${name}.mjs`), code);
@@ -90,11 +95,17 @@ function controller(name, props, extension) {
   vm.runInNewContext(transpile(script + extension), {
     exports: output, Error, Math, JSON, setTimeout, clearTimeout, $props: () => props, $state: value => value, $effect: effect => effects.push(effect),
     require(specifier) {
-      if (specifier === 'svelte') return { tick: async () => {}, onDestroy: callback => destructors.push(callback) };
+      if (specifier === 'svelte') return { tick: async () => {}, onDestroy: callback => destructors.push(callback), untrack: fn => fn() };
       if (specifier.endsWith('/transcript/timing')) return timing;
+      if (specifier.endsWith('/numeric-input')) return numericInput;
+      if (specifier.endsWith('/scrubbable-number')) return scrubbableNumber;
+      if (specifier.endsWith('/control-scroll-lock')) return { lockControlScroll: () => () => {} };
       if (specifier.endsWith('/transcript/edit')) return edit;
       if (specifier.endsWith('/transcript/parser')) return parser;
       if (specifier.endsWith('/transcript/segments')) return segments;
+      if (specifier.endsWith('/transcript/lines')) return lines;
+      if (specifier.endsWith('/transcript/typing')) return typingModule;
+      if (specifier.endsWith('/native-effect/pause-lines')) return pauseLines;
       if (specifier.endsWith('/types')) return types;
       return {};
     },
@@ -117,15 +128,19 @@ function wordController(caption = cue(), fps = 24, selectedWord = 1, options = {
 }
 function transcriptController(captions = [cue()], fps = 24, options = {}) {
   let h;
-  const changes = [], selections = [], seeks = [];
+  const changes = [], selections = [], seeks = [], labels = [];
   h = controller('TranscriptPreview', { ...transcriptProps(captions), ...options, frameRate: fps,
-    onUpdate: value => { changes.push(clone(value)); h.setCaptions(value); }, onSelect: value => selections.push(value), onSeek: value => seeks.push(value) }, `
-    export { beginTextEdit, saveInlineText, cancelTextEdit, textKeydown, textCaretOffset, focusTextEditor, beginTimingEdit, inputCaptionTime, saveInlineTiming, cancelTimingEdit, timingBlur, timingKeydown, timingRange, updateCaption, splitCaption, mergeNext, choose, undo };
+    onUpdate: (value, label) => { changes.push(clone(value)); labels.push(label); h.setCaptions(value); }, onSelect: value => { selections.push(value); h.setSelectedId(value); }, onSeek: value => seeks.push(value) }, `
+    export { wordBoundaryAtCaret, trackTextCaret, changeCharacterLimit, beginTextEdit, saveInlineText, cancelTextEdit, textKeydown, textCaretOffset, focusTextEditor, beginTimingEdit, inputCaptionTime, saveInlineTiming, cancelTimingEdit, timingBlur, timingKeydown, timingRange, updateCaption, splitCaption, mergeNext, choose };
     export function setCaptions(value) { captions = value; }
+    export function setSelectedId(value) { selectedId = value; }
     export function setDraft(value) { draftText = value; }
-    export function inspect() { return { rows: sentenceRows, captions, editingRowKey, editingError, editingCaret, timingRowKey, timingError, draftStart, draftEnd, canUndo, selectedWordOffset, error }; }
+    export { choosePause, deletePause };
+    export function setQuery(value) { query = value; }
+    export function setPauseSettings(value) { pauseSettings = value; }
+    export function inspect() { return { rows: sentenceRows, allRows: transcriptRows, filteredRows, pauses: pauseRows, selectedPause, selectedLane, sentenceCount, captions, editingRowKey, editingError, editingCaret, caretSplitIndex, timingRowKey, timingError, draftStart, draftEnd, selectedWordOffset, selectedLine: selectedRow, error, draftText }; }
   `);
-  return { ...h, changes, selections, seeks };
+  return { ...h, changes, selections, seeks, labels };
 }
 const numericEvent = value => ({ currentTarget: { valueAsNumber: value, value: String(value) } });
 const keyEvent = (key, extra = {}) => ({ key, preventDefault() {}, ...extra });
@@ -151,11 +166,11 @@ function wheelFixture(width = 280) {
 test('real transcript SSR shows each sentence once with one word lane and no redundant controls', () => {
   const html = render(TranscriptPreview, { props: transcriptProps() }).body;
   assert.equal((html.match(/one two three/g) ?? []).length, 1);
-  assert.equal((html.match(/aria-label="Selected sentence word timing"/g) ?? []).length, 1);
-  assert.match(html, /aria-label="Edit caption 1 text"/);
-  assert.match(html, /aria-label="Edit caption 1 start time"/);
-  assert.match(html, /aria-label="Edit caption 1 end time"/);
-  assert.doesNotMatch(html, /Show in Premiere|Edit caption text|Save text|Save caption timing|<summary>Caption timing|<summary>Split &amp; merge|<summary>Split & merge|Split clip before word|word-timing__phrase|Drag edges or use arrows|Word timing playhead|type="range"|>−1f<|>\+1f<|>Set</);
+  assert.equal((html.match(/aria-label="Selected line word timing"/g) ?? []).length, 1);
+  assert.match(html, /aria-label="Edit line 1 text"/);
+  assert.match(html, /aria-label="Edit line 1 start time"/);
+  assert.match(html, /aria-label="Edit line 1 end time"/);
+  assert.doesNotMatch(html, /Show in Premiere|Edit caption text|Save text|Save caption timing|<summary>Caption timing|<summary>Split &amp; merge|<summary>Split & merge|Split line before word|word-timing__phrase|Drag edges or use arrows|Word timing playhead|type="range"|>−1f<|>\+1f<|>Set</);
   assert.equal((html.match(/role="slider"/g) ?? []).length, 6, 'Both edges are reachable for all three words');
 });
 
@@ -274,7 +289,7 @@ test('an unselected word starts and completes an edge drag in the same gesture',
   assert.equal(listeners.size, 0); assert.deepEqual(h.seeks, [], 'Dragging does not add an unrelated seek');
 });
 
-test('edge keyboard edits target an unselected word and pointer cancellation creates no Undo point', () => {
+test('edge keyboard edits target an unselected word and pointer cancellation creates no edit', () => {
   const h = wordController(cue(), 24, 0);
   h.keyboard(keyEvent('ArrowRight'), 'startTime', 2);
   assert.equal(h.changes[0].words[2].startTime, 61 / 24);
@@ -289,7 +304,7 @@ test('edge keyboard edits target an unselected word and pointer cancellation cre
   assert.equal(h.changes.length, 2);
 });
 
-test('inline text commits once, preserves timed native links and remains undoable', () => {
+test('inline text commits once, preserves timed native links', () => {
   const h = transcriptController(), row = h.inspect().rows[0], original = clone(row.caption);
   h.beginTextEdit(row); h.setDraft('One TWO three');
   assert.equal(h.saveInlineText(row), true);
@@ -298,7 +313,6 @@ test('inline text commits once, preserves timed native links and remains undoabl
   assert.equal(h.changes[0][0].text, 'One TWO three');
   assert.deepEqual(h.changes[0][0].words.map(word => [word.startTime, word.endTime]), original.words.map(word => [word.startTime, word.endTime]));
   assert.equal(h.changes[0][0].clipNodeId, original.clipNodeId); assert.deepEqual(h.changes[0][0].position, original.position);
-  h.undo(); assert.equal(h.changes.length, 2); assert.deepEqual(h.changes[1][0], original);
 });
 
 test('inline text Escape cancels, blank drafts cannot save, and stale reads cannot overwrite newer timing', () => {
@@ -364,13 +378,12 @@ test('inline timestamp editing keeps untouched times exact and commits one frame
   edit.validateCaptions(h.changes[0]);
 });
 
-test('word timing still enters the transcript Undo path as one completed edit', () => {
+test('word timing enters the transcript as one completed edit', () => {
   const transcript = transcriptController(), original = clone(transcript.inspect().captions[0]);
   const words = wordController(original);
   words.inputTime('startTime', numericEvent(31 / 24));
   transcript.updateCaption(words.changes[0], 'Word timing saved.');
   assert.equal(transcript.changes.length, 1); assert.equal(transcript.changes[0][0].words[1].startTime, 31 / 24);
-  transcript.undo(); assert.deepEqual(transcript.changes[1][0], original);
 });
 
 test('inline timestamp Enter and Escape stay separate from text drafts, and overlap is rejected', () => {
@@ -378,12 +391,11 @@ test('inline timestamp Enter and Escape stay separate from text drafts, and over
     words: cue().words.map(word => ({ ...word, startTime: word.startTime + 4, endTime: word.endTime + 4 })) };
   const h = transcriptController([first, second]), row = h.inspect().rows[0];
   h.beginTimingEdit(row, 'endTime'); h.inputCaptionTime('endTime', numericEvent(5));
-  assert.equal(h.saveInlineTiming(row), false); assert.equal(h.changes.length, 0); assert.match(h.inspect().timingError, /overlaps/);
+  assert.equal(h.saveInlineTiming(row), false); assert.equal(h.changes.length, 0); assert.match(h.inspect().timingError, /overlap/);
   h.timingKeydown(keyEvent('Escape'), row); assert.equal(h.inspect().timingRowKey, null);
   h.beginTimingEdit(row, 'endTime'); h.inputCaptionTime('endTime', numericEvent(first.endTime - 1 / 24));
   h.timingKeydown(keyEvent('Enter'), row); h.saveInlineTiming(row);
   assert.equal(h.changes.length, 1); assert.equal(h.changes[0][0].endTime, first.endTime - 1 / 24);
-  h.undo(); assert.deepEqual(h.changes[1][0], first);
 });
 
 test('a blank caption timestamp remains an invalid draft and cannot erase saved timing', () => {
@@ -395,44 +407,67 @@ test('a blank caption timestamp remains an invalid draft and cannot erase saved 
   assert.equal(h.saveInlineTiming(row), true); assert.equal(h.changes.length, 0);
 });
 
-test('real SSR integrates compact Split and Merge actions with first-word and native-link guards', () => {
+test('real SSR enables line operations independently of storage links', () => {
   const caption = unlinked(cue()), props = transcriptProps([caption]);
   const button = (html, label) => html.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`))[0];
   const first = render(TranscriptPreview, { props: { ...props, selectedWord: 0 } }).body;
-  assert.match(button(first, 'Split clip before selected word'), /disabled/);
+  assert.match(button(first, 'Split line before selected word'), /disabled/);
   const interior = render(TranscriptPreview, { props: { ...props, selectedWord: 1 } }).body;
-  assert.doesNotMatch(button(interior, 'Split clip before selected word'), /disabled/);
-  assert.match(interior, /title="Split clip before “two”"/);
-  assert.match(button(interior, 'Merge with next caption'), /disabled/);
-  assert.doesNotMatch(interior, /Split &amp; merge|Split & merge|Split clip before word/);
+  assert.doesNotMatch(button(interior, 'Split line before selected word'), /disabled/);
+  assert.match(interior, /title="Split line before “two”"/);
+  assert.match(button(interior, 'Merge with next line'), /disabled/);
+  assert.doesNotMatch(interior, /Split &amp; merge|Split & merge|Split line before word/);
   const linked = render(TranscriptPreview, { props: { ...transcriptProps(), selectedWord: 1 } }).body;
-  assert.match(button(linked, 'Split clip before selected word'), /disabled/);
-  assert.match(linked, /Razor tool/);
+  assert.doesNotMatch(button(linked, 'Split line before selected word'), /disabled/);
+  assert.doesNotMatch(linked, /Razor tool/);
   const next = unlinked(cue()); next.id = 'next'; next.startTime = 4; next.endTime = 7.75; next.words = next.words.map(word => ({ ...word, startTime: word.startTime + 4, endTime: word.endTime + 4 }));
-  assert.doesNotMatch(button(render(TranscriptPreview, { props: transcriptProps([caption, next]) }).body, 'Merge with next caption'), /disabled/);
+  assert.doesNotMatch(button(render(TranscriptPreview, { props: transcriptProps([caption, next]) }).body, 'Merge with next line'), /disabled/);
   next.clipNodeId = 'applied-next';
-  assert.match(button(render(TranscriptPreview, { props: transcriptProps([caption, next]) }).body, 'Merge with next caption'), /disabled/);
+  assert.doesNotMatch(button(render(TranscriptPreview, { props: transcriptProps([caption, next]) }).body, 'Merge with next line'), /disabled/);
 });
 
-test('the lane splits before its selected word using the sentence offset, with one Undo point', () => {
+test('the lane splits before its selected word using the sentence offset, as one edit', () => {
   const caption = unlinked(cue()); caption.words = ['one', 'two', 'three', 'four', 'five', 'six'].map((text, i) => ({ text, startTime: i * 30 / 24, endTime: (i + 1) * 30 / 24 }));
   caption.text = caption.words.map(word => word.text).join(' '); caption.endTime = 180 / 24; caption.captionBundle = true;
   caption.renderSegments = [0, 3].map(start => ({ id: `segment-${start}`, text: caption.words.slice(start, start + 3).map(word => word.text).join(' '), words: caption.words.slice(start, start + 3), startTime: caption.words[start].startTime, endTime: caption.words[start + 2].endTime }));
   const transcript = transcriptController([caption]), row = transcript.inspect().rows[1];
   transcript.choose(row);
-  assert.equal(transcript.inspect().selectedWordOffset, 3);
-  const lane = wordController({ ...caption, ...row.segment }, 24, 1, { wordOffset: transcript.inspect().selectedWordOffset, onSplitBefore: transcript.splitCaption });
+  assert.equal(transcript.inspect().selectedWordOffset, 2, 'The lane starts at the previous line\'s last word');
+  const lane = wordController(segments.captionSegmentLane(caption, row.segment).caption, 24, 2, { wordOffset: transcript.inspect().selectedWordOffset, onSplitBefore: transcript.splitCaption });
   lane.splitSelected();
   assert.equal(transcript.changes.length, 1);
-  const [left, right] = transcript.changes[0];
-  assert.deepEqual(left.words.map(word => word.text), ['one', 'two', 'three', 'four']);
-  assert.deepEqual(right.words.map(word => word.text), ['five', 'six']);
-  assert.equal(left.id, caption.id); assert.notEqual(right.id, caption.id);
-  assert.equal(left.manualSplit, true); assert.equal(right.manualSplit, true);
-  assert.equal(left.endTime, right.startTime); assert.deepEqual(right.position, caption.position);
-  assert.equal(transcript.selections.at(-1), right.id, 'The selected word stays in the newly split right clip');
+  const [stored] = transcript.changes[0], rows = lines.transcriptLines(transcript.changes[0]);
+  assert.equal(transcript.changes[0].length, 1, 'Split is a line break, preserving storage');
+  assert.deepEqual(rows.map(row => lines.transcriptLineCaption(transcript.changes[0], row).text), ['one two three', 'four', 'five six']);
+  assert.equal(stored.id, caption.id);
+  assert.deepEqual(stored.words.map(word => [word.text, word.startTime, word.endTime]), caption.words.map(word => [word.text, word.startTime, word.endTime]));
+  assert.equal(stored.words[4].lineBreakBefore, 'break');
+  assert.equal(transcript.selections.at(-1), caption.id);
   edit.validateCaptions(transcript.changes[0]);
-  transcript.undo(); assert.deepEqual(transcript.changes[1], [caption]);
+});
+
+test('a line\'s last word can be retimed past the line ending into the next line', () => {
+  const caption = cue(); caption.words = ['one', 'two', 'three', 'four', 'five', 'six'].map((text, i) => ({ text, startTime: i * 30 / 24, endTime: (i + 1) * 30 / 24 - (i === 2 ? 12 / 24 : 0), isActive: false }));
+  caption.text = caption.words.map(word => word.text).join(' '); caption.startTime = 0; caption.endTime = 180 / 24; caption.captionBundle = true;
+  caption.renderSegments = [0, 3].map(start => ({ id: `segment-${start}`, text: caption.words.slice(start, start + 3).map(word => word.text).join(' '), words: caption.words.slice(start, start + 3), startTime: caption.words[start].startTime, endTime: caption.words[start + 2].endTime }));
+  const transcript = transcriptController([caption]), row = transcript.inspect().rows[0];
+  transcript.choose(row);
+  const lane = segments.captionSegmentLane(caption, row.segment);
+  assert.deepEqual([lane.start, lane.end, lane.focusStart, lane.focusEnd], [0, 4, 0, 3]);
+  assert.deepEqual(lane.caption.words.map(word => word.text), ['one', 'two', 'three', 'four']);
+  assert.equal(lane.caption.endTime, caption.words[3].endTime);
+  const words = wordController(lane.caption, 24, 2);
+  words.keyboard(keyEvent('End'), 'endTime', 2);
+  assert.equal(words.changes[0].words[2].endTime, caption.words[3].startTime, 'The last word reaches the next line\'s first word');
+  transcript.updateCaption(words.changes[0], 'Word timing saved.');
+  assert.equal(transcript.changes.length, 1);
+  assert.equal(transcript.changes[0][0].words[2].endTime, 90 / 24);
+  assert.deepEqual(transcript.changes[0][0].words.slice(3), caption.words.slice(3));
+  assert.equal(transcript.changes[0][0].endTime, caption.endTime);
+  edit.validateCaptions(transcript.changes[0]);
+  const html = render(WordTimeline, { props: { ...wordProps(lane.caption, 24), selectedWord: 2, focusStart: lane.focusStart, focusEnd: lane.focusEnd } }).body;
+  assert.match(html, /aria-label="four, next line,/);
+  assert.equal((html.match(/word-timing__word--neighbour/g) ?? []).length, 1);
 });
 
 test('compact actions refuse protected or disabled changes even when called directly', () => {
@@ -442,24 +477,29 @@ test('compact actions refuse protected or disabled changes even when called dire
   const protectedLane = wordController(cue(), 24, 1, { splitDisabled: true, onSplitBefore: () => splits++, mergeDisabled: true, onMergeNext: () => merges++ });
   protectedLane.splitSelected(); protectedLane.mergeSelected(); assert.equal(splits, 0); assert.equal(merges, 0);
   const protectedTranscript = transcriptController();
-  protectedTranscript.splitCaption(1); assert.equal(protectedTranscript.changes.length, 0); assert.match(protectedTranscript.inspect().error, /keyframes stay/);
+  protectedTranscript.splitCaption(1); assert.equal(protectedTranscript.changes.length, 1); assert.equal(protectedTranscript.changes[0][0].clipNodeId, cue().clipNodeId);
   const disabled = transcriptController([unlinked(cue())], 24, { disabled: true });
   disabled.splitCaption(1); disabled.mergeNext(); assert.equal(disabled.changes.length, 0);
   const invalid = transcriptController([unlinked(cue())]);
   invalid.splitCaption(0); assert.equal(invalid.changes.length, 0); assert.match(invalid.inspect().error, /interior word/);
 });
 
-test('compact Merge retains its existing native-link protection and Undo behavior', () => {
+test('compact Merge joins lines across storage without removing native links', () => {
   const first = cue(), next = unlinked(cue()); next.id = 'next'; next.startTime = 4; next.endTime = 7.75;
   next.words = next.words.map(word => ({ ...word, startTime: word.startTime + 4, endTime: word.endTime + 4 }));
-  const transcript = transcriptController([first, next]);
-  const lane = wordController(first, 24, 1, { onMergeNext: transcript.mergeNext });
-  lane.mergeSelected(); assert.equal(transcript.changes.length, 1); assert.equal(transcript.changes[0].length, 1);
-  assert.equal(transcript.changes[0][0].clipNodeId, first.clipNodeId); assert.equal(transcript.changes[0][0].endTime, next.endTime);
-  transcript.undo(); assert.deepEqual(transcript.changes[1], [first, next]);
-  next.clipNodeId = 'protected-next';
-  const protectedTranscript = transcriptController([first, next]);
-  protectedTranscript.mergeNext(); assert.equal(protectedTranscript.changes.length, 0); assert.match(protectedTranscript.inspect().error, /already linked/);
+  for (const linked of [false, true]) {
+    if (linked) next.clipNodeId = 'linked-next';
+    const transcript = transcriptController([first, next]);
+    const lane = wordController(first, 24, 1, { onMergeNext: transcript.mergeNext });
+    lane.mergeSelected();
+    assert.equal(transcript.changes.length, 1); assert.equal(transcript.changes[0].length, 2);
+    assert.equal(transcript.changes[0][0].clipNodeId, first.clipNodeId);
+    assert.equal(transcript.changes[0][1].clipNodeId, next.clipNodeId);
+    const rows = lines.transcriptLines(transcript.changes[0]);
+    assert.equal(rows.length, 1);
+    assert.equal(lines.transcriptLineCaption(transcript.changes[0], rows[0]).text, 'one two three one two three');
+    assert.deepEqual(transcript.changes[0].flatMap(c => c.words).map(w => [w.text,w.startTime,w.endTime]), [first,next].flatMap(c => c.words).map(w => [w.text,w.startTime,w.endTime]));
+  }
 });
 
 test('whole-word drag in free space preserves duration, keeps neighbors fixed and suppresses its trailing seek', () => {
@@ -548,17 +588,23 @@ test('a completed timing drag preserves concurrent placement and word-style meta
   assert.equal(h.changes[0].words[1].startTime, 31 / 24);
 });
 
-test('native smart line fit remains an accessible option and retains the fixed limit while enabled',()=>{
- const props={...transcriptProps(),smartLineFit:true,smartCharacterCapacity:24,onSmartLineFitChange(){}};
+test('smart line fit is a button that reports the measured estimate beside an always-editable limit',()=>{
+ const calls=[];
+ const props={...transcriptProps(),lineFitCapacity:24,onSmartLineFit(){calls.push(1);}};
  const html=render(TranscriptPreview,{props}).body;
- assert.match(html,/Smart line fit/);assert.match(html,/<input[^>]*type="checkbox"[^>]*checked/);
- assert.match(html,/<input[^>]*type="number"[^>]*value="24"[^>]*readonly/);
- assert.match(html,/Characters per line \(estimated\)/);
- const manual=render(TranscriptPreview,{props:{...props,smartLineFit:false}}).body;
- assert.match(manual,/<input[^>]*type="number"[^>]*value="50"/);
+ assert.match(html,/<button type="button" class="caption-button transcript-editor__smart-fit[^"]*"[^>]*>Smart line fit<\/button>/);
  assert.match(html,/5% safety margin/);
- const fixed=render(TranscriptPreview,{props:{...props,smartLineFit:false}}).body;
- assert.match(fixed,/50 characters/);assert.doesNotMatch(fixed,/<input[^>]*type="number"[^>]*value="50"[^>]*disabled/);
+ assert.doesNotMatch(html,/type="checkbox"|readonly|Characters per line \(estimated\)|Undo edit/);
+ assert.match(html,/<button[^>]*aria-label="Characters per line"[^>]*aria-valuenow="50"/);
+ assert.match(html,/50 characters/);
+ // Without a measurement the button stays clickable, so the click can explain why.
+ const unavailable=render(TranscriptPreview,{props:{...props,lineFitCapacity:null}}).body;
+ assert.match(unavailable,/<button[^>]*transcript-editor__smart-fit[^>]*>Smart line fit<\/button>/);
+ assert.doesNotMatch(unavailable,/<button[^>]*transcript-editor__smart-fit[^>]*disabled/);
+ const locked=render(TranscriptPreview,{props:{...props,disabled:true}}).body;
+ assert.match(locked,/<button[^>]*transcript-editor__smart-fit[^>]*disabled/);
+ const noHandler=render(TranscriptPreview,{props:{...props,onSmartLineFit:undefined}}).body;
+ assert.match(noHandler,/Smart line fit/,'the button is always part of the grouping section');
 });
 
 
@@ -583,4 +629,389 @@ test('pending inline drafts keep native reconnect paused until saved or cancelle
   assert.equal(states.at(-1),true,'invalid timing keeps reconnect paused');
   h.destroyComponent();
   assert.equal(states.at(-1),false,'unmount clears the parent guard');
+});
+
+
+test('character limit changes immediately without a separate regroup action', () => {
+  const changes = [];
+  const h = transcriptController([cue()], 24, { onMaxCharsChange: value => changes.push(value) });
+  h.changeCharacterLimit(24); h.changeCharacterLimit(30);
+  assert.deepEqual(changes, [24, 30]);
+  const html = render(TranscriptPreview, { props: transcriptProps() }).body;
+  assert.match(html, /role="spinbutton"[^>]*aria-label="Characters per line"|role="spinbutton"[^>]*aria-valuemin="15"/);
+  assert.match(html, /aria-valuemin="15"[^>]*aria-valuemax="150"/);
+  assert.doesNotMatch(html, />Regroup<|Apply the character limit/);
+});
+
+function characterScrubber(options = {}) {
+  const changes = [];
+  const h = controller('ScrubbableNumber', { label: 'Characters per line', value: 30, min: 15, max: 150, step: 1, decimals: 0,
+    inputRealtime: true, defaultValue: 56, onChange: value => changes.push(value), ...options }, `
+    export { edit, inputValue, commit, inputKeyDown, pointerDown, pointerMove, finishPointer, click, resetControl, resetGesture };
+    export function inspect() { return { editing, draft }; }
+    export function setDraft(value) { draft = value; }
+  `);
+  return { ...h, changes };
+}
+
+test('character typing publishes valid drafts immediately and keeps incomplete drafts editable', async () => {
+  const h = characterScrubber(); await h.edit();
+  for (const value of ['1', '15', '150', '', '-', '12.5', '151', '45']) h.inputValue({ currentTarget: { value } });
+  assert.deepEqual(h.changes, [15, 150, 45]);
+  h.setDraft('45'); h.commit(); assert.deepEqual(h.changes, [15, 150, 45], 'blur does not publish the last input twice');
+  const legacy = characterScrubber({ value: 253 }); await legacy.edit(); legacy.commit();
+  assert.deepEqual(legacy.changes, [], 'opening and leaving a legacy value does not clamp it');
+});
+
+test('character dragging and keyboard nudges update immediately within 15 to 150', async () => {
+  const h = characterScrubber();
+  const event = { button: 0, pointerId: 1, clientX: 100, preventDefault() {} };
+  h.pointerDown(event); h.pointerMove({ ...event, clientX: 110 }); h.pointerMove({ ...event, clientX: 500 }); h.pointerMove({ ...event, clientX: -100 }); h.finishPointer();
+  assert.deepEqual(h.changes, [40, 150, 15]);
+  const keys = characterScrubber(); await keys.edit();
+  keys.inputKeyDown({ key: 'ArrowUp', preventDefault() {} }); keys.commit();
+  assert.deepEqual(keys.changes, [31], 'input and commit publish one nudge');
+  for (const key of ['Delete', 'Backspace', 'ArrowLeft', 'ArrowRight']) {
+    let prevented = false; keys.inputKeyDown({ key, preventDefault() { prevented = true; } });
+    assert.equal(prevented, false, key);
+  }
+});
+
+test('caption grouping stays visible without an accordion or explanatory paragraphs', () => {
+  for (const linked of [false, true]) for (const withSmartFit of [false, true]) {
+    const caption = cue();
+    if (!linked) delete caption.clipNodeId;
+    const html = render(TranscriptPreview, { props: { ...transcriptProps([caption]), lineFitCapacity: 24, ...(withSmartFit ? { onSmartLineFit() {} } : {}) } }).body;
+    const grouping = html.match(/<section[^>]*aria-label="Caption grouping"[^>]*>([\s\S]*?)<\/section>/)?.[1];
+    assert.ok(grouping, 'Grouping is an always-visible section');
+    assert.match(grouping, /<h3[^>]*>Caption grouping<\/h3>/);
+    assert.match(grouping, /\d+ characters · \d+ lines?/);
+    assert.match(grouping, /<button[^>]*transcript-editor__smart-fit[^>]*>Smart line fit<\/button>/);
+    assert.doesNotMatch(grouping, />Regroup</);
+    assert.match(grouping, /role="spinbutton"/);
+    assert.doesNotMatch(grouping, /readonly|type="checkbox"/);
+    assert.doesNotMatch(grouping, /<details|<summary|caption-help|Includes spaces|A word longer|Regroup splits|Keyframes stay|Fits the selected width/);
+  }
+  const hidden = render(TranscriptPreview, { props: { ...transcriptProps(), groupingDisabled: true } }).body;
+  assert.doesNotMatch(hidden, /aria-label="Caption grouping"/);
+});
+
+
+function gestureNode() {
+  const node = new EventTarget();
+  const emit = (type, properties = {}) => {
+    const event = new Event(type, { cancelable: true });
+    Object.assign(event, { button: 0, isPrimary: true, pointerType: 'mouse', clientX: 100, clientY: 100, ...properties });
+    node.dispatchEvent(event); return event;
+  };
+  return { node, emit };
+}
+
+test('double-click survives immediate button to input swap and resets exactly once', async () => {
+  const h = characterScrubber(), dom = gestureNode(), action = h.resetGesture(dom.node);
+  dom.emit('pointerdown'); h.click({ detail: 1 });
+  assert.equal(h.inspect().editing, true, 'single click starts typing immediately');
+  h.setDraft('120');
+  assert.equal(dom.emit('pointerdown').defaultPrevented, true, 'second press resets even after input replaced button');
+  assert.deepEqual(h.changes, [56]);
+  assert.equal(dom.emit('click').defaultPrevented, true);
+  assert.equal(dom.emit('dblclick').defaultPrevented, true, 'native double-click cannot reset again');
+  h.commit(); assert.deepEqual(h.changes, [56], 'no stale draft overwrites reset');
+  assert.equal(h.inspect().editing, false); action.destroy();
+});
+
+test('input double-click fallback cancels its draft before reset', async () => {
+  const h = characterScrubber(); await h.edit(); h.setDraft('120');
+  h.resetControl({ preventDefault() {}, stopPropagation() {} }); h.commit();
+  assert.deepEqual(h.changes, [56]); assert.equal(h.inspect().editing, false);
+});
+
+test('dragging, distant clicks and disabled values cannot accidentally reset', () => {
+  const h = characterScrubber(), dom = gestureNode(), action = h.resetGesture(dom.node);
+  const event = { button: 0, pointerId: 1, clientX: 100, preventDefault() {} };
+  dom.emit('pointerdown'); h.pointerDown(event); dom.emit('pointermove', { clientX: 110 }); h.pointerMove({ ...event, clientX: 110 }); h.finishPointer(); h.click({ detail: 1 });
+  h.resetControl({ preventDefault() {}, stopPropagation() {} }); assert.deepEqual(h.changes, [40]);
+  dom.emit('pointerdown', { clientX: 150 }); assert.deepEqual(h.changes, [40]); action.destroy();
+  const disabled = characterScrubber({ disabled: true });
+  disabled.click({ detail: 1 }); disabled.resetControl({ preventDefault() {}, stopPropagation() {} });
+  assert.deepEqual(disabled.changes, []); assert.equal(disabled.inspect().editing, false);
+});
+
+test('reset callback takes precedence over a numeric default', async () => {
+  let resets = 0;
+  const h = characterScrubber({ onReset: () => resets++ }); await h.edit(); h.setDraft('120');
+  h.resetControl({ preventDefault() {}, stopPropagation() {} }); h.commit();
+  assert.equal(resets, 1); assert.deepEqual(h.changes, []);
+});
+
+test('non-reset fields edit immediately and gesture cleanup removes reset listeners', () => {
+  const plain = characterScrubber({ defaultValue: undefined }); plain.click({ detail: 1 });
+  assert.equal(plain.inspect().editing, true);
+  const h = characterScrubber(), dom = gestureNode(), action = h.resetGesture(dom.node);
+  dom.emit('pointerdown'); action.destroy(); dom.emit('pointerdown'); assert.deepEqual(h.changes, []);
+});
+
+
+test('focused text caret overrides lane selection and splits edited text as one change', () => {
+  const original = unlinked(cue());
+  const h = transcriptController([original]);
+  h.beginTextEdit(h.inspect().rows[0]);
+  h.setDraft('ONE two three');
+  h.trackTextCaret({ currentTarget: { selectionStart: 3 } });
+  assert.equal(h.inspect().caretSplitIndex, 1);
+  const lane = wordController(original, 24, 0, { caretSplitIndex: h.inspect().caretSplitIndex, onSplitBefore: h.splitCaption });
+  lane.splitSelected();
+  assert.equal(h.changes.length, 1);
+  assert.deepEqual(lines.transcriptLines(h.changes[0]).map(row => lines.transcriptLineCaption(h.changes[0], row).text), ['ONE', 'two three']);
+  assert.deepEqual(h.changes[0].flatMap(c => c.words).map(w => [w.startTime,w.endTime]), original.words.map(w => [w.startTime,w.endTime]));
+  assert.equal(h.inspect().editingRowKey, null);
+});
+
+test('caret split snaps inside words, handles whitespace, and rejects empty sides', () => {
+  const h = transcriptController([unlinked(cue())]);
+  for (const [caret, index] of [[0,0],[1,0],[2,1],[3,1],[4,1],[5,1],[6,2],[7,2],[13,3]]) {
+    assert.equal(h.wordBoundaryAtCaret('one two three', caret), index);
+  }
+  assert.equal(h.wordBoundaryAtCaret('one   two', 5), 1);
+  h.beginTextEdit(h.inspect().rows[0]);
+  h.trackTextCaret({currentTarget:{selectionStart:13}});
+  assert.equal(h.inspect().caretSplitIndex, 0);
+  wordController(unlinked(cue()),24,1,{caretSplitIndex:0,onSplitBefore:h.splitCaption}).splitSelected();
+  assert.equal(h.changes.length,0);
+  h.cancelTextEdit();
+  assert.equal(h.inspect().caretSplitIndex,null);
+});
+
+
+
+test('the shown URL caret splits after the URL and preserves the following words', () => {
+  const caption = unlinked(cue());
+  caption.words = caption.words.map((word,i) => ({...word,text:['JunkYourVehicle.Net','and','booked'][i]}));
+  caption.text = caption.words.map(word=>word.text).join(' ');
+  const h = transcriptController([caption]);
+  h.beginTextEdit(h.inspect().rows[0]);
+  h.trackTextCaret({currentTarget:{selectionStart:'JunkYourVehicle.Net'.length}});
+  h.splitCaption(h.inspect().caretSplitIndex);
+  assert.deepEqual(lines.transcriptLines(h.changes[0]).map(row => lines.transcriptLineCaption(h.changes[0], row).text),['JunkYourVehicle.Net','and booked']);
+});
+
+test('a native line editor hands typing to Premiere history steps and follows Undo while it stays open', async () => {
+  const caption = unlinked(cue()); caption.words = ['one', 'two', 'three', 'four', 'five', 'six'].map((text, i) => ({ text, startTime: i * 30 / 24, endTime: (i + 1) * 30 / 24, isActive: false }));
+  caption.text = caption.words.map(word => word.text).join(' '); caption.endTime = 180 / 24; caption.captionBundle = true;
+  const phrases = (value, starts) => starts.map((start, i) => { const words = value.words.slice(start, starts[i + 1] ?? value.words.length); return { id: `segment-${start}`, text: words.map(word => word.text).join(' '), words, startTime: words[0].startTime, endTime: words.at(-1).endTime }; });
+  caption.renderSegments = phrases(caption, [0, 3]);
+  const calls = []; let show;
+  const typing = { open: (anchor, captions, text, caret, display) => { calls.push(['open', anchor.start, anchor.suffix, text, caret]); show = display; },
+    input: (draft, caret) => calls.push(['input', draft, caret]), flush: () => calls.push(['flush']), hint: () => calls.push(['hint']), end: async mode => { calls.push(['end', mode]); } };
+  const h = transcriptController([caption], 24, { typing }), row = h.inspect().rows[1];
+  h.beginTextEdit(row);
+  assert.deepEqual(calls.at(-1), ['open', 3, 0, 'four five six', 13]);
+  // Cmd going down commits pending typing before Premiere runs the shortcut.
+  h.textKeydown(keyEvent('Meta'), row); assert.deepEqual(calls.at(-1), ['flush']);
+  assert.equal(h.inspect().editingRowKey, row.key, 'the bare Cmd key leaves the editor open');
+  // A typing step regroups the phrases; the open row stays on exactly its words.
+  const typed = clone(caption); typed.words[3].text = 'FOUR'; typed.text = typed.words.map(word => word.text).join(' '); typed.renderSegments = phrases(typed, [0, 4]);
+  h.setCaptions([typed]);
+  assert.deepEqual(clone(h.inspect().rows.map(item => [item.key, item.segment.text])), [['cue:line-0:before', 'one two three'], [row.key, 'FOUR five six']]);
+  // Premiere Undo restored an earlier step: the open draft and caret follow it.
+  show('four five', 4);
+  assert.equal(h.inspect().draftText, 'four five'); assert.equal(h.inspect().editingCaret, 4);
+  // A blank draft cannot be saved and keeps its steps.
+  h.setDraft('   ');
+  assert.equal(h.saveInlineText(h.inspect().rows[1]), false); assert.match(h.inspect().editingError, /cannot be empty/);
+  assert.equal(calls.filter(call => call[0] === 'end').length, 0);
+  // Leaving merges the steps; the component never commits the text itself.
+  h.setDraft('four five six seven');
+  assert.equal(h.saveInlineText(h.inspect().rows[1]), true);
+  assert.deepEqual(calls.at(-1), ['end', 'commit']); assert.equal(h.inspect().editingRowKey, null); assert.equal(h.changes.length, 0);
+  // Escape undoes the steps instead.
+  h.setCaptions([caption]); h.beginTextEdit(h.inspect().rows[1]); h.setDraft('four');
+  h.textKeydown(keyEvent('Escape'), h.inspect().rows[1]);
+  assert.deepEqual(calls.at(-1), ['end', 'cancel']); assert.equal(h.inspect().editingRowKey, null);
+  // Scissors merge the typing first, then split the saved text at the same word.
+  h.beginTextEdit(h.inspect().rows[1]);
+  h.splitCaption(4);
+  assert.deepEqual(calls.at(-1), ['end', 'commit']); assert.equal(h.changes.length, 0);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.changes.length, 1); assert.deepEqual(lines.transcriptLines(h.changes[0]).map(item => item.end-item.start), [3, 1, 2]);
+});
+
+test('cross-storage line merge and split each publish once and follow undo/redo snapshots without extra callbacks', () => {
+  const first = unlinked(cue()), next = unlinked(cue());
+  next.id = 'next'; next.startTime = 4; next.endTime = 7.75;
+  next.words = next.words.map(word => ({ ...word, startTime: word.startTime + 4, endTime: word.endTime + 4 }));
+  const original = [first,next], h = transcriptController(original);
+  h.mergeNext();
+  assert.equal(h.changes.length,1);
+  const merged = clone(h.changes[0]);
+  assert.equal(h.inspect().rows.length,1);
+  h.setCaptions(clone(original));
+  assert.equal(h.inspect().rows.length,2); assert.equal(h.changes.length,1, 'Undo readback creates no new edit');
+  h.setCaptions(merged);
+  assert.equal(h.inspect().rows.length,1); assert.equal(h.changes.length,1, 'Redo readback creates no new edit');
+  h.splitCaption(4);
+  assert.equal(h.changes.length,2);
+  assert.deepEqual(h.inspect().rows.map(row => lines.transcriptLineCaption(h.inspect().captions,row).text), ['one two three one','two three']);
+  assert.equal(h.selections.at(-1),'next');
+  assert.deepEqual(h.changes[1].map(c=>c.id),original.map(c=>c.id));
+  h.setCaptions(merged);
+  assert.ok(h.inspect().selectedLine, 'Undo keeps the merged line selected even though its owner is the previous storage container');
+  assert.equal(h.inspect().selectedWordOffset,-3, 'the lane maps words against the parent selected storage id after Undo');
+});
+
+test('inline timing on a later line uses adjacent speech rather than its storage start', () => {
+  const first = unlinked(cue()), next = unlinked(cue());
+  first.words[2].endTime = 3.25; first.endTime = 3.25;
+  next.id = 'next'; next.startTime = 4; next.endTime = 7.75;
+  next.words = next.words.map(word => ({ ...word, startTime: word.startTime + 4, endTime: word.endTime + 4 }));
+  const h = transcriptController([first,next]), row = h.inspect().rows[1];
+  h.beginTimingEdit(row,'startTime');
+  assert.equal(h.timingRange(row,'startTime').min,3.25);
+  h.inputCaptionTime('startTime',numericEvent(3.5));
+  assert.equal(h.saveInlineTiming(row),true);
+  assert.equal(h.changes.length,1);
+  assert.equal(h.changes[0][1].words[0].startTime,3.5);
+  assert.deepEqual(h.changes[0][0].words,first.words);
+  assert.equal(h.selections.at(-1),'next');
+});
+
+test('cross-storage typing closes through its history callback before the line merge publishes', async () => {
+  const first = unlinked(cue()), next = unlinked(cue());
+  next.id = 'next'; next.startTime = 4; next.endTime = 7.75;
+  next.words = next.words.map(word => ({ ...word, startTime: word.startTime + 4, endTime: word.endTime + 4 }));
+  const calls = [];
+  const typing = { open: anchor => calls.push(['open',anchor.transcript,anchor.start,anchor.suffix]), input() {}, flush() {}, hint() {}, end: async mode => { calls.push(['end',mode]); } };
+  const h = transcriptController([first,next],24,{typing});
+  h.beginTextEdit(h.inspect().rows[0]);
+  assert.deepEqual(calls[0],['open',true,0,3]);
+  h.mergeNext();
+  assert.deepEqual(calls.at(-1),['end','commit']);
+  assert.equal(h.changes.length,0);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(h.changes.length,1); assert.equal(h.inspect().rows.length,1);
+});
+
+test('a typing commit that rewraps the host rows still splits the full pinned editor at its caret', async () => {
+  const caption = unlinked(cue());
+  caption.words = ['one','two','three','four','five','six'].map((text,index)=>({text,startTime:index,endTime:index+.5,isActive:false}));
+  caption.text = caption.words.map(w=>w.text).join(' '); caption.endTime = 5.5;
+  let h;
+  const typing = { open() {}, input() {}, flush() {}, hint() {}, end: async () => {
+    const words = clone(caption.words); words[0].text = 'ONE';
+    const wrapped = lines.withTranscriptLines([{...caption,words,text:words.map(w=>w.text).join(' ')}], [0,2,4].map(start=>({start,end:start+2,key:'host-'+start})));
+    h.setCaptions(wrapped);
+  } };
+  h = transcriptController([caption],24,{typing});
+  h.beginTextEdit(h.inspect().rows[0]); h.setDraft('ONE two three four five six');
+  h.trackTextCaret({currentTarget:{selectionStart:'ONE two three'.length}});
+  h.splitCaption(h.inspect().caretSplitIndex);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(h.changes.length,1);
+  assert.deepEqual(lines.transcriptLines(h.changes[0]).map(row=>lines.transcriptLineCaption(h.changes[0],row).text), ['ONE two three','four five six']);
+  assert.equal(h.inspect().editingRowKey,null);
+});
+
+const pauseSettings = { blankLineSeconds: 1, visibleLines: 3 };
+function pauseFixture() {
+  const first = unlinked(cue()), next = unlinked(cue());
+  first.endTime = first.words.at(-1).endTime = 3;
+  next.id = 'next'; next.startTime = 8; next.endTime = 11.75;
+  next.words = next.words.map(word => ({ ...word, startTime: word.startTime + 8, endTime: word.endTime + 8 }));
+  return [first, next];
+}
+
+test('pause rows share transcript numbering, show muted noneditable labels and stay absent without native settings', () => {
+  const captions = pauseFixture(), props = { ...transcriptProps(captions), pauseSettings };
+  const html = render(TranscriptPreview, { props }).body;
+  assert.match(html, /50 characters · 5 lines/);
+  for (const number of [2,3,4]) {
+    assert.match(html, new RegExp(`aria-label="Select pause line ${number}"`));
+    assert.match(html, new RegExp(`aria-label="Delete pause line ${number}"`));
+    assert.doesNotMatch(html, new RegExp(`aria-label="Edit line ${number} (?:text|start time|end time)"`));
+  }
+  assert.match(html, /aria-label="Edit line 5 text"/);
+  assert.match(html, /transcript-editor__cue--pause/);
+  assert.match(html, /00:03\.00/); assert.match(html, /00:08\.00/);
+  assert.doesNotMatch(render(TranscriptPreview, { props: transcriptProps(captions) }).body, /Delete pause line/);
+  assert.doesNotMatch(render(TranscriptPreview, { props: { ...props, pauseSettings: null } }).body, /Delete pause line/);
+});
+
+test('pause selection seeks its start and hides word timing without selecting or editing speech', async () => {
+  const h = transcriptController(pauseFixture(), 24, { pauseSettings });
+  const pause = h.inspect().pauses[1];
+  await h.choosePause(pause);
+  assert.deepEqual(h.seeks, [pause.startTime]);
+  assert.deepEqual(h.selections, []); assert.deepEqual(h.changes, []);
+  assert.equal(h.inspect().selectedPause.key, pause.key);
+  assert.equal(h.inspect().selectedLane, null); assert.equal(h.inspect().editingRowKey, null);
+  h.choose(h.inspect().rows[1]);
+  assert.equal(h.inspect().selectedPause, undefined); assert.ok(h.inspect().selectedLane);
+});
+
+test('deleting a pause publishes one normal history edit, leaves all speech and neighboring times fixed, and rehydrates undo/redo', async () => {
+  const original = pauseFixture(), h = transcriptController(original, 24, { pauseSettings });
+  await h.deletePause(h.inspect().pauses[1]);
+  assert.equal(h.changes.length, 1); assert.deepEqual(h.labels, ['Delete pause line']);
+  const deleted = clone(h.changes[0]);
+  assert.equal(h.inspect().pauses.length, 2); assert.equal(h.inspect().sentenceCount, 4);
+  assert.equal(deleted[1].words[0].pauseLinesRemoved, 1);
+  const strip = values => values.map(caption => ({ ...caption, renderSegments: undefined, words: caption.words.map(({ pauseLinesRemoved, ...word }) => word) }));
+  assert.deepEqual(strip(deleted), strip(original));
+  assert.deepEqual(h.inspect().pauses.map(row => [row.startTime,row.endTime]), [[3,4],[4,8]]);
+  h.setCaptions(clone(original));
+  assert.equal(h.inspect().pauses.length, 3); assert.equal(h.inspect().sentenceCount, 5);
+  h.setCaptions(deleted);
+  assert.equal(h.inspect().pauses.length, 2); assert.equal(h.changes.length, 1);
+  await h.deletePause(h.inspect().pauses[0]); await h.deletePause(h.inspect().pauses[0]);
+  assert.equal(h.inspect().pauses.length, 0); assert.equal(h.changes.length, 3);
+  assert.equal(h.changes.at(-1)[1].words[0].pauseLinesRemoved, 3);
+  assert.deepEqual(h.changes.at(-1)[0].words, original[0].words);
+});
+
+test('search uses full transcript row numbers even when pause rows are filtered', () => {
+  const h = transcriptController(pauseFixture(), 24, { pauseSettings });
+  h.setQuery('pause');
+  assert.equal(h.inspect().filteredRows.length, 3);
+  assert.deepEqual(h.inspect().filteredRows.map(row => h.inspect().allRows.findIndex(item => item.key === row.key) + 1), [2,3,4]);
+  h.setQuery('5 one');
+  assert.deepEqual(h.inspect().filteredRows.map(row => h.inspect().allRows.findIndex(item => item.key === row.key) + 1), [5]);
+  h.setPauseSettings(null);
+  assert.equal(h.inspect().allRows.length, 2);
+});
+
+test('pause controls respect disabled deletion and text timing remains bounded by speech rather than pause rows', async () => {
+  const original = pauseFixture(), h = transcriptController(original, 24, { pauseSettings, disabled: true });
+  await h.deletePause(h.inspect().pauses[0]); assert.equal(h.changes.length, 0);
+  const editable = transcriptController(original, 24, { pauseSettings });
+  editable.beginTimingEdit(editable.inspect().rows[1], 'startTime');
+  assert.equal(editable.timingRange(editable.inspect().rows[1], 'startTime').min, 3);
+  editable.inputCaptionTime('startTime', numericEvent(7));
+  assert.equal(editable.saveInlineTiming(editable.inspect().rows[1]), true);
+  assert.deepEqual(editable.changes[0][0].words, original[0].words);
+  assert.equal(editable.inspect().pauses.at(-1).endTime, 7);
+});
+
+test('deleting a pause waits for native typing to finish before publishing its independent history edit', async () => {
+  let finish;
+  const calls = [], typing = { open() {}, input() {}, flush() {}, hint() {}, end: mode => { calls.push(mode); return new Promise(resolve => { finish = resolve; }); } };
+  const h = transcriptController(pauseFixture(), 24, { pauseSettings, typing });
+  h.beginTextEdit(h.inspect().rows[0]);
+  const deletion = h.deletePause(h.inspect().pauses[0]);
+  assert.deepEqual(calls, ['commit']); assert.equal(h.changes.length, 0);
+  finish(); await deletion;
+  assert.equal(h.changes.length, 1); assert.deepEqual(h.labels, ['Delete pause line']);
+  assert.equal(h.inspect().editingRowKey, null);
+});
+
+test('the blur before a pause deletion click finishes its typing history merge before deletion publishes', async () => {
+  let finish;
+  const calls = [], typing = { open() {}, input() {}, flush() {}, hint() {}, end: mode => { calls.push(mode); return new Promise(resolve => { finish = resolve; }); } };
+  const h = transcriptController(pauseFixture(), 24, { pauseSettings, typing });
+  h.beginTextEdit(h.inspect().rows[0]);
+  assert.equal(h.saveInlineText(h.inspect().rows[0]), true, 'textarea blur closes the editor first');
+  const deletion = h.deletePause(h.inspect().pauses[0]);
+  await Promise.resolve();
+  assert.deepEqual(calls, ['commit']); assert.equal(h.changes.length, 0);
+  finish(); await deletion;
+  assert.equal(h.changes.length, 1); assert.deepEqual(h.labels, ['Delete pause line']);
 });

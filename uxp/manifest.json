@@ -1,7 +1,7 @@
 {
   "id": "ca.swen.bettercaptions",
-  "name": "Better Captions",
-  "version": "0.7.27",
+  "name": "S-Captions",
+  "version": "0.7.85",
   "manifestVersion": 5,
   "main": "index.html",
   "host": {
@@ -13,7 +13,7 @@
       "type": "panel",
       "id": "betterCaptions",
       "label": {
-        "default": "Better Captions"
+        "default": "S-Captions"
       },
       "minimumSize": {
         "width": 330,

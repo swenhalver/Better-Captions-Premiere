@@ -16,6 +16,7 @@ std::vector<std::string> diagnosticActions;
 void capture_bounds_log(const char* action,long,long,long,long,long,long,long,long){diagnosticActions.emplace_back(action);}
 namespace {
 using namespace better_captions::adobe::ui_probe;
+using namespace better_captions::adobe::parameters;
 void check(bool value,const char* reason){if(!value)throw std::runtime_error(reason);}
 void near(double a,double b){check(std::abs(a-b)<.0001,"Unexpected bounds coordinate");}
 PF_EffectCustomUISuite1 ui{};DRAWBOT_DrawbotSuite1 drawing{};DRAWBOT_SurfaceSuite1 surface{};DRAWBOT_SupplierSuite1 supplier{};DRAWBOT_PathSuite1 path{};
@@ -45,7 +46,7 @@ SPErr paint(DRAWBOT_SurfaceRef,const DRAWBOT_ColorRGBA*,const DRAWBOT_RectF32* b
 // Nonidentity callback fixtures cover viewer zoom/pan and layer placement.
 PF_Err screen(void*,PF_ContextH,PF_FixedPoint* p){if(failTransform)return 1;p->x=fixed(p->x/65536.0*2+10);p->y=fixed(p->y/65536.0*3+20);return 0;}
 PF_Err layer(void*,PF_ContextH,A_long,A_long,PF_FixedPoint* p){p->x+=fixed(5);p->y+=fixed(7);return 0;}
-PF_Err registerUI(PF_ProgPtr,PF_CustomUIInfo* info){check(info->events==PF_CustomEFlag_COMP,"Only Program Monitor COMP events may be registered");++registered;return 0;}
+PF_Err registerUI(PF_ProgPtr,PF_CustomUIInfo* info){check(info->events==(PF_CustomEFlag_COMP|PF_CustomEFlag_EFFECT),"Program Monitor and Effect Controls events must be registered");++registered;return 0;}
 void clear(){points.clear();markers.clear();diagnosticActions.clear();strokes=closed=0;failPath=failPaint=failTransform=failReference=failSurface=failSupplier=false;missing.clear();}
 bool logged(const char* action){return std::find(diagnosticActions.begin(),diagnosticActions.end(),action)!=diagnosticActions.end();}
 }
@@ -56,8 +57,8 @@ int main(){try{
  check(better_captions::adobe::ui_probe::registerUI(&in)==0&&registered==1,"Bounds registration failed");
  PF_Context context{};context.w_type=PF_Window_COMP;PF_ContextPtr ptr=&context;
  PF_EventExtra e{};e.contextH=&ptr;e.cbs.source_to_frame=screen;e.cbs.layer_to_comp=layer;
- std::array<PF_ParamDef,4> values{};std::array<PF_ParamDef*,4> p{};for(int i=0;i<4;++i)p[i]=&values[i];
- p[1]->u.td.x_value=fixed(320);p[1]->u.td.y_value=fixed(270);p[2]->u.fs_d.value=400;p[3]->u.fs_d.value=100;
+ std::array<PF_ParamDef,Count> values{};std::array<PF_ParamDef*,Count> p{};for(int i=0;i<Count;++i)p[i]=&values[i];
+ p[Position]->u.td.x_value=fixed(320);p[Position]->u.td.y_value=fixed(270);p[Width]->u.fs_d.value=400;p[Height]->u.fs_d.value=100;
  const auto untouched=values;
  e.e_type=PF_Event_DRAW;check(event(&in,p.data(),&e)==0,"Draw event failed");check(e.evt_out_flags==PF_EO_HANDLED_EVENT,"Successful draw was not handled");
  check(points.size()==4&&closed==1&&strokes==1&&markers.size()==8,"Bounds path or eight handles missing");
@@ -70,9 +71,9 @@ int main(){try{
   e.e_type=type;e.evt_out_flags=0;e.u.do_click.screen_point.h=460;e.u.do_click.screen_point.v=813;e.u.do_click.send_drag=TRUE;e.u.do_click.continue_refcon[0]=2;
   const auto click=e.u.do_click;check(event(&in,p.data(),&e)==0,"Non-draw event failed");check(e.e_type==type&&e.evt_out_flags==0,"Production bounds intercepted input");check(std::memcmp(&click,&e.u.do_click,sizeof(click))==0,"Production bounds mutated pointer continuation");check(std::memcmp(values.data(),untouched.data(),sizeof(values))==0,"Production bounds mutated parameters");
  }
- clear();p[1]->u.td.x_value=fixed(340);p[1]->u.td.y_value=fixed(280);p[2]->u.fs_d.value=600;p[3]->u.fs_d.value=200;
+ clear();p[Position]->u.td.x_value=fixed(340);p[Position]->u.td.y_value=fixed(280);p[Width]->u.fs_d.value=600;p[Height]->u.fs_d.value=200;
  e.e_type=PF_Event_DRAW;e.evt_out_flags=0;check(event(&in,p.data(),&e)==0&&points.size()==4,"Updated geometry was not drawn");near(points[0].x,400);near(points[0].y,806);values=untouched;
- clear();p[2]->u.fs_d.value=std::numeric_limits<double>::quiet_NaN();e.evt_out_flags=0;check(event(&in,p.data(),&e)==0&&points.empty()&&!e.evt_out_flags,"Invalid dimensions must not reach Drawbot");values=untouched;
+ clear();p[Width]->u.fs_d.value=std::numeric_limits<double>::quiet_NaN();e.evt_out_flags=0;check(event(&in,p.data(),&e)==0&&points.empty()&&!e.evt_out_flags,"Invalid dimensions must not reach Drawbot");values=untouched;
  clear();e.e_type=PF_Event_DRAW;e.evt_out_flags=0;e.evt_in_flags=PF_EI_DONT_DRAW;check(event(&in,p.data(),&e)==0&&points.empty()&&!e.evt_out_flags,"Hidden controls must not draw");check(logged("draw-suppressed"),"DONT_DRAW suppression was not diagnosed");e.evt_in_flags=0;
  context.w_type=PF_Window_EFFECT;check(event(&in,p.data(),&e)==0&&points.empty()&&!e.evt_out_flags,"Bounds must not draw in Effect Controls");context.w_type=PF_Window_COMP;
  for(const auto& unavailable:{std::string(kPFEffectCustomUISuite),std::string(kDRAWBOT_PathSuite)}){clear();missing=unavailable;check(event(&in,p.data(),&e)==0&&!e.evt_out_flags,"Unavailable drawing suites must be harmless");check(objects==0&&acquired==released,"Unavailable suite leaked references");}

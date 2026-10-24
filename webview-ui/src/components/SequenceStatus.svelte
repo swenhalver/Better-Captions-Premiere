@@ -1,14 +1,17 @@
 <script lang="ts">
   import { tick } from "svelte";
+  import { derivePauseLines, type PauseLineSettings } from '../lib/native-effect/pause-lines';
+  import { captionSentenceCount } from '../lib/transcript/parser';
   import type { SessionState } from "../lib/types";
-  interface Props { session: SessionState | null; onRefresh: () => void; onTranscribe: () => void; onExtend?: () => void; isDemo?: boolean; isBusy?: boolean; saveStatus?: string; }
-  let { session, onRefresh, onTranscribe, onExtend, isDemo = false, isBusy = false, saveStatus = "" }: Props = $props();
+  interface Props { pauseSettings?:PauseLineSettings|null; session: SessionState | null; onRefresh: () => void; onTranscribe: () => void; onExtend?: () => void; isDemo?: boolean; isBusy?: boolean; saveStatus?: string; }
+  let { pauseSettings=null, session, onRefresh, onTranscribe, onExtend, isDemo = false, isBusy = false, saveStatus = "" }: Props = $props();
   let linked = $derived(session?.captions.some((caption) => caption.clipNodeId) ?? false);
   let ready = $derived(!!session && (session.hasTranscript || session.captions.length > 0));
   let sequenceName = $derived(isDemo ? "A little more human · Sample sequence" : session?.sequenceName ?? "No active sequence");
   let transcribeDisabled = $derived(isDemo || isBusy || !session || linked);
   let transcribeTitle = $derived(isDemo ? "Available in the installed Premiere panel" : linked ? "Edit the linked transcript below" : "Use Premiere’s built-in Speech to Text");
-  let stateText = $derived(session?.isLoading ? "Transcribing…" : saveStatus === "Saving changes…" ? "Saving…" : saveStatus === "Save failed" ? "Save failed" : ready ? `${session?.captions.length} ${session?.captions.length === 1 ? "caption" : "captions"}` : "No transcript");
+  let lineCount = $derived(captionSentenceCount(session?.captions ?? []) + (pauseSettings ? derivePauseLines(session?.captions ?? [],pauseSettings).length : 0));
+  let stateText = $derived(session?.isLoading ? "Transcribing…" : saveStatus === "Saving changes…" ? "Saving…" : saveStatus === "Save failed" ? "Save failed" : ready ? `${lineCount} ${lineCount === 1 ? "line" : "lines"}` : "No transcript");
   let menuOpen = $state(false);
   let actions = $state<HTMLDivElement>();
   let actionsButton = $state<HTMLButtonElement>();
@@ -52,9 +55,9 @@
 
 <svelte:window onpointerdown={outsidePointer} />
 
-<header class="sequence-status" class:sequence-status--ready={ready} aria-label="Better Captions">
+<header class="sequence-status" class:sequence-status--ready={ready} aria-label="S-Captions">
   {#if !ready}
-    <div class="sequence-status__title"><h1>Better Captions</h1>{#if isDemo}<span class="sequence-status__demo">Browser demo</span>{/if}</div>
+    <div class="sequence-status__title"><h1>S-Captions</h1>{#if isDemo}<span class="sequence-status__demo">Browser demo</span>{/if}</div>
   {/if}
   <div class="sequence-status__identity">
     {#if !ready}<svg class="sequence-status__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2.5" y="4.5" width="15" height="11" rx="1"/><path d="M6 4.5v11M14 4.5v11M2.5 8h3.5M14 8h3.5M2.5 12h3.5M14 12h3.5"/></svg>{/if}

@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import {createRequire} from 'node:module';
+import {commitPrepared} from './native-write-commit.mjs';
 const require=createRequire(import.meta.url),ts=require('../webview-ui/node_modules/typescript');
 const source=file=>fs.readFileSync(new URL('../'+file,import.meta.url),'utf8');
 const compile=file=>ts.transpileModule(source(file),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
@@ -18,11 +19,11 @@ function system(t){
  const time=seconds=>({seconds,ticks:String(seconds*254016000000)});
  const documentParam={displayName:'Caption document (experimental)',isTimeVarying:()=>false,getValue:()=>documentText,setValue(value){nativeWrites.push(value);if(setterMode==='ignored')return 0;documentText=value;return 0;}};
  let characterLimit=56,playheadTicks=String(.5*254016000000);const keyframeSeeks=[];
- const groupingParam={displayName:'Characters per caption',isTimeVarying:()=>false,getValue:()=>characterLimit,setValue(value){characterLimit=value;return 0;}};
+ const groupingParam={displayName:'Characters per line',isTimeVarying:()=>false,getValue:()=>characterLimit,setValue(value){characterLimit=value;return 0;}};
  const geometry={};
  for(const [key,label,value] of [['position','Position',[.5,.9]],['width','Width',1536],['height','Height',150]])geometry[key]={displayName:label,value,animated:false,keys:[],isTimeVarying(){return this.animated;},areKeyframesSupported:()=>true,getValue(){return this.value;},getKeys(){return this.keys.map(k=>({ticks:k.ticks}));},getValueAtKey(t){return this.keys.find(k=>k.ticks===t.ticks).value;},getValueAtTime(t){return this.keys.find(k=>k.ticks===t.ticks)?.value??this.keys[0].value;},setValue(next){nativeWrites.push({parameter:key,value:next});if(setterMode!=='ignored')this.value=next;}};
  const nativeClip={nodeId:'native-node',projectItem:{nodeId:'native-item',getMediaPath:()=>''},start:time(0),end:time(2),inPoint:time(0),outPoint:time(2),isAdjustmentLayer:()=>true,isSelected:()=>true,getSpeed:()=>1,isSpeedReversed:()=>false,
-  components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([documentParam,groupingParam,...Object.values(geometry)])}])};
+  components:collection([{matchName:'AE.com.swen.bettercaptions.native.experimental',properties:collection([documentParam,groupingParam,...Object.values(geometry),{displayName:'Global font size (64 = 1x)',isTimeVarying:()=>false,getValue:()=>64}])}])};
  const nativeTrack={clips:collection([nativeClip]),isLocked:()=>false};
  const nativeSequence={sequenceID:'seq-a',name:'Captions',timebase:'10584000000',frameSizeHorizontal:720,frameSizeVertical:1280,end:String(2*254016000000),getPlayerPosition:()=>({ticks:playheadTicks,seconds:Number(playheadTicks)/254016000000}),setPlayerPosition(t){keyframeSeeks.push(t);playheadTicks=t;},videoTracks:collection([nativeTrack],'numTracks'),audioTracks:collection([],'numTracks')};
  const nativeProject={get path(){return projectPath;},activeSequence:nativeSequence};
@@ -48,7 +49,9 @@ function system(t){
  const nativeModule={exports:{}};vm.runInNewContext(source('uxp/api.js'),{module:nativeModule,exports:nativeModule.exports,setTimeout,clearTimeout,require:name=>{
   if(name==='premierepro')return ppro;if(name==='uxp')return{storage:{localFileSystem:{}}};if(name==='./storage.js')return storage;
   if(name==='./transcript.js')return{fetchTranscript:async()=>null,transcribe:()=>transcribe()};if(name==='./paths.js')return require('../uxp/paths.js');
-  if(name==='./agent.js')return{startAgentBridge:async()=>async()=>{}};throw new Error('Unexpected native dependency '+name);
+  if(name==='./agent.js')return{startAgentBridge:async()=>async()=>{}};
+  if(name==='./native-params.js')return{...require('../uxp/native-params.js'),commitNativeParams:async(ppro,project,sequence,prepared,writes)=>{const failed=commitPrepared({...prepared,writes},nativeClip.components[0].properties);if(failed)throw Object.assign(new Error(failed.error),failed);}};
+  throw new Error('Unexpected native dependency '+name);
  }});
  const nativeApi=nativeModule.exports.createHostAPI({serviceStartupGraceMs:0});
  const hostWindow=events(),uiWindow=events(),frame=events();let entrypoints;
@@ -70,7 +73,8 @@ test('connection reads and existing native edits round trip through actual webvi
  const text='BCDOC1:424341500200000001000000',entry=full.native[0];
  const updated=await h.api.writeNativeCaptionDocument({locator:entry.locator,revision:entry.revision},text);
  assert.equal(updated.readbackVerified,true);assert.equal(updated.documentText,text);assert.deepEqual(h.nativeWrites,[text]);
- assert.deepEqual(h.requests.map(request=>request.action),['readCaptionConnections','readCaptionConnections','writeNativeCaptionDocument']);
+ // The host prepares, writes the document and verifies; UXP commits the undo step between the last two.
+ assert.deepEqual(h.requests.map(request=>request.action),['readCaptionConnections','readCaptionConnections','writeNativeCaptionDocument','writeNativeCaptionDocument','writeNativeCaptionDocument']);
  for(const request of h.requests.slice(0,2)){assert.equal(request.sequenceId,'seq-a');assert.equal(request.projectPath,'/first/edit.prproj');assert.equal(request.expiresAt-request.createdAt,10000);}
  assert.equal(Object.hasOwn(h.requests[2],'expiresAt'),false,'the setter must never acquire the expiring-read contract');assert.equal(h.payloads.size,0,'private host jobs are cleaned after reads and writes');
 });
@@ -167,14 +171,14 @@ test('native controls round trip through webview, UXP, expiring read service and
  assert.equal(h.nativeWrites.length,2);await tick();assert.equal(h.nativeWrites.length,2);assert.equal(h.payloads.size,0);
 });
 
-test('warm native control service operations cross one host boundary and retain exact project/settings checks',async t=>{
+test('warm native control service operations cross one host boundary per phase and retain exact project/settings checks',async t=>{
  const h=system(t);await tick();await h.api.getActiveSequenceInfo();const entry=(await h.api.readCaptionConnections()).native[0],snapshot={locator:entry.locator,revision:entry.revision};
  h.hostCalls.length=0;const controls=await h.api.readNativeCaptionControls(snapshot);assert.deepEqual(h.hostCalls,['readNativeCaptionControls']);
  h.hostCalls.length=0;const after=await h.api.editNativeCaptionControl(snapshot,{revision:controls.revision,parameter:'width',operation:'set',value:600,atTicks:controls.timelineTicks});
- assert.equal(after.readbackVerified,true);assert.deepEqual(h.hostCalls,['editNativeCaptionControl']);assert.equal(h.nativeWrites.length,1);
+ assert.equal(after.readbackVerified,true);assert.deepEqual(h.hostCalls,['editNativeCaptionControl','editNativeCaptionControl']);assert.equal(h.nativeWrites.length,1);
  h.nativeSequence.frameSizeHorizontal=1920;await assert.rejects(h.api.readNativeCaptionControls(snapshot),/sequence settings changed/);assert.equal(h.nativeWrites.length,1);
  h.nativeSequence.frameSizeHorizontal=720;h.projectPath='/other/edit.prproj';
- await assert.rejects(h.cep.dispatchNativeCaptionControlRequest({action:'editNativeCaptionControl',sequenceId:'seq-a',projectPath:'/first/edit.prproj',args:[snapshot,{revision:after.revision,parameter:'width',operation:'set',value:500,atTicks:after.timelineTicks}]}),/project changed/);
+ await assert.rejects(h.cep.dispatchNativeCaptionControlRequest({action:'editNativeCaptionControl',sequenceId:'seq-a',projectPath:'/first/edit.prproj',args:[snapshot,{revision:after.revision,parameter:'width',operation:'set',value:500,atTicks:after.timelineTicks,phase:'prepare'}]}),/project changed/);
  assert.equal(h.nativeWrites.length,1);
 });
 

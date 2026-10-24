@@ -18,7 +18,7 @@
     <span class="word-background-preview__color" style:background-color={color} style:opacity={opacity}></span>
   {/if}
   {#if enabled === false}
-    <LucideIcon name="type-off" stroke={textColor ?? 'currentColor'} strokeOpacity={textOpacity ?? 1}/>
+    <LucideIcon name="type-off"/>
   {:else if outlined === true}
     <LucideIcon name="outline" fill={textColor ?? 'currentColor'} stroke={outlineColor ?? 'currentColor'} fillOpacity={textOpacity ?? 1} strokeOpacity={outlineOpacity ?? 1}/>
   {:else}

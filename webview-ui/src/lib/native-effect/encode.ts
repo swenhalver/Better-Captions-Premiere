@@ -1,12 +1,12 @@
 import { validateNativeDocument, validateNativeStyle, type NativeColor, type NativeWordStyle, type NativeStyle } from './contract.ts';
-/** BCAP little-endian v1/v2/v3/v4/v5/v6 payload matching native/core/caption_core.cpp.
+/** BCAP little-endian v10 payload matching native/core/caption_core.cpp.
  * Sequence/clip bounds stay in the panel envelope; the renderer receives source words,
  * manual container identities and styles. No path, code, animation or host mutation. */
 export function encodeNativeDocument(input: unknown): Uint8Array {
   const doc = validateNativeDocument(input), bytes: number[] = [];
   const states = [doc.style.upcoming, doc.style.current, doc.style.spoken];
-  const typography = doc.style.baseFontWeight !== undefined || states.some(style => style.fontWeight !== undefined || style.italic !== undefined || style.fontWeightOffset !== undefined && style.fontWeightOffset !== null);
-  const version = Math.max(doc.binaryVersion ?? 2, typography ? 3 : 1, doc.timeOriginSeconds !== 0 ? 2 : 1, doc.style.letterCase ? 4 : 1, states.some(style => style.bubbleFillSpaces) ? 5 : 1, states.some(style => style.bubblePaddingInline!==undefined||style.bubblePaddingBlock!==undefined||style.underline!==undefined) ? 6 : 1);
+  // Every write upgrades to v10. Only readers retain the legacy layouts.
+  const version = 10;
   const u = (n: number) => { for (let i = 0; i < 4; i++) bytes.push((n >>> (8 * i)) & 255); };
   const d = (n: number) => { const b = new Uint8Array(8); new DataView(b.buffer).setFloat64(0, n, true); bytes.push(...b); };
   const s = (text: string) => { const b = new TextEncoder().encode(text); u(b.length); for (const n of b) bytes.push(n); };
@@ -19,7 +19,7 @@ export function encodeNativeDocument(input: unknown): Uint8Array {
   u(0x50414342); u(version); u(doc.captions.length);
   for (const c of doc.captions) {
     s(c.id); u(Number(c.manualSplit)); u(c.words.length);
-    for (const w of c.words) { s(w.text); d(w.start); d(w.end); u(Number(w.endOfSentence)); }
+    for (const w of c.words) { s(w.text); d(w.start); d(w.end); u(Number(w.endOfSentence)); u(w.lineBreakBefore === 'break' ? 1 : w.lineBreakBefore === 'join' ? 2 : w.lineBreakBefore === 'edge' ? 3 : 0); u(w.pauseLinesRemoved ?? 0); }
   }
   style(doc.style.upcoming); style(doc.style.current); style(doc.style.spoken);
   d(doc.style.wordSpacing); d(doc.style.lineHeight); u(Number(doc.style.titleCase));
@@ -29,6 +29,7 @@ export function encodeNativeDocument(input: unknown): Uint8Array {
   if(version>=5)for(const state of states)u(Number(state.bubbleFillSpaces ?? false));
   if(version>=6)for(const state of states){d(state.bubblePaddingInline??-1);d(state.bubblePaddingBlock??-1);}
   if(version>=6)for(const state of states)u(state.underline===undefined?0:state.underline?2:1);
+  if(version>=7)for(const state of states)for(const key of ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const)d(state[key]??(key.startsWith('margin')?0:-1));
   if (bytes.length > 16 * 1024 * 1024) throw new Error('Native payload exceeds 16 MiB.');
   return Uint8Array.from(bytes);
 }
@@ -71,14 +72,14 @@ export function decodeNativeTransportTimeOrigin(text: unknown): number {
     return value;
   };
   if (u() !== 0x50414342) throw new Error('Invalid native document magic.');
-  const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) throw new Error('Unsupported native binary version.');
+  const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10) throw new Error('Unsupported native binary version.');
   const containers = u(); if (containers > 10000) throw new Error('Too many native containers.');
   const identities = new Set<string>(); let count = 0;
   for (let i = 0; i < containers; i++) {
     const identity = string(256); if (identities.has(identity)) throw new Error('Duplicate native identity.'); identities.add(identity);
     flag(); const words = u(); count += words; if (count > 100000) throw new Error('Too many native words.');
     let previous = -1;
-    for (let j = 0; j < words; j++) { string(4096); const start = d(), end = d(); flag(); if (start < 0 || end < start || start < previous) throw new Error('Invalid native timing.'); previous = start; }
+    for (let j = 0; j < words; j++) { string(4096); const start = d(), end = d(); flag(); if (version >= 8 && u() > (version >= 10 ? 3 : 2)) throw new Error('Invalid native word line boundary.'); if (version >= 9 && u() > 8) throw new Error('Invalid native word removed pause lines.'); if (start < 0 || end < start || start < previous) throw new Error('Invalid native timing.'); previous = start; }
   }
   const color = () => ({ r: d(), g: d(), b: d(), a: d() });
   const style = (): NativeWordStyle => ({ fontFamily: string(256), fontSize: d(), sizeScale: d(), opacity: d(), color: color(), bubble: flag(), bubbleColor: color(), padding: d(), radius: d(), outlineWidth: d(), outlineColor: color(), shadowBlur: d(), shadowX: d(), shadowY: d(), shadowColor: color() });
@@ -90,6 +91,7 @@ export function decodeNativeTransportTimeOrigin(text: unknown): number {
   if(version>=5){for(const word of [nativeStyle.upcoming,nativeStyle.current,nativeStyle.spoken]){const fill=flag();if(fill)word.bubbleFillSpaces=true;}}
   if(version>=6)for(const word of [nativeStyle.upcoming,nativeStyle.current,nativeStyle.spoken])for(const axis of ['bubblePaddingInline','bubblePaddingBlock'] as const){const value=d();if(value!==-1)word[axis]=value;}
   if(version>=6)for(const word of [nativeStyle.upcoming,nativeStyle.current,nativeStyle.spoken]){const mode=u();if(mode>2)throw new Error('Invalid native underline mode.');if(mode)word.underline=mode===2;}
+  if(version>=7)for(const word of [nativeStyle.upcoming,nativeStyle.current,nativeStyle.spoken])for(const key of ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const){const value=d();if(!key.startsWith('margin')?value!==-1:value!==0)word[key]=value;}
   validateNativeStyle(nativeStyle);
   if (Math.abs(origin) > 864000 || offset !== bytes.length) throw new Error('Invalid native document origin or trailing bytes.');
   return origin;

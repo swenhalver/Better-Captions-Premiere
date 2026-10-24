@@ -15,7 +15,7 @@ test('stale geometry replies cannot replace a new caption and reset sends no inv
  f.context={key:'new'};await f.c.read();pending.resolve({...receipt('old',555),readbackVerified:true});await tick();assert.equal(f.states.at(-1),null);await f.c.read();assert.equal(f.states.at(-1).revision,'r0');f.c.dispose();
 });
 test('unconfirmed geometry mutations stop queued changes without retrying; hidden or outside clips cannot edit',async()=>{
- let writes=0;const f=fixture(async()=>{writes++;throw Object.assign(new Error('uncertain'),{code:'BC_OUTPUT_UNCONFIRMED'});});await f.c.read();f.c.queue('width',500);f.c.queue('width',400);await tick();await f.c.read();f.c.queue('width',300);await tick();assert.equal(writes,1);assert.match(f.errors.at(-1),/could not confirm/);
+ let writes=0;const f=fixture(async()=>{writes++;throw Object.assign(new Error('uncertain'),{code:'BC_OUTPUT_UNCONFIRMED'});});await f.c.read();f.c.queue('width',500);f.c.queue('width',400);await tick();f.c.queue('width',300);await tick();assert.equal(writes,1);assert.match(f.errors.at(-1),/could not confirm/);
  f.context={key:'new',visible:false};await f.c.read();f.c.queue('width',200);assert.equal(writes,1);f.c.dispose();
 });
 test('previous/next availability uses exact timeline ticks and ignores trimmed-away source keys',async()=>{
@@ -94,4 +94,41 @@ test('interaction priority stays active through the final coalesced write after 
  const c=createNativeGeometryController({current:()=>context,read:async()=>receipt(),edit:async(s,r)=>{calls.push(r);if(calls.length===1)await final.promise;return{...receipt('done'+calls.length,r.value),readbackVerified:true};},state:()=>{},error:()=>{},interacting:active=>phases.push(active)});
  await c.read();assert.deepEqual(phases,[]);c.setDragging(true);await tick();c.queue('width',610);c.queue('width',650);c.setDragging(false);assert.deepEqual(phases,[true]);
  final.resolve();await tick();await tick();assert.deepEqual(calls.map(r=>r.value),[610,650]);assert.deepEqual(phases,[true,false]);c.dispose();
+});
+
+test('polling automatically adopts actual Premiere state after an unconfirmed groups write without replaying it',async()=>{
+ const calls=[],states=[],errors=[];let reads=0;
+ const context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+ const actual={...receipt('actual'),groups:{...receipt().width,value:2},rollUpLines:{...receipt().width,value:3}};
+ const c=createNativeGeometryController({current:()=>context,read:async()=>++reads===1?receipt():actual,edit:async(s,r)=>{calls.push(r);if(calls.length===1)throw Object.assign(new Error('Native caption value readback failed.'),{code:'BC_OUTPUT_UNCONFIRMED'});return{...actual,readbackVerified:true};},state:s=>states.push(s),error:e=>errors.push(e)});
+ await c.read();c.queue('groups',2);c.queue('groups',4);await tick();
+ assert.match(errors.at(-1),/Native caption value readback failed/);assert.match(errors.at(-1),/Syncing/);
+ c.queue('groups',5);assert.equal(calls.length,1);
+ await c.read();assert.equal(states.at(-1).groups.value,2);assert.equal(states.at(-1).rollUpLines.value,3);assert.equal(errors.at(-1),'');assert.equal(calls.length,1);
+ c.queue('groups',3);await tick();assert.equal(calls.length,2);assert.equal(calls[1].revision,'actual');assert.equal(calls[1].value,3);c.dispose();
+});
+
+test('failed reconciliation reads keep writes blocked until a later polling read succeeds',async()=>{
+ let reads=0,writes=0;const context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+ const errors=[];const c=createNativeGeometryController({current:()=>context,read:async()=>{if(++reads===2)throw new Error('Premiere is busy');return receipt('r'+reads);},edit:async()=>{writes++;throw Object.assign(new Error('ignored setter'),{code:'BC_OUTPUT_UNCONFIRMED'});},state:()=>{},error:e=>errors.push(e)});
+ await c.read();c.queue('groups',2);await tick();await c.read();assert.equal(errors.at(-1),'Premiere is busy');c.queue('groups',3);assert.equal(writes,1);assert.equal(reads,2);
+ await c.read();assert.equal(errors.at(-1),'');assert.equal(writes,1);assert.equal(reads,3);c.dispose();
+});
+
+test('reconciliation cannot publish another clip or obsolete document and never drains old writes',async()=>{
+ for(const changed of ['clip','document','dispose']){
+  const wait=deferred(),states=[];let reads=0,writes=0,context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+  const c=createNativeGeometryController({current:()=>context,read:async()=>++reads===1?receipt():wait.promise,edit:async()=>{writes++;throw Object.assign(new Error('uncertain'),{code:'BC_OUTPUT_UNCONFIRMED'});},state:s=>states.push(s),error:()=>{}});
+  await c.read();c.queue('groups',2);c.queue('groups',3);await tick();const polling=c.read();c.queue('groups',4);
+  if(changed==='document')context={...context,key:'new-document'};if(changed==='dispose')c.dispose();
+  wait.resolve({...receipt('reconciled'),...(changed==='clip'?{clipNodeId:'wrong'}:{})});await polling;await tick();
+  assert.equal(states.at(-1).revision,'r0');assert.equal(writes,1);c.dispose();
+ }
+});
+
+test('Effect Controls changes to Visible lines stay synced by the existing periodic reads',async()=>{
+ let actual={...receipt(),rollUpLines:{...receipt().width,value:2}};const states=[];
+ const context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
+ const c=createNativeGeometryController({current:()=>context,read:async()=>actual,edit:async()=>{throw Error('No writes expected');},state:s=>states.push(s),error:()=>{}});
+ await c.read();actual={...actual,revision:'effect-controls',rollUpLines:{...actual.rollUpLines,value:3}};await c.read();assert.equal(states.at(-1).rollUpLines.value,3);c.dispose();
 });

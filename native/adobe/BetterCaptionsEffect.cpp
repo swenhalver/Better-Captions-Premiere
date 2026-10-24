@@ -9,14 +9,16 @@
 #include "caption_arbitrary.hpp"
 #include "render_style.hpp"
 #include "parameters.hpp"
+#include "temporary_bounds.hpp"
 #include "parameter_sections.hpp"
+#include "purposeful_controls.hpp"
+#include "boundary_parameters.hpp"
+#include "dimension_defaults.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
 #include "custom_ui.hpp"
-#endif
 #include "source_time.hpp"
 #if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
 #include "render_time_diagnostics.hpp"
@@ -41,39 +43,56 @@ PF_Err wordParameters(PF_InData* in_data,const char* name,int firstId,int groupI
 }
 PF_Err parameters(PF_InData* in_data, PF_OutData* out_data) {
  PF_ParamDef def{};
+ const auto defaults=better_captions::adobe::dimensionDefaults(in_data);
+ better_captions::adobe::logDimensionDefaults(in_data,defaults);
+ PF_ADD_TOPICX("Layout",0,LayoutGroupId);
  PF_ADD_POINT("Position",50,90,FALSE,PositionId);
- PF_ADD_FLOAT_SLIDERX("Width",1,8192,1,3840,1536,PF_Precision_TENTHS,0,0,WidthId);
- PF_ADD_FLOAT_SLIDERX("Height",1,8192,1,2160,150,PF_Precision_TENTHS,0,0,HeightId);
- PF_ADD_FLOAT_SLIDERX("Characters per caption",1,500,1,100,56,PF_Precision_INTEGER,0,0,MaxCharsId);
- BC_ADD_SECTION_SLIDER("Global font size (64 = 1x)",1,512,1,200,64,PF_Precision_TENTHS,0,0,SizeId);
+ BC_ADD_DIMENSION_SLIDER("Width",WidthId);
+ BC_ADD_DIMENSION_SLIDER("Height",HeightId);
+ std::memset(&def,0,sizeof(def));PF_END_TOPIC(LayoutEndId);
+ PF_ADD_TOPICX("Text style",0,TextGroupId);
+ PF_ADD_FLOAT_SLIDERX("Global font size (64 = 1x)",1,512,1,200,64,PF_Precision_TENTHS,0,0,SizeId);
  std::memset(&def,0,sizeof(def));PF_ADD_COLOR("Global text tint",255,255,255,ColorId);
  std::memset(&def,0,sizeof(def));
+ BC_ADD_CHOICE_SLIDER("Text alignment",1,3,2,TextAlignmentId);
  auto defaultDocument=better_captions::adobe::make(in_data,better_captions::encode(demo()));
  PF_ADD_ARBITRARY2("Caption document (experimental)",0,0,PF_ParamFlag_CANNOT_TIME_VARY,PF_PUI_NO_ECW_UI,defaultDocument,TranscriptId,nullptr);
+ std::memset(&def,0,sizeof(def));PF_END_TOPIC(TextEndId);
+ PF_ADD_TOPICX("Word styles",PF_ParamFlag_START_COLLAPSED,WordStylesGroupId);
  PF_Err err=wordParameters(in_data,"Current word",CurrentSizeId,CurrentGroupId,CurrentEndId);if(err)return err;
  err=wordParameters(in_data,"Previously spoken words",SpokenSizeId,SpokenGroupId,SpokenEndId);if(err)return err;
  err=wordParameters(in_data,"Upcoming words",UpcomingSizeId,UpcomingGroupId,UpcomingEndId);if(err)return err;
- BC_ADD_SECTION_SLIDER("Groups per page",1,100,1,10,1,PF_Precision_INTEGER,0,0,GroupsPerPageId);
- PF_ADD_FLOAT_SLIDERX("Smart line fit",0,1,0,1,0,PF_Precision_INTEGER,0,0,SmartLineFitId);
- BC_ADD_SECTION_SLIDER("Roll-up enabled",0,1,0,1,0,PF_Precision_INTEGER,0,0,RollUpEnabledId);
+ std::memset(&def,0,sizeof(def));PF_END_TOPIC(WordStylesEndId);
+ PF_ADD_TOPICX("Caption grouping",PF_ParamFlag_START_COLLAPSED,CaptionGroupId);
+ PF_ADD_FLOAT_SLIDERX("Characters per line",1,500,1,100,56,PF_Precision_INTEGER,0,0,MaxCharsId);
+ PF_ADD_FLOAT_SLIDERX("Groups per page",1,100,1,10,1,PF_Precision_INTEGER,0,0,GroupsPerPageId);
+ std::memset(&def,0,sizeof(def));PF_END_TOPIC(CaptionEndId);
+ PF_ADD_TOPICX("Scrolling text",PF_ParamFlag_START_COLLAPSED,RollUpGroupId);
+ BC_ADD_CHOICE_SLIDER("Roll-up enabled",0,1,0,RollUpEnabledId);
  PF_ADD_FLOAT_SLIDERX("Visible lines",1,8,1,8,2,PF_Precision_INTEGER,0,0,RollUpLinesId);
+ PF_ADD_FLOAT_SLIDERX("Current line position",1,8,1,8,1,PF_Precision_INTEGER,0,0,RollUpCurrentLineId);
+ PF_ADD_FLOAT_SLIDERX("Pause Line Length",0,30,0,30,0,PF_Precision_TENTHS,0,0,RollUpBlankLineSecondsId);
  PF_ADD_FLOAT_SLIDERX("Scroll duration",0,2,0,1,.18,PF_Precision_HUNDREDTHS,0,0,RollUpDurationId);
- PF_ADD_FLOAT_SLIDERX("Soft fade boundary",0,1,0,1,1,PF_Precision_INTEGER,0,0,RollUpBoundaryId);
+ PF_ADD_TOPICX("Directional fade",PF_ParamFlag_START_COLLAPSED,DirectionalFadeGroupId);
+ BC_ADD_CHOICE_SLIDER("Soft fade boundary",0,1,1,RollUpBoundaryId);
  PF_ADD_FLOAT_SLIDERX("Boundary position",0,1,0,1,0,PF_Precision_HUNDREDTHS,0,0,RollUpPositionId);
  PF_ADD_FLOAT_SLIDERX("Transition thickness",0,1,0,1,.35,PF_Precision_HUNDREDTHS,0,0,RollUpThicknessId);
  PF_ADD_FLOAT_SLIDERX("Fade amount",0,1,0,1,1,PF_Precision_HUNDREDTHS,0,0,RollUpFadeId);
- PF_ADD_FLOAT_SLIDERX("Transition curve",1,4,1,4,2,PF_Precision_INTEGER,0,0,RollUpCurveId);
- PF_ADD_FLOAT_SLIDERX("Scroll direction",1,4,1,4,1,PF_Precision_INTEGER,0,0,RollUpDirectionId);
+ BC_ADD_CHOICE_SLIDER("Transition curve",1,4,2,RollUpCurveId);
+ std::memset(&def,0,sizeof(def));PF_END_TOPIC(DirectionalFadeEndId);
+ BC_ADD_CHOICE_SLIDER("Scroll direction",1,4,1,RollUpDirectionId);
  PF_ADD_FLOAT_SLIDERX("Scroll speed",.1,10,.1,3,1,PF_Precision_HUNDREDTHS,0,0,RollUpSpeedId);
- PF_ADD_FLOAT_SLIDERX("Wait for line to finish",0,1,0,1,1,PF_Precision_INTEGER,0,0,RollUpWaitId);
- PF_ADD_FLOAT_SLIDERX("Line transition",1,4,1,4,1,PF_Precision_INTEGER,0,0,LineTransitionId);
- PF_ADD_FLOAT_SLIDERX("Text alignment",1,3,1,3,2,PF_Precision_INTEGER,0,0,TextAlignmentId);
+ BC_ADD_CHOICE_SLIDER("Wait for line to finish",0,1,1,RollUpWaitId);
+ BC_ADD_CHOICE_SLIDER("Line transition",1,4,1,LineTransitionId);
+ err=better_captions::adobe::boundaries::add(in_data);if(err)return err;
+ std::memset(&def,0,sizeof(def));PF_END_TOPIC(RollUpEndId);
+ std::memset(&def,0,sizeof(def));def.ui_flags=PF_PUI_STD_CONTROL_ONLY;
+ PF_ADD_CHECKBOX("Show animation controls","",FALSE,PF_ParamFlag_SUPERVISE,ShowAnimationUIId);
+ std::memset(&def,0,sizeof(def));def.ui_flags=PF_PUI_NO_ECW_UI;
+ PF_ADD_FLOAT_SLIDER("Layout editing guide",0,2147483647,0,2147483647,AEFX_DEFAULT_CURVE_TOLERANCE,0,PF_Precision_HUNDREDTHS,0,false,EditBoundsLeaseId);
+
  out_data->num_params=Count;
-#if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
  return better_captions::adobe::ui_probe::registerUI(in_data);
-#else
- return PF_Err_NONE;
-#endif
 }
 better_captions::adobe::NativeWordControls wordControls(PF_ParamDef* params[],int first) {
  auto color=[](const PF_Pixel& value){return better_captions::Color{value.red/255.0,value.green/255.0,value.blue/255.0,1};};
@@ -102,7 +121,8 @@ PF_Err render(PF_InData* in_data, PF_ParamDef* params[], PF_LayerDef* output) {
  const auto& input=params[Input]->u.ld;
  const double sx=in_data->downsample_x.den?double(in_data->downsample_x.num)/in_data->downsample_x.den:1;
  const double sy=in_data->downsample_y.den?double(in_data->downsample_y.num)/in_data->downsample_y.den:1;
- const double width=params[Width]->u.fs_d.value*sx,height=params[Height]->u.fs_d.value*sy;
+ const double width=adobe::resolveDimension(params[Width]->u.fs_d.value,in_data,true)*sx,
+              height=adobe::resolveDimension(params[Height]->u.fs_d.value,in_data,false)*sy;
  // SDK PF_InData: host already adjusts point parameters for downsampling.
  // Scalar pixel-distance sliders still need sx/sy (see official CCU sample).
  const double x=double(params[Position]->u.td.x_value)/65536.0;
@@ -145,12 +165,17 @@ PF_Err render(PF_InData* in_data, PF_ParamDef* params[], PF_LayerDef* output) {
  // Short fixture repeats so every point on a long scratch clip remains testable.
  if(demoMode)time=std::fmod(std::max(0.0,time),8.0);
  const auto sample=[&](int index,double fallback){return params[index]?params[index]->u.fs_d.value:fallback;};
- const auto rollUp=sampledRollUpSettings(sample(RollUpEnabled,0),sample(RollUpLines,2),sample(RollUpDuration,.18),sample(RollUpBoundary,1),
-   sample(RollUpPosition,0),sample(RollUpThickness,.35),sample(RollUpFade,1),sample(RollUpCurve,2),sample(RollUpDirection,1),sample(RollUpSpeed,1),sample(RollUpWait,1),sample(LineTransition,1));
+ auto rollUp=sampledRollUpSettings(sample(RollUpEnabled,0),sample(RollUpLines,2),sample(RollUpDuration,.18),sample(RollUpBoundary,1),
+   sample(RollUpPosition,0),sample(RollUpThickness,.35),sample(RollUpFade,1),sample(RollUpCurve,2),sample(RollUpDirection,1),sample(RollUpSpeed,1),sample(RollUpWait,1),sample(LineTransition,1),sample(RollUpCurrentLine,1),sample(RollUpBlankLineSeconds,0));
+ if(params[BoundaryMode])rollUp.boundaryMode=std::clamp(int(params[BoundaryMode]->u.pd.value)-1,0,1);
+ const int edgeStarts[]={TopInset,BottomInset,LeftInset,RightInset};
+ for(int edge=0;edge<4;++edge){const int first=edgeStarts[edge];
+  rollUp.edges[edge]=sampledRollUpEdge(sample(first,0)/100.0,params[first+1]?params[first+1]->u.bd.value:1,
+   sample(first+2,20)/100.0,sample(first+3,100)/100.0,params[first+4]?params[first+4]->u.pd.value:2);
+ }
  auto bitmap=macos::rasterize(document,time,box,output->width,output->height,
                             static_cast<std::size_t>(std::max(1.0,params[MaxChars]->u.fs_d.value)),0.6,
-                            sampledGroupsPerPage(params[GroupsPerPage]?params[GroupsPerPage]->u.fs_d.value:1.0),
-                            sampledSmartLineFit(params[SmartLineFit]?params[SmartLineFit]->u.fs_d.value:0.0),rollUp);
+                            sampledGroupsPerPage(params[GroupsPerPage]?params[GroupsPerPage]->u.fs_d.value:1.0),rollUp);
 #if BC_ENABLE_RENDER_TIME_DIAGNOSTICS
  long long alphaCount=0;for(std::size_t i=3;i<bitmap.pixels.size();i+=4)if(bitmap.pixels[i])++alphaCount;
  adobe::logRenderTime(in_data,timeTrace,document,time,box,demoMode,PF_Err_NONE,alphaCount);
@@ -168,29 +193,32 @@ PF_Err render(PF_InData* in_data, PF_ParamDef* params[], PF_LayerDef* output) {
    dst[col].blue=static_cast<A_u_char>(std::min(255u,unsigned(fg[2])+(unsigned(bg.blue)*inv+127)/255));
   }
  }
+ adobe::drawTemporaryBounds(output,box,params[EditBoundsLease]?params[EditBoundsLease]->u.fs_d.value:0.0,sx,sy);
  return PF_Err_NONE;
 }
 }
 extern "C" DllExport PF_Err PluginDataEntryFunction2(PF_PluginDataPtr inPtr,PF_PluginDataCB2 inPluginDataCallBackPtr,SPBasicSuite*,const char*,const char*) {
  PF_Err result=PF_Err_INVALID_CALLBACK;
- result=PF_REGISTER_EFFECT_EXT2(inPtr,inPluginDataCallBackPtr,"Better Captions Native Probe","com.swen.bettercaptions.native.experimental","Better Captions",AE_RESERVED_INFO,"EffectMain","https://github.com/swenhalver/Better-Captions-Premiere");
+ result=PF_REGISTER_EFFECT_EXT2(inPtr,inPluginDataCallBackPtr,"S-Captions","com.swen.bettercaptions.native.experimental","S-Captions",AE_RESERVED_INFO,"EffectMain","https://github.com/swenhalver/Better-Captions-Premiere");
  return result;
 }
 extern "C" DllExport PF_Err EffectMain(PF_Cmd cmd,PF_InData* in_data,PF_OutData* out_data,PF_ParamDef* params[],PF_LayerDef* output,void* extra) {
  try {
   switch(cmd) {
-   case PF_Cmd_ABOUT:std::snprintf(out_data->return_msg,sizeof(out_data->return_msg),"Better Captions Native Probe 0.1: synthetic embedded transcript, not migrated captions.");break;
-   case PF_Cmd_GLOBAL_SETUP:out_data->my_version=PF_VERSION(0,1,0,PF_Stage_DEVELOP,1);out_data->out_flags=PF_OutFlag_NON_PARAM_VARY;
-#if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
+   case PF_Cmd_ABOUT:std::snprintf(out_data->return_msg,sizeof(out_data->return_msg),"S-Captions: editable transcript captions for Premiere Pro.");break;
+   case PF_Cmd_GLOBAL_SETUP:out_data->my_version=PF_VERSION(0,1,0,PF_Stage_DEVELOP,1);out_data->out_flags=PF_OutFlag_NON_PARAM_VARY|PF_OutFlag_SEND_UPDATE_PARAMS_UI;
     out_data->out_flags|=PF_OutFlag_CUSTOM_UI;
-#endif
     break;
    case PF_Cmd_PARAMS_SETUP:return parameters(in_data,out_data);
    case PF_Cmd_RENDER:return render(in_data,params,output);
+   case PF_Cmd_USER_CHANGED_PARAM:{
+    const auto* changed=static_cast<const PF_UserChangedParamExtra*>(extra);
+    const auto error=better_captions::adobe::changedDimension(in_data,out_data,params,changed);if(error)return error;
+    return better_captions::adobe::purposeful_controls::changed(in_data,out_data,params,changed);
+   }
+   case PF_Cmd_UPDATE_PARAMS_UI:return better_captions::adobe::purposeful_controls::refresh(in_data,params);
    case PF_Cmd_ARBITRARY_CALLBACK:return better_captions::adobe::arbitrary(in_data,static_cast<PF_ArbParamsExtra*>(extra),demo());
-#if BC_ENABLE_CUSTOM_UI_PROBE || BC_ENABLE_CAPTION_BOUNDS_UI
    case PF_Cmd_EVENT:return better_captions::adobe::ui_probe::event(in_data,params,static_cast<PF_EventExtra*>(extra));
-#endif
    default:break;
   }
   return PF_Err_NONE;

@@ -10,7 +10,8 @@ interface Options {
   apply: (context: LiveOutputContext) => Promise<unknown>;
   supersede?: () => void;
   onStatus: (status: LiveOutputStatus) => void;
-  debounce?: number;
+  /** Quiet time before a write. A function is read per edit (typing steps are already debounced). */
+  debounce?: number | (() => number);
   now?: () => number;
 }
 const identity = (context: LiveOutputContext) => JSON.stringify([context.sequenceId, context.signature]);
@@ -24,6 +25,8 @@ export function retryableNativeRead(problem: unknown): boolean {
 export function createLiveOutput(options: Options) {
   const now = options.now ?? Date.now;
   let alive = true, running = '', desired = '', changedAt = now(), failed = '', complete = '', retryAt = 0, retries = 0;
+  let current: Promise<void> | null = null;
+  const debounce = () => typeof options.debounce === 'function' ? options.debounce() : options.debounce ?? 400;
   const uncertain = new Map<string, string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   function schedule(delay: number) {
@@ -45,7 +48,7 @@ export function createLiveOutput(options: Options) {
     if (!context || !next || next === complete) { options.onStatus({ phase: 'idle', message: '' }); return; }
     if (failed === next) return;
     options.onStatus({ phase: 'waiting', message: context.ready ? 'Changes queued…' : 'Waiting for Premiere…' });
-    schedule(Math.max(0, changedAt + (options.debounce ?? 400) - now(), retryAt - now()));
+    schedule(Math.max(0, changedAt + debounce() - now(), retryAt - now()));
   }
   async function drain() {
     if (!alive || running) return;
@@ -58,10 +61,12 @@ export function createLiveOutput(options: Options) {
       options.onStatus({ phase: 'waiting', message: 'Waiting for Premiere…' });
       schedule(500); return;
     }
-    const delay = Math.max(changedAt + (options.debounce ?? 400) - now(), retryAt - now());
+    const delay = Math.max(changedAt + debounce() - now(), retryAt - now());
     if (delay > 0) { schedule(delay); return; }
     running = key;
     options.onStatus({ phase: 'working', message: 'Updating captions…' });
+    let finish = () => {};
+    current = new Promise(resolve => { finish = resolve; });
     try {
       await options.apply(context);
       complete = key; retries = 0; retryAt = 0;
@@ -80,14 +85,30 @@ export function createLiveOutput(options: Options) {
         options.onStatus({ phase: 'error', message: String(error?.message ?? problem).slice(0, 1000) });
       }
     } finally {
-      running = '';
+      running = ''; current = null; finish();
       if (alive) notify();
     }
   }
   return {
     notify,
     block(sequenceId:string,message:string) { uncertain.set(sequenceId,message); notify(); },
+    /** A verified host read can settle the current output without replaying its
+     * uncertain setter. Call only after adopting that exact native document. */
+    confirmReadback(sequenceId:string,signature:string) {
+      const context = options.current();
+      if (!alive || running || !context || context.sequenceId !== sequenceId || context.signature !== signature || context.needed) return false;
+      const key = identity(context);
+      uncertain.delete(sequenceId);
+      if (failed === key) failed = '';
+      complete = key; retries = 0; retryAt = 0;
+      notify(); return true;
+    },
+    /** The layer was read back into the editor (Premiere Undo/Redo): a later edit
+     * back to an earlier written state must be written again. */
+    forget() { complete = ''; failed = ''; retries = 0; retryAt = 0; notify(); },
     diagnostics: () => ({ running: !!running, queued: !!desired && desired !== complete, retries, blocked: uncertain.size > 0 }),
+    /** Settles when no write is in flight. A write that is not ready yet is not awaited. */
+    idle: () => current ?? Promise.resolve(),
     stop() { alive = false; if (timer !== undefined) clearTimeout(timer); },
   };
 }

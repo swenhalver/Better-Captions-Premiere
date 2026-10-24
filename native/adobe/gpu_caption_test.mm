@@ -37,7 +37,6 @@ int main(int argc,char** argv){
  param.mFloat64=2.49;assert(sampledGroupsPerPage(number(param))==2);
  param.mFloat64=2.5;assert(sampledGroupsPerPage(number(param))==3);
  param.mFloat64=101;assert(sampledGroupsPerPage(number(param))==100);
- param.mFloat64=.49;assert(!sampledSmartLineFit(number(param)));param.mFloat64=.5;assert(sampledSmartLineFit(number(param)));
  param.mFloat64=2.7;const auto rollSample=sampledRollUpSettings(1,number(param),.18,1,0,.35,1,1.5,3.5,1,.5);
  assert(rollSample.enabled&&rollSample.visibleLines==3&&rollSample.transitionCurve==2&&rollSample.direction==4&&rollSample.waitForLine);
  assert(sampledRollUpSettings(1,2,.18,1,0,.35,1,2,1,1,1,3.5).transition==4);

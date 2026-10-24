@@ -30,21 +30,20 @@ struct FrameFonts {
 };
 // Preserve the exact legacy path when no join is needed. Joined edges have
 // zero corner radius; separate state colors/alpha still paint their own span.
-CGPathRef bubblePath(CGRect rect,double radius,bool joinLeft,bool joinRight){
- if(!joinLeft&&!joinRight)return CGPathCreateWithRoundedRect(rect,radius,radius,nullptr);
+CGPathRef bubblePath(CGRect rect,const WordStyle& s,bool joinLeft,bool joinRight){
+ const double limit=std::max(0.0,std::min(rect.size.width,rect.size.height)/2);
+ auto radius=[&](double r){return std::min(r<0?s.radius:r,limit);};
+ const double tl=joinLeft?0:radius(s.radiusTL),tr=joinRight?0:radius(s.radiusTR),br=joinRight?0:radius(s.radiusBR),bl=joinLeft?0:radius(s.radiusBL);
+ if(tl==tr&&tr==br&&br==bl)return CGPathCreateWithRoundedRect(rect,tl,tl,nullptr);
  auto path=CGPathCreateMutable();if(!path)throw std::runtime_error("Bubble path allocation failed");
- const auto left=CGRectGetMinX(rect),right=CGRectGetMaxX(rect),bottom=CGRectGetMinY(rect),top=CGRectGetMaxY(rect);
- const double l=joinLeft?0:radius,r=joinRight?0:radius;
- CGPathMoveToPoint(path,nullptr,left+l,bottom);CGPathAddLineToPoint(path,nullptr,right-r,bottom);
- if(r)CGPathAddArcToPoint(path,nullptr,right,bottom,right,bottom+r,r);else CGPathAddLineToPoint(path,nullptr,right,bottom);
- CGPathAddLineToPoint(path,nullptr,right,top-r);
- if(r)CGPathAddArcToPoint(path,nullptr,right,top,right-r,top,r);else CGPathAddLineToPoint(path,nullptr,right,top);
- CGPathAddLineToPoint(path,nullptr,left+l,top);
- if(l)CGPathAddArcToPoint(path,nullptr,left,top,left,top-l,l);else CGPathAddLineToPoint(path,nullptr,left,top);
- CGPathAddLineToPoint(path,nullptr,left,bottom+l);
- if(l)CGPathAddArcToPoint(path,nullptr,left,bottom,left+l,bottom,l);else CGPathAddLineToPoint(path,nullptr,left,bottom);
- CGPathCloseSubpath(path);return path;
+ const auto l=CGRectGetMinX(rect),r=CGRectGetMaxX(rect),b=CGRectGetMinY(rect),t=CGRectGetMaxY(rect);
+ CGPathMoveToPoint(path,nullptr,l+bl,b);CGPathAddLineToPoint(path,nullptr,r-br,b);
+ CGPathAddArcToPoint(path,nullptr,r,b,r,t,br);CGPathAddLineToPoint(path,nullptr,r,t-tr);
+ CGPathAddArcToPoint(path,nullptr,r,t,l,t,tr);CGPathAddLineToPoint(path,nullptr,l+tl,t);
+ CGPathAddArcToPoint(path,nullptr,l,t,l,b,tl);CGPathAddLineToPoint(path,nullptr,l,b+bl);
+ CGPathAddArcToPoint(path,nullptr,l,b,r,b,bl);CGPathCloseSubpath(path);return path;
 }
+
 struct Shaped {
  Ref<CFStringRef> text;
  bool syntheticItalic=false;
@@ -99,25 +98,24 @@ Metrics measureText(const std::string& text,const WordStyle& style,double baseWe
  Document check;check.style.current=style;check.style.baseFontWeight=baseWeight;check.containers.push_back({"measure",false,{{text,0,1,false}}});validate(check);
  return Shaped(text,style,baseWeight).metrics();
 }
-Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::size_t width,std::size_t height,std::size_t maxChars,double pause,std::size_t groupsPerPage,bool smartLineFit,const RollUpSettings& rollUp){
+Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::size_t width,std::size_t height,std::size_t maxChars,double pause,std::size_t groupsPerPage,const RollUpSettings& rollUp){
  validate(document);
  if(!width||!height||width>8192||height>8192||width*height>33554432)throw std::invalid_argument("Native frame exceeds bitmap bounds");
  FrameFonts fonts;
- auto frame=layoutFrame(document,time,box,[&](const std::string& text,const WordStyle& style){return Shaped(text,style,document.style.baseFontWeight,&fonts).metrics();},maxChars,pause,transformText,groupsPerPage,smartLineFit,rollUp);
+ auto frame=layoutFrame(document,time,box,[&](const std::string& text,const WordStyle& style){return Shaped(text,style,document.style.baseFontWeight,&fonts).metrics();},maxChars,pause,transformText,groupsPerPage,rollUp);
  Bitmap bitmap{width,height,width*4,std::vector<std::uint8_t>(width*height*4,0),frame.overflow};
  Ref<CGColorSpaceRef> space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
  Ref<CGContextRef> context(CGBitmapContextCreate(bitmap.pixels.data(),width,height,8,bitmap.stride,space,kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big));
  // Core Graphics coordinates are bottom-left; layout geometry is top-left.
- CGContextClipToRect(context,CGRectMake(box.x,height-box.y-box.height,box.width,box.height));
- if(frame.rolling)CGContextClipToRect(context,CGRectMake(frame.viewport.x,height-frame.viewport.y-frame.viewport.height,frame.viewport.width,frame.viewport.height));
+ // The layout rectangle positions glyphs and backgrounds; it is not a crop.
+ // Only the output frame and explicitly selected roll-up boundary masks clip paint.
  for(const auto& run:frame.words){
-  const auto& s=run.style;Shaped shaped(run.text,s,document.style.baseFontWeight,&fonts);auto m=shaped.metrics();double inlinePad=s.bubble?s.inlinePadding():0,pad=s.bubble?s.blockPadding():0;
+  const auto& s=run.style;Shaped shaped(run.text,s,document.style.baseFontWeight,&fonts);auto m=shaped.metrics();double inlinePad=s.leftPadding(),pad=s.bottomPadding(); // Glyph origin is independent of background visibility.
   CGContextSaveGState(context);
   if(s.bubble){
    Ref<CGColorRef> bubble(Shaped::color(space,s.bubbleColor,s.opacity));CGContextSetFillColorWithColor(context,bubble);
-   auto rect=CGRectMake(run.x,height-run.baseline-m.descent-pad,run.width+run.bubbleExtraWidth,m.ascent+m.descent+2*pad);
-   double radius=std::fmin(s.radius,std::fmin(rect.size.width,rect.size.height)/2);
-   Ref<CGPathRef> path(bubblePath(rect,radius,run.bubbleJoinLeft,run.bubbleJoinRight));CGContextAddPath(context,path);CGContextFillPath(context);
+   auto rect=CGRectMake(run.x,height-run.baseline-m.descent-pad,m.width+s.horizontalPadding()+run.bubbleExtraWidth,m.ascent+m.descent+s.verticalPadding());
+   Ref<CGPathRef> path(bubblePath(rect,s,run.bubbleJoinLeft,run.bubbleJoinRight));CGContextAddPath(context,path);CGContextFillPath(context);
   }
   const bool shadow=s.shadowColor.a>0&&(s.shadowBlur>0||s.shadowX!=0||s.shadowY!=0);
   if(shadow){

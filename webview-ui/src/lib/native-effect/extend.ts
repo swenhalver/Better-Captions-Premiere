@@ -71,7 +71,7 @@ export function prepareNativeCaptionExtension(
     // A range-aware transcript fetch must resolve boundary words explicitly;
     // never clip them silently or duplicate a possibly edited original word.
     if (word.start < appendFromSeconds || word.end > targetSeconds) throw new Error('The fresh tail transcript crosses the protected extension boundary.');
-    appended.push({ text: word.text, start: word.start - offset, end: word.end - offset, endOfSentence: word.endOfSentence });
+    appended.push({ text: word.text, start: word.start - offset, end: word.end - offset, endOfSentence: word.endOfSentence, ...(word.lineBreakBefore === undefined ? {} : { lineBreakBefore: word.lineBreakBefore }), ...(word.pauseLinesRemoved === undefined ? {} : { pauseLinesRemoved: word.pauseLinesRemoved }) });
   }
   const revealsStoredWords = storedWords.some(word => word.end + offset > seconds(end) && word.start + offset < targetSeconds);
   if (!appended.length && !revealsStoredWords) return { document, appendFromSeconds, appendedWords: 0, revealsStoredWords, changed: false, endTicks: placement.endTicks, outTicks: placement.outTicks };

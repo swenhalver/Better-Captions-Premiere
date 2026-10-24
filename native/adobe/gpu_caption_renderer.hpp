@@ -227,6 +227,8 @@ inline PreviewGeometry previewGeometry(double divisorX,double divisorY,double po
                                       double nativeWidth,double nativeHeight,std::uint32_t renderWidth,std::uint32_t renderHeight){
  require(std::isfinite(divisorX)&&std::isfinite(divisorY)&&divisorX>=1&&divisorY>=1,"Invalid downsample divisor");
  require(renderWidth>0&&renderHeight>0&&renderWidth<=8192&&renderHeight<=8192&&std::uint64_t(renderWidth)*renderHeight<=33554432,"Render dimensions exceed bounds");
+ if(nativeWidth==-1)nativeWidth=std::clamp(renderWidth*divisorX*.9,1.0,8192.0);
+ if(nativeHeight==-1)nativeHeight=std::clamp(renderHeight*divisorY*.9,1.0,8192.0);
  require(std::isfinite(positionX)&&std::isfinite(positionY)&&std::isfinite(nativeWidth)&&std::isfinite(nativeHeight)&&nativeWidth>0&&nativeHeight>0,"Invalid preview layout geometry");
  PreviewGeometry result;result.sx=1.0/divisorX;result.sy=1.0/divisorY;
  require(std::isfinite(result.sx)&&std::isfinite(result.sy)&&result.sx>0&&result.sy>0,"Invalid normalized downsample scale");
@@ -237,7 +239,7 @@ inline PreviewGeometry previewGeometry(double divisorX,double divisorY,double po
  // behavior. This does NOT claim an anisotropic glyph transform or PAR proof.
  return result;
 }
-struct Snapshot {Document document;LayoutBox box;std::size_t maxChars=56,groupsPerPage=1;bool smartLineFit=false;RollUpSettings rollUp;double seconds=0;};
+struct Snapshot {Document document;LayoutBox box;std::size_t maxChars=56,groupsPerPage=1;RollUpSettings rollUp;double seconds=0;};
 inline Snapshot snapshot(State& s,const PrGPUFilterInstance& i,const PrGPUFilterRenderParams& r){
  using namespace parameters;
  require(r.inRenderWidth>0&&r.inRenderHeight>0&&r.inRenderWidth<=8192&&r.inRenderHeight<=8192&&std::uint64_t(r.inRenderWidth)*r.inRenderHeight<=33554432,"Render dimensions exceed bounds");
@@ -255,11 +257,16 @@ inline Snapshot snapshot(State& s,const PrGPUFilterInstance& i,const PrGPUFilter
  if(count>=TextAlignment)result.box.alignment=sampledTextAlignment(number(param(s,i,TextAlignment,r.inClipTime)));
  const double chars=number(param(s,i,MaxChars,r.inClipTime));require(chars>=1&&chars<=500&&std::floor(chars)==chars,"Invalid grouping count");result.maxChars=static_cast<std::size_t>(chars);
  if(count>=GroupsPerPage)result.groupsPerPage=sampledGroupsPerPage(number(param(s,i,GroupsPerPage,r.inClipTime)));
- if(count>=SmartLineFit)result.smartLineFit=sampledSmartLineFit(number(param(s,i,SmartLineFit,r.inClipTime)));
  if(count>=RollUpCurve){
   auto sample=[&](int index,double fallback){return count>=index?number(param(s,i,index,r.inClipTime)):fallback;};
   result.rollUp=sampledRollUpSettings(sample(RollUpEnabled,0),sample(RollUpLines,2),sample(RollUpDuration,.18),sample(RollUpBoundary,1),
-    sample(RollUpPosition,0),sample(RollUpThickness,.35),sample(RollUpFade,1),sample(RollUpCurve,2),sample(RollUpDirection,1),sample(RollUpSpeed,1),sample(RollUpWait,1),sample(LineTransition,1));
+    sample(RollUpPosition,0),sample(RollUpThickness,.35),sample(RollUpFade,1),sample(RollUpCurve,2),sample(RollUpDirection,1),sample(RollUpSpeed,1),sample(RollUpWait,1),sample(LineTransition,1),sample(RollUpCurrentLine,1),sample(RollUpBlankLineSeconds,0));
+ }
+ if(count>=BoundaryMode)result.rollUp.boundaryMode=std::clamp(int(std::round(number(param(s,i,BoundaryMode,r.inClipTime))))-1,0,1);
+ const int edgeStarts[]={TopInset,BottomInset,LeftInset,RightInset};
+ for(int edge=0;edge<4;++edge){const int first=edgeStarts[edge];if(count>=first+4)
+  result.rollUp.edges[edge]=sampledRollUpEdge(number(param(s,i,first,r.inClipTime))/100.0,number(param(s,i,first+1,r.inClipTime)),
+   number(param(s,i,first+2,r.inClipTime))/100.0,number(param(s,i,first+3,r.inClipTime))/100.0,number(param(s,i,first+4,r.inClipTime)));
  }
  trace(7,&i,&r,1,"stage-layout-controls");NativeAppearanceControls c;
  if(count>=UpcomingEnd){c.current=wordControls(s,i,r.inClipTime,CurrentSize,&r);c.spoken=wordControls(s,i,r.inClipTime,SpokenSize,&r);c.upcoming=wordControls(s,i,r.inClipTime,UpcomingSize,&r);}
@@ -303,7 +310,7 @@ inline prSuiteError precompute(PrGPUFilterInstance* instance,const PrGPUFilterRe
   const auto formatError=s.ppix->GetPixelFormat(frame,&format);info.cpuFormat=static_cast<unsigned>(format);require(!formatError&&format==PrPixelFormat_BGRP_4444_8u,"Unexpected precompute format");
   require(!s.ppix->GetBounds(frame,&bounds)&&bounds.left==0&&bounds.top==0&&bounds.right==int(r->inRenderWidth)&&bounds.bottom==int(r->inRenderHeight),"Unexpected precompute bounds");
   const auto pitchError=s.ppix->GetRowBytes(frame,&stride);info.cpuPitch=stride;require(!pitchError&&!s.ppix->GetPixels(frame,PrPPixBufferAccess_WriteOnly,&pixels)&&pixels,"Precompute buffer inaccessible");
-  auto snap=snapshot(s,*instance,*r);trace(7,instance,r,1,"stage-snapshot-ready",info);auto bitmap=macos::rasterize(snap.document,snap.seconds,snap.box,r->inRenderWidth,r->inRenderHeight,snap.maxChars,0.6,snap.groupsPerPage,snap.smartLineFit,snap.rollUp);trace(7,instance,r,1,"stage-raster-ready",info);copyOverlay(bitmap,pixels,stride);trace(3,instance,r,1,"ok",info);scrub.details(info);return scrub.finish(suiteError_NoError);
+  auto snap=snapshot(s,*instance,*r);trace(7,instance,r,1,"stage-snapshot-ready",info);auto bitmap=macos::rasterize(snap.document,snap.seconds,snap.box,r->inRenderWidth,r->inRenderHeight,snap.maxChars,0.6,snap.groupsPerPage,snap.rollUp);trace(7,instance,r,1,"stage-raster-ready",info);copyOverlay(bitmap,pixels,stride);trace(3,instance,r,1,"ok",info);scrub.details(info);return scrub.finish(suiteError_NoError);
  }catch(...){scrub.details(info);scrub.exception();return scrub.finish(failure(3,instance,r,info));}
 }
 struct GPUFrame {id<MTLBuffer> buffer=nil;std::uint32_t stride=0;bool half=false;};
