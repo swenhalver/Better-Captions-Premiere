@@ -2376,7 +2376,26 @@ var BetterCaptionsHost = (function () {
             if (!validAxis) throw new Error('Invalid caption extension bubble padding axis.');
         }
         if (version >= 6) for (var underline = 0; underline < 3; underline++) if (u() > 2) throw new Error('Invalid caption extension underline flag.');
-        if(version>=7)for(var geometry=0;geometry<36;geometry++){var lo=u(),hi=u(),absHi=hi&2147483647;var margin=(geometry%12)>=8;if(!((margin?absHi:hi)<1085276160||(margin?absHi:hi)===1085276160&&lo===0||!margin&&hi===3220176896&&lo===0))throw new Error('Invalid caption geometry.');}
+        if (version >= 7) for (var geometry = 0; geometry < 36; geometry++) {
+            var lo = u(), hi = u(), margin = (geometry % 12) >= 8;
+            // The live host rejected padding 15 in the compound ternary/OR
+            // expression here despite its separate comparisons passing.
+            // Compare unsigned IEEE754 words in separate statements instead;
+            // margins allow either sign, padding/radii only [0,4096] or -1.
+            var geometryHigh = hi;
+            if (margin) geometryHigh = hi & 2147483647;
+            var validGeometry = geometryHigh < 1085276160;
+            if (geometryHigh === 1085276160) {
+                if (lo === 0) validGeometry = true;
+            }
+            if (!margin) {
+                if (lo === 0) {
+                    if (hi === 3220176896) validGeometry = true; // exact absent sentinel
+                    if (hi === 2147483648) validGeometry = true; // numeric -0
+                }
+            }
+            if (!validGeometry) throw new Error('Invalid caption geometry.');
+        }
         // v11 appends the line wrap: 0 Fill, 1 Balance, 2 Pretty.
         if (version >= 11 && u() > 2) throw new Error('Invalid caption extension line wrap.');
         if (version >= nativePositionStylesVersion) {

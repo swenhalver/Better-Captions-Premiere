@@ -92,6 +92,51 @@ function fixture(options = {}) {
   return h;
 }
 
+// Locate the actual binary footer, independent of caption/word string lengths.
+// Raw writes below bypass the panel codec so it cannot normalize signed zero or
+// reject malformed geometry before the production host validator sees it.
+function extensionFooterOffsets(text) {
+  const bytes = Buffer.from(text.slice(7), 'hex'), version = bytes.readUInt32LE(4);
+  let offset = 12;
+  const string = () => { const size = bytes.readUInt32LE(offset); offset += 4 + size; };
+  for (let caption = 0; caption < bytes.readUInt32LE(8); caption++) {
+    string(); offset += 4;
+    const words = bytes.readUInt32LE(offset); offset += 4;
+    for (let word = 0; word < words; word++) {
+      string(); offset += 20;
+      if (version >= 8) offset += 4;
+      if (version >= 9) offset += 4;
+    }
+  }
+  const footer = offset;
+  for (let state = 0; state < 3; state++) { string(); offset += 204; }
+  offset += 20;
+  if (version >= 2) offset += 8;
+  if (version >= 3) offset += 56;
+  if (version >= 4) offset += 4;
+  if (version >= 5) offset += 12;
+  if (version >= 6) offset += 60;
+  assert.ok(version >= 7 && offset + 36 * 8 <= bytes.length);
+  return { bytes, footer, geometry: offset };
+}
+
+function geometryCarrier(text, index, value) {
+  const { bytes, geometry } = extensionFooterOffsets(text);
+  bytes.writeDoubleLE(value, geometry + index * 8);
+  return nativeCarrier(bytes);
+}
+
+function setExistingCarrier(h, documentText) {
+  h.params[4].value = documentText;
+  const fresh = h.connection();
+  h.snapshot.locator = fresh.locator; h.snapshot.revision = fresh.revision;
+}
+
+function assertSameFooter(before, after) {
+  const old = extensionFooterOffsets(before), next = extensionFooterOffsets(after);
+  assert.deepEqual(next.bytes.subarray(next.footer), old.bytes.subarray(old.footer));
+}
+
 test('extension read is mutation-free, excludes caption carriers, and plans exact moved/trimmed source duration', () => {
   const h = fixture(), before = h.connection(), result = h.read();
   assert.equal(result.ok, true, result.error); assert.equal(result.canExtend, true);
@@ -352,6 +397,90 @@ test('v6 underline tri-state bytes remain immutable and invalid or missing flags
   const entry=h.connection();h.snapshot.locator=entry.locator;h.snapshot.revision=entry.revision;
   assert.match(h.extend(h.read(),{documentText:h.params[4].value}).error,/underline|Truncated/);assert.deepEqual(h.writes,[]);
  }
+});
+
+// These tests execute the unmodified production host in Node's VM. They cover
+// range semantics, exact footer preservation and the pre-write guard, but Node
+// does not reproduce ExtendScript's compound ternary/OR optimizer defect.
+test('v7 geometry accepts positive padding 15 and negative margins -5 through real Extend without changing existing footer bytes', () => {
+  for (const binaryVersion of [7, 11, 12]) {
+    const h = fixture({ binaryVersion, prepareDocument(document) {
+      for (const state of ['upcoming', 'current', 'spoken']) {
+        Object.assign(document.style[state], {
+          paddingTop: 15, paddingRight: 15, paddingBottom: 15, paddingLeft: 15,
+          radiusTL: 15, radiusTR: 15, radiusBR: 15, radiusBL: 15,
+          marginTop: -5, marginRight: -5, marginBottom: -5, marginLeft: -5,
+        });
+      }
+      if (binaryVersion === 12) document.style.lineStyles = { '1': { marginTop: -5, paddingTop: 15 } };
+    } });
+    const before = extensionFooterOffsets(h.originalText);
+    assert.equal(before.bytes.readUInt32LE(4), binaryVersion);
+    // Exact words from the live failing positive-padding case.
+    assert.equal(before.bytes.readUInt32LE(before.geometry), 0);
+    assert.equal(before.bytes.readUInt32LE(before.geometry + 4), 1076756480);
+    const result = h.extend(h.read());
+    assert.equal(result.ok, true, result.error); assert.equal(result.readbackVerified, true);
+    assert.equal(result.connection.documentText, h.appendedText);
+    if (binaryVersion === 7) {
+      // The legacy upgrade appends Fill's default; all existing bytes survive.
+      const after = extensionFooterOffsets(result.connection.documentText);
+      assert.deepEqual(after.bytes.subarray(after.footer), Buffer.concat([before.bytes.subarray(before.footer), Buffer.alloc(4)]));
+    } else assertSameFooter(h.originalText, result.connection.documentText);
+    assert.deepEqual(h.writes.map(row => row.slice(0, 2)), [
+      ['timing', 'outPoint'], ['timing', 'end'], ['document', 'Caption document (experimental)'],
+    ]);
+  }
+});
+
+test('v7 geometry accepts exact bounds, -1 axes sentinel, signed zeros and finite subnormals at every geometry slot', () => {
+  for (let index = 0; index < 36; index++) {
+    const margin = index % 12 >= 8;
+    for (const value of margin ? [-4096, -5, -1, -Number.MIN_VALUE, -0, 0, Number.MIN_VALUE, 15, 4096] : [-1, -0, 0, Number.MIN_VALUE, 15, 4096]) {
+      const h = fixture(), original = geometryCarrier(h.originalText, index, value), appended = geometryCarrier(h.appendedText, index, value);
+      setExistingCarrier(h, original);
+      const result = h.extend(h.read(), { documentText: appended });
+      assert.equal(result.ok, true, `slot ${index}, ${Object.is(value, -0) ? '-0' : value}: ${result.error}`);
+      assert.equal(result.connection.documentText, appended);
+      assertSameFooter(original, result.connection.documentText);
+      assert.equal(h.writes.filter(row => row[0] === 'document').length, 1);
+    }
+  }
+});
+
+test('v7 geometry rejects out-of-range and NaN/Inf words before timing or document setters in either carrier', () => {
+  // The nearest double beyond each limit has the same high word and a nonzero
+  // low word. Likewise, near -1 is not the exact absent-axis sentinel.
+  const beyond = 4096 + 2 ** -40;
+  for (let index = 0; index < 36; index++) {
+    const margin = index % 12 >= 8;
+    const values = margin ? [-beyond, beyond, NaN, Infinity, -Infinity] : [-4096, -5, -Number.MIN_VALUE, -1 - Number.EPSILON, -1 + Number.EPSILON, beyond, NaN, Infinity, -Infinity];
+    for (const value of values) for (const corruptExisting of [false, true]) {
+      const h = fixture(), appended = geometryCarrier(h.appendedText, index, value);
+      if (corruptExisting) setExistingCarrier(h, geometryCarrier(h.originalText, index, value));
+      const timingBefore = [h.caption.start.ticks, h.caption.inPoint.ticks, h.caption.end.ticks, h.caption.outPoint.ticks];
+      const documentBefore = h.params[4].value;
+      const result = h.extend(h.read(), { documentText: appended });
+      assert.match(result.error, /Invalid caption geometry/, `slot ${index}, ${value}, existing ${corruptExisting}`);
+      assert.equal(result.code, undefined); assert.equal(result.retry, 'never');
+      assert.deepEqual(h.writes, []);
+      assert.deepEqual([h.caption.start.ticks, h.caption.inPoint.ticks, h.caption.end.ticks, h.caption.outPoint.ticks], timingBefore);
+      assert.equal(h.params[4].value, documentBefore);
+    }
+  }
+});
+
+test('v7 geometry remains byte-immutable during Extend, including negative zero versus positive zero', () => {
+  for (let index = 0; index < 36; index++) {
+    for (const signedZeroChange of [false, true]) {
+      const h = fixture();
+      if (signedZeroChange) setExistingCarrier(h, geometryCarrier(h.originalText, index, -0));
+      const changed = geometryCarrier(h.appendedText, index, signedZeroChange ? 0 : index % 12 >= 8 ? -5 : 15);
+      const result = h.extend(h.read(), { documentText: changed });
+      assert.match(result.error, /preserve every previous style/);
+      assert.deepEqual(h.writes, []);
+    }
+  }
 });
 
 

@@ -1,7 +1,7 @@
 {
   "id": "ca.swen.bettercaptions",
   "name": "S-Captions",
-  "version": "0.7.88",
+  "version": "0.7.89",
   "manifestVersion": 5,
   "main": "index.html",
   "host": {
