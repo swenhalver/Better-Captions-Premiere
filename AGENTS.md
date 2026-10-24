@@ -42,6 +42,8 @@ After each change to the plugin, reinstall it into Premiere without being asked.
    When Swen says he is remote, relaunch with `bash scripts/open-premiere.sh --main-display`, which skips S-Space.
 
    Never force-quit or kill it. Then report the installed version.
+
+   **If Premiere is on Swen's main display, never bring it to the front or send it keys.** He may be typing in another app, and his keystrokes would land in Premiere, where plain letters are editing shortcuts. On 2026-10-23, during a quit while Premiere was on his main display, his timeline got a real 37-frame ripple trim and its In/Out points were cleared. Quit it there only through the Accessibility menu path above (File › Save, then Premiere › Quit via `kAXPressAction`), which doesn't steal focus. Or ask him first.
 6. **Native effect changes** (anything under `native/`) also need the C++ plug-in rebuilt and reinstalled, with the SDKs that live in the gitignored `sdk/` folder:
 
    ```
