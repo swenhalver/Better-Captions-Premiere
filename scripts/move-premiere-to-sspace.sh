@@ -1,6 +1,6 @@
 #!/bin/bash
-# Move a running Premiere's project window onto the S-Space monitor and zoom it
-# to fill the display (same as double-clicking its title bar).
+# Move Premiere's project window onto S-Space and verify normal maximization.
+# The verifier never presses the green/full-screen button.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 sspace="/Users/swenhalverson/Cursor Projects/S-Space/tools/s-space"

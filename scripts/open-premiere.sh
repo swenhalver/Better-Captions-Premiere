@@ -59,7 +59,7 @@ if [ -z "$project" ]; then
 fi
 swift "$root/scripts/launch-premiere-test.swift" --project "$project"
 echo "Opened Premiere on S-Space with: $project"
-# Fill S-Space with the project window (same as double-clicking its title bar).
+# Require normal maximization; the verifier never presses the full-screen button.
 swift "$root/scripts/maximize-premiere-sspace.swift"
 fi
 
@@ -78,7 +78,7 @@ if [ "$bridge_ready" != 1 ]; then
   echo "Premiere Pro MCP bridge did not report within 2 minutes (open Window > Extensions > MCP Bridge (CEP) to check)" >&2
   exit 1
 fi
-# Restore after project/extension startup and the final outer-window sizing.
+# Restore after project/extension startup and verified normal window sizing.
 # Shrink/grow alone can collapse the dock while the workspace name stays the
 # same. A successful menu press is not rendered-layout verification.
 if [ "$main_display" != 1 ]; then

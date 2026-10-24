@@ -3,6 +3,15 @@
 The saved **S-Captions** workspace is the reference. Its name alone does not
 prove that Premiere is displaying its saved proportions.
 
+Premiere must remain a **normal maximized window with visible window controls
+and menu-bar area**, never full screen. The previous `AXZoomButton` action
+targeted a control whose actual subrole was `AXFullScreenButton`. That action
+has been removed. `maximize-premiere-sspace.swift` now only checks the normal
+frame below the menu bar and refuses full-monitor/full-screen frames. When
+sizing is necessary, the Codex tester double-clicks the visible title bar,
+reruns the verifier and resets the saved layout. Correct dock proportions
+alone cannot pass a run if its window controls are hidden.
+
 On 2026-10-24, reducing the outer window from 2560 to 2054 points and growing
 it back to 2558 reduced the left dock from 31% to 15.8%. The Program Monitor
 grew to 61.6%; the workspace name stayed S-Captions. Reset to Saved Layout
@@ -17,7 +26,8 @@ was intact, and the S-Space release code does not resize windows.
 1. Confirm the desktop is unlocked, Premiere's current PID/window, and that the
    window is on S-Space. Complete all window sizing before resetting the saved
    layout. `open-premiere.sh` resets after startup and sizing;
-   `move-premiere-to-sspace.sh` resets after placement and sizing. Neither a
+   `move-premiere-to-sspace.sh` resets after placement and sizing verification.
+   Both stop if the normal maximized frame cannot be verified. Neither a
    helper exit nor an accepted menu press is proof of rendered proportions.
 2. Capture the actual full window through Computer Use. Read its current width
    and height from S-Space's window inventory. Run the read-only checker:

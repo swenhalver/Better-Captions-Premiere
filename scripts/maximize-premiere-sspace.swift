@@ -1,10 +1,11 @@
 #!/usr/bin/env swift
-// Zoom Premiere's project window to fill the S-Space monitor, exactly like
-// double-clicking its title bar (Swen's way). It presses the window's zoom
-// button only when the window doesn't already fill S-Space, because a second
-// zoom would restore the smaller size. Only acts on a window already on S-Space.
+// Verify Premiere's normal maximized frame on S-Space. This deliberately does
+// not press the green/AXZoomButton: Premiere exposes it as AXFullScreenButton,
+// and that action entered full screen instead of normal window maximization.
+// When needed, a Codex tester must double-click the visible title bar through
+// Computer Use, then rerun this check. Never enter full screen to satisfy it.
 //
-//   swift scripts/maximize-premiere-sspace.swift            # apply
+//   swift scripts/maximize-premiere-sspace.swift            # verify normal maximization
 //   swift scripts/maximize-premiere-sspace.swift --dry-run  # print the target frame only
 import AppKit
 import ApplicationServices
@@ -40,6 +41,7 @@ for row in rows where (row[kCGWindowName as String] as? String) == "Menubar" {
        abs(rect.minY - monitor.minY) <= 1, rect.minX >= monitor.minX - 1, rect.maxX <= monitor.maxX + 1 { top = max(top, rect.height + 1) }
 }
 let target = CGRect(x: monitor.minX + left, y: monitor.minY + top, width: monitor.width - left, height: monitor.height - top - bottom)
+guard top > 2 else { fail("Cannot establish the menu-bar inset; refusing to accept a full-monitor frame as normal maximization.") }
 if dryRun { print("target:", target); exit(0) }
 
 guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else { fail("Premiere is not running.") }
@@ -65,17 +67,12 @@ var found: AXUIElement?
 for _ in 0..<20 { if let w = projectWindow() { found = w; break }; Thread.sleep(forTimeInterval: 0.5) }
 guard let project = found, let before = frame(project) else { fail("Premiere has no project window.") }
 guard monitor.contains(CGPoint(x: before.midX, y: before.midY)) else { fail("Premiere's project window is not on S-Space; move it there first.") }
-// Premiere sometimes comes up covering the whole monitor, menu bar strip
-// included (y = monitor top, height 1440). That is already full; zooming it
-// would toggle it to a smaller size, and every resize redistributes Premiere's
-// panel sizes (Swen's S-Captions panel kept shrinking).
-func fills(_ rect: CGRect) -> Bool { abs(rect.minX - target.minX) <= 2 && abs(rect.width - target.width) <= 2 && rect.minY <= target.minY + 2 && rect.minY >= monitor.minY - 2 && rect.maxY >= target.maxY - 2 }
-if fills(before) { print("Premiere already fills S-Space: \(before)"); exit(0) }
-var zoom: CFTypeRef?
-guard AXUIElementCopyAttributeValue(project, kAXZoomButtonAttribute as CFString, &zoom) == .success, let button = zoom
-else { fail("Premiere's window has no zoom button available.") }
-_ = AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
-var after = before
-for _ in 0..<20 { Thread.sleep(forTimeInterval: 0.1); if let now = frame(project) { after = now; if fills(now) { break } } }
-print(fills(after) ? "Premiere fills S-Space: \(after)" : "Zoom did not fill S-Space: \(after) (expected \(target))")
-exit(fills(after) ? 0 : 1)
+var fullScreen: CFTypeRef?
+if AXUIElementCopyAttributeValue(project, "AXFullScreen" as CFString, &fullScreen) == .success,
+   fullScreen as? Bool == true { fail("Premiere is full screen. Full screen is forbidden; restore its normal window through Computer Use.") }
+func fills(_ rect: CGRect) -> Bool {
+    abs(rect.minX - target.minX) <= 2 && abs(rect.minY - target.minY) <= 2 &&
+    abs(rect.width - target.width) <= 2 && abs(rect.height - target.height) <= 2
+}
+if fills(before) { print("Premiere has the normal maximized S-Space frame: \(before). Also verify visible window controls in the screenshot."); exit(0) }
+fail("Premiere is not normally maximized: \(before) (expected \(target)). Use Computer Use to double-click its visible title bar, then rerun this check and reset the saved layout. Do not use the green/full-screen button.")
