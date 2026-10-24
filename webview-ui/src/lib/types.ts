@@ -53,6 +53,10 @@ export interface CaptionItem {
   /** Explicit transcript splits stay separate on subsequent applies. */
   manualSplit?: boolean;
   captionBundle?: boolean;
+  /** Native layers only: the timeline time of the layer's source zero. A moved
+   * or trimmed layer can place preserved source words before sequence zero;
+   * validation then allows times down to this floor instead of 0. */
+  timelineFloor?: number;
 }
 
 export interface CaptionSegment {

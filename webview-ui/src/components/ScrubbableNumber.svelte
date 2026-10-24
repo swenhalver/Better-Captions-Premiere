@@ -20,8 +20,10 @@
     defaultValue?: number;
     onChange: (value: number) => void;
     onDragState?: (dragging: boolean) => void;
+    /** Typing opened (true) and ended (false). The end follows the commit's onChange. */
+    onEditState?: (editing: boolean) => void;
   }
-  let { value, min, max, step = 1, label, disabled = false, decimals, variant = 'field', placeholder = 'Mixed', zeroLabel, title, inputRealtime = false, onReset, defaultValue, onChange, onDragState }: Props = $props();
+  let { value, min, max, step = 1, label, disabled = false, decimals, variant = 'field', placeholder = 'Mixed', zeroLabel, title, inputRealtime = false, onReset, defaultValue, onChange, onDragState, onEditState }: Props = $props();
   let editing = $state(false);
   let draft = $state('');
   let preview = $state<number | null>(null);
@@ -35,6 +37,7 @@
   let suppressResetClick = false;
   let suppressNativeDoubleClick = false;
   let suppressDoubleClick = false;
+  let editReported = false;
   const resetEnabled = $derived(typeof onReset === 'function' || defaultValue !== undefined && Number.isFinite(defaultValue));
   let unlockScroll: (()=>void)|undefined;
   const shown = $derived(dragging ? preview : value);
@@ -45,11 +48,17 @@
       lastPress = null;
       finishPointer();
       editing = false;
+      reportEditing(false);
     }
   });
 
-  onDestroy(finishPointer);
+  onDestroy(() => { finishPointer(); reportEditing(false); });
 
+  function reportEditing(active: boolean) {
+    if (editReported === active) return;
+    editReported = active;
+    onEditState?.(active);
+  }
   function publish(next: number) {
     if (next === preview) return;
     preview = next;
@@ -60,6 +69,7 @@
     draft = value === null ? '' : String(value);
     lastInputValue = value;
     editing = true;
+    reportEditing(true);
     await tick();
     if (!editing || disabled) return;
     input?.focus({preventScroll:true});
@@ -118,18 +128,22 @@
     draft = '';
     lastInputValue = null;
     finishPointer();
-    if (onReset) onReset();
-    else if (defaultValue !== undefined && Number.isFinite(defaultValue)) {
-      const next = boundedNumber(defaultValue, { min, max });
-      if (next !== value) onChange(next);
-    }
+    try {
+      if (onReset) onReset();
+      else if (defaultValue !== undefined && Number.isFinite(defaultValue)) {
+        const next = boundedNumber(defaultValue, { min, max });
+        if (next !== value) onChange(next);
+      }
+    } finally { reportEditing(false); }
   }
   function commit() {
     if (!editing) return;
     editing = false;
-    if (inputRealtime && draft === (value === null ? '' : String(value))) return;
-    const next = parsedNumber(draft, { min, max });
-    if (next !== null && next !== value && (!inputRealtime || next !== lastInputValue)) onChange(next);
+    try {
+      if (inputRealtime && draft === (value === null ? '' : String(value))) return;
+      const next = parsedNumber(draft, { min, max });
+      if (next !== null && next !== value && (!inputRealtime || next !== lastInputValue)) onChange(next);
+    } finally { reportEditing(false); }
   }
   function inputValue(event: Event) {
     if (!inputRealtime || disabled) return;
@@ -191,6 +205,7 @@
     if (event.key === 'Escape') {
       event.preventDefault();
       editing = false;
+      reportEditing(false);
       void tick().then(() => trigger?.focus({preventScroll:true}));
     } else if (event.key === 'Enter') {
       event.preventDefault();

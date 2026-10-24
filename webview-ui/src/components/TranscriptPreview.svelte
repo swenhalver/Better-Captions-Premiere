@@ -29,11 +29,13 @@
     onMaxCharsChange: (maxChars: number) => void; onUpdate: (captions: CaptionItem[], historyLabel?: string) => void;
     onEditingChange?: (active:boolean)=>void;
     onShowInPremiere?: (time: number) => void; isDemo?: boolean; disabled?: boolean; groupingDisabled?: boolean; lineFitCapacity?:number|null; onSmartLineFit?:()=>void;
+    /** A Characters per line drag or typing session started (true) or ended (false). */
+    onCharacterLimitGesture?:(active:boolean)=>void;
     typing?: TranscriptTyping | null;
     nativeGrouping?: Snippet;
     pauseSettings?: PauseLineSettings | null;
   }
-  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, disabled = false, groupingDisabled = false, onEditingChange=()=>{}, lineFitCapacity=null, onSmartLineFit, typing = null, nativeGrouping, pauseSettings = null }: Props = $props();
+  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, disabled = false, groupingDisabled = false, onEditingChange=()=>{}, lineFitCapacity=null, onSmartLineFit, onCharacterLimitGesture, typing = null, nativeGrouping, pauseSettings = null }: Props = $props();
   let activeId = $derived(captions.find((caption) => currentTime >= caption.startTime && currentTime < caption.endTime)?.id ?? null);
   let selectedContainer = $derived(captions.find((caption) => caption.id === selectedId) ?? captions[0]);
   let selectedRowKey = $state<string | null>(null);
@@ -455,7 +457,7 @@
     <section class="transcript-editor__grouping" aria-label="Caption grouping">
       <div class="transcript-editor__grouping-heading"><h3>Caption grouping</h3><span>{maxChars} characters · {sentenceCount} {sentenceCount === 1 ? 'line' : 'lines'}</span></div>
       <div class="transcript-editor__grouping-body">
-        <div class="transcript-editor__grouping-controls"><div class="caption-field"><span>Characters per line</span><ScrubbableNumber label="Characters per line" min={15} max={150} step={1} decimals={0} value={maxChars} defaultValue={56} inputRealtime disabled={disabled} onChange={changeCharacterLimit}/></div><button type="button" class="caption-button transcript-editor__smart-fit" title="Measure the text to fit one line, with a 5% safety margin for letter widths and highlighting" disabled={disabled} onclick={() => onSmartLineFit?.()}>Smart line fit</button></div>
+        <div class="transcript-editor__grouping-controls"><div class="caption-field"><span>Characters per line</span><ScrubbableNumber label="Characters per line" min={15} max={150} step={1} decimals={0} value={maxChars} defaultValue={56} inputRealtime disabled={disabled} onChange={changeCharacterLimit} onDragState={onCharacterLimitGesture} onEditState={onCharacterLimitGesture}/></div><button type="button" class="caption-button transcript-editor__smart-fit" title="Measure the text to fit one line, with a 5% safety margin for letter widths and highlighting" disabled={disabled} onclick={() => onSmartLineFit?.()}>Smart line fit</button></div>
         {@render nativeGrouping?.()}
       </div>
     </section>

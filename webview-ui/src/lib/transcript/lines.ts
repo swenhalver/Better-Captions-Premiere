@@ -82,7 +82,7 @@ export function replaceTranscriptWords(captions: CaptionItem[], start: number, e
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > all.length || !replacement.length) throw new Error('Select the line again.');
   // Validate actual speech first, so overlap errors do not depend on storage.
   const words = [...all.slice(0, start), ...replacement, ...all.slice(end)];
-  validateCaptions([{ id: 'transcript', text: words.map(word => word.text).join(' '), words,
+  validateCaptions([{ id: 'transcript', text: words.map(word => word.text).join(' '), words, timelineFloor: captions[0].timelineFloor,
     startTime: Math.min(captions[0].startTime, words[0].startTime), endTime: Math.max(captions.at(-1)!.endTime, words.at(-1)!.endTime) }]);
   const equalCount = replacement.length === end - start;
   let offset = 0;

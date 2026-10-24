@@ -641,6 +641,15 @@
     if (before !== outputSignature(session)) { labelEdit('Style'); markOutputEdited(session.sequenceId); }
   }
   function handleStyle(patch: Partial<StyleConfig>) { try { updateStyle(patch); } catch (problem) { error = message(problem); } }
+  // One Characters per line drag or typing session is one Premiere edit. The
+  // panel previews every value; the layer is written once the gesture ends, so
+  // that single write still holds the original merges and limit for one Undo.
+  let characterLimitGesture = $state(false);
+  function setCharacterLimitGesture(active: boolean) {
+    if (characterLimitGesture === active) return;
+    characterLimitGesture = active;
+    if (!active) liveOutput?.notify();
+  }
   function changeCharacterLimit(maxChars: number, label = 'Characters per line') {
     try { reflowCharacterLimit(maxChars, label); } catch (problem) { error = message(problem); }
   }
@@ -1081,7 +1090,7 @@
         const signature = outputSignature(session);
         return { sequenceId: outputKey(session), signature,
           needed: appliedSignatures[outputKey(session)] !== signature,
-          ready: nativeAvailable && hostPanelVisible && documentVisible && !timelineBusy && !nativeGeometryInteracting && !isRefreshing && !isSyncing && !session.isLoading && !typingMerging && !!(nativeBinding || nativeOutputKind(session) === "new-native" || exportButton) };
+          ready: nativeAvailable && hostPanelVisible && documentVisible && !timelineBusy && !nativeGeometryInteracting && !characterLimitGesture && !isRefreshing && !isSyncing && !session.isLoading && !typingMerging && !!(nativeBinding || nativeOutputKind(session) === "new-native" || exportButton) };
       },
       async apply(context) {
         await flushSave();
@@ -1187,7 +1196,7 @@
           {#if session.isLoading}<div class="caption-app__loading" role="status"><p>Transcribing in Premiere…</p><p class="caption-help">Timed words will appear here when Premiere finishes.</p><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div></div>{/if}
           {#if transcriptionBackup && transcriptionBackup.sequenceId === session.sequenceId}<div class="caption-app__backup"><button class="caption-button" onclick={restoreTranscription} disabled={session.captions.some((caption) => caption.clipNodeId)}>Restore previous transcription</button></div>{/if}
           {#snippet nativeGrouping()}{#if session.nativeClipId && nativeBinding}<NativePauseLineControl onControlsChange={controls=>{const seconds=controls?.rollUpBlankLineSeconds?.value,lines=controls?.rollUpLines?.value;pauseControls=typeof seconds==='number'&&typeof lines==='number'?{blankLineSeconds:seconds,visibleLines:lines}:null;}} onInteracting={active=>{nativeGeometryInteracting=active;if(!active){reconnect?.notify();liveOutput?.notify();}}} snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} currentTime={session.currentTime} visible={activeTab==='transcript'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}{/snippet}
-          <TranscriptPreview {pauseSettings} {nativeGrouping} {lineFitCapacity} typing={session.nativeClipId && nativeBinding && !api.isDemo ? transcriptTyping : null} onEditingChange={(active)=>transcriptDraftActive=active} onSmartLineFit={fitCharacterLimit} frameRate={session.frameRate} {selectedWord} onSelectWord={(index) => selectedWord = index} sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxChars={session.style.maxChars} groupingDisabled={!!session.nativeClipId && nativeBinding?.clip.maxChars === undefined} {selectedId} onSelect={(id) => { selectedId = id; selectedWord = 0; }} onSeek={seekCaption} onMaxCharsChange={changeCharacterLimit} onUpdate={(captions,label)=>updateCaptions(captions,true,label)} onShowInPremiere={seekCaption} isDemo={api.isDemo} disabled={editsLocked || isRefreshing || isSyncing || session.isLoading} />
+          <TranscriptPreview {pauseSettings} {nativeGrouping} {lineFitCapacity} typing={session.nativeClipId && nativeBinding && !api.isDemo ? transcriptTyping : null} onEditingChange={(active)=>transcriptDraftActive=active} onSmartLineFit={fitCharacterLimit} onCharacterLimitGesture={setCharacterLimitGesture} frameRate={session.frameRate} {selectedWord} onSelectWord={(index) => selectedWord = index} sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxChars={session.style.maxChars} groupingDisabled={!!session.nativeClipId && nativeBinding?.clip.maxChars === undefined} {selectedId} onSelect={(id) => { selectedId = id; selectedWord = 0; }} onSeek={seekCaption} onMaxCharsChange={changeCharacterLimit} onUpdate={(captions,label)=>updateCaptions(captions,true,label)} onShowInPremiere={seekCaption} isDemo={api.isDemo} disabled={editsLocked || isRefreshing || isSyncing || session.isLoading} />
         </div>
         <div id="workspace-panel-style" role="tabpanel" aria-labelledby="workspace-tab-style" tabindex="0" hidden={activeTab !== "style"}>
           {#key session.sequenceId}

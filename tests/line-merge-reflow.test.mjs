@@ -59,13 +59,13 @@ test('a reflow keeps removed pause lines, and merging works again until the next
 
 const id = '12345678-1234-5678-abcd-123456789abc';
 const ticks = seconds => String(BigInt(Math.round(seconds * 254016000000)));
-function connected(captions, maxChars) {
+function connected(captions, maxChars, inSeconds = 0) {
   const doc = { version: 1, animationAuthority: 'premiere-effect', sequenceId: id, timeOriginSeconds: 0, style: defaultNativeStyle(),
     captions: captions.map(caption => ({ id: caption.id, start: caption.startTime, end: caption.endTime, manualSplit: false,
       words: caption.words.map(word => ({ text: word.text, start: word.startTime, end: word.endTime, endOfSentence: false,
         ...(word.lineBreakBefore ? { lineBreakBefore: word.lineBreakBefore } : {}), ...(word.pauseLinesRemoved ? { pauseLinesRemoved: word.pauseLinesRemoved } : {}) })) })) };
   const locator = { projectPath: '/p.prproj', sequenceId: id, clipNodeId: 'clip', trackIndex: 0, clipIndex: 0, componentIndex: 1, documentParamIndex: 6 };
-  const entry = { kind: 'native-effect', maxChars, clipNodeId: 'clip', projectItemId: 'item', trackIndex: 0, clipIndex: 0, startTicks: ticks(0), endTicks: ticks(10), inTicks: ticks(0), outTicks: ticks(10),
+  const entry = { kind: 'native-effect', maxChars, clipNodeId: 'clip', projectItemId: 'item', trackIndex: 0, clipIndex: 0, startTicks: ticks(0), endTicks: ticks(10), inTicks: ticks(inSeconds), outTicks: ticks(10 + inSeconds),
     selected: true, locator, matchName: 'AE.' + NATIVE_EFFECT_MATCH_NAME, documentText: encodeNativeTransportText(doc) };
   entry.revision = JSON.stringify({ projectPath: locator.projectPath, sequenceId: id, clipNodeId: 'clip', adjustmentLayer: true, start: entry.startTicks, end: entry.endTicks, inPoint: entry.inTicks, outPoint: entry.outTicks,
     components: ['AE.ADBE Motion', 'AE.' + NATIVE_EFFECT_MATCH_NAME], documentIndex: 6, documentText: entry.documentText });
@@ -121,7 +121,7 @@ async function controller(panel) {
   } };
   const exports = {};
   const extension = `
-    export { changeCharacterLimit, applyNativeOutput, agent };
+    export { changeCharacterLimit, applyNativeOutput, agent, updateCaptions };
     export function connect(binding) { nativeBinding = binding; }
     export function problem() { return error; }`;
   vm.runInNewContext(ts.transpileModule(source + extension, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, {
@@ -154,4 +154,89 @@ test('the panel and agent limit changes make exactly one write carrying the limi
   const same = await controller(connected(merge(fixture(), 1), 15));
   await same.agent.patchStyle({ maxChars: 15 });
   assert.ok(same.session.captions.some(caption => caption.words.some(word => word.lineBreakBefore === 'join')), 'an unchanged agent limit is not a reflow');
+});
+
+// Swen's layer: positive source times, but the layer's in point is later than
+// its source origin, so the first preserved container starts before sequence zero.
+const BEFORE_ZERO = 1.2316666667;
+const sourceTimes = text => decodeNativePanelDocumentFor(text).captions.map(caption => [caption.id, caption.start, caption.end, caption.words.map(word => [word.text, word.start, word.end])]);
+let decodeNativePanelDocumentFor;
+test.before(async () => { const { decodeNativePanelDocument } = await import('../webview-ui/src/lib/native-effect/panel.ts'); decodeNativePanelDocumentFor = text => decodeNativePanelDocument(text, id); });
+const originalSource = () => fixture().map(caption => [caption.id, caption.startTime, caption.endTime, caption.words.map(word => [word.text, word.startTime, word.endTime])]);
+
+test('a moved native layer with preserved before-zero words validates against its source zero, not sequence zero', async () => {
+  const { validateCaptions, retime } = await import('../webview-ui/src/lib/transcript/edit.ts');
+  const panel = connected(fixture(), 15, BEFORE_ZERO);
+  const first = panel.session.captions[0];
+  assert.ok(first.startTime < 0 && first.words[0].startTime < 0, 'the first container starts before sequence zero');
+  assert.ok(Math.abs(first.startTime + BEFORE_ZERO) < 1e-6);
+  assert.ok(panel.warnings.some(warning => /precede sequence zero/.test(warning)));
+  assert.equal(first.timelineFloor, panel.binding.timelineOffsetSeconds);
+  assert.equal(validateCaptions(panel.session.captions), true);
+  // Legacy captions with the same times still need a nonnegative start.
+  const legacy = structuredClone(panel.session.captions).map(({ timelineFloor: _floor, ...caption }) => caption);
+  assert.throws(() => validateCaptions(legacy), /Caption 1: end must be after start/);
+  for (const floor of [NaN, Infinity, 2]) assert.throws(() => validateCaptions(legacy.map(caption => ({ ...caption, timelineFloor: floor }))), /Caption 1: end must be after start/, 'a malformed or positive floor never lowers the bound below 0');
+  // Nothing may move earlier than the layer's source zero.
+  const below = structuredClone(panel.session.captions);
+  below[0].startTime = below[0].words[0].startTime = first.timelineFloor - .01;
+  assert.throws(() => validateCaptions(below), /Caption 1: end must be after start/);
+  const wordBelow = structuredClone(panel.session.captions);
+  wordBelow[0].words[0].startTime = first.timelineFloor - .00005;
+  assert.throws(() => validateCaptions(wordBelow), /keep word timing inside the caption/);
+  assert.throws(() => retime(first, first.timelineFloor - .01, first.endTime), /nonnegative start/);
+  assert.equal(retime(first, first.startTime, first.endTime).startTime, first.startTime);
+});
+
+test('merge, scissor and clear on a before-zero native layer keep its exact source words, times and identities', () => {
+  const panel = connected(fixture(), 15, BEFORE_ZERO);
+  const grouped = panel.session.captions;
+  const merged = changeTranscriptLineBreak(grouped, transcriptLines(grouped)[0]);
+  const cut = changeTranscriptLineBreak(grouped, transcriptLines(grouped)[0], 1);
+  for (const [name, edited, expected] of [['merge', merged, ['edge', 'join', 'join', 'join', 'edge', '-', '-', '-', '-', '-']], ['scissor', cut, ['edge', 'break', 'edge', '-', '-', '-', '-', '-', '-', '-']]]) {
+    const session = { ...structuredClone(panel.session), captions: deriveNativePanelPhrases(panel.binding, { ...panel.session, captions: edited }) };
+    const document = prepareNativePanelUpdate(panel.binding, session);
+    assert.deepEqual(document.captions.flatMap(caption => caption.words.map(word => word.lineBreakBefore ?? '-')), expected, name);
+    assert.deepEqual(sourceTimes(encodeNativeTransportText(document)), originalSource(), name + ': source words, times and IDs are byte-exact');
+  }
+  // A reflow (clear) after the merge, written as one document with the limit.
+  const mergedPanel = connected(merge(fixture(), 0), 15, BEFORE_ZERO);
+  const { document, snapshot } = reflow(mergedPanel, 24);
+  assert.deepEqual(snapshot.grouping, { before: 15, value: 24 });
+  assert.ok(document.captions.every(caption => caption.words.every(word => word.lineBreakBefore === undefined)));
+  assert.deepEqual(sourceTimes(encodeNativeTransportText(document)), originalSource());
+});
+
+test('the line editor and agent patch accept a before-zero native layer through their own validation', async () => {
+  const { replaceTranscriptLine } = await import('../webview-ui/src/lib/transcript/lines.ts');
+  const { replaceText } = await import('../webview-ui/src/lib/transcript/edit.ts');
+  const { validateCaptionPatch } = await import('../webview-ui/src/lib/agent-bridge.ts');
+  const panel = connected(fixture(), 15, BEFORE_ZERO);
+  const line = transcriptLines(panel.session.captions)[0];
+  const words = transcriptWords(panel.session.captions).slice(line.start, line.end);
+  const source = { ...line.caption, words, text: words.map(word => word.text).join(' '), startTime: words[0].startTime, endTime: words.at(-1).endTime };
+  const typed = replaceTranscriptLine(panel.session.captions, line, replaceText(source, 'Word0 word1'));
+  assert.equal(transcriptWords(typed)[0].text, 'Word0');
+  assert.equal(transcriptWords(typed)[0].startTime, panel.session.captions[0].words[0].startTime);
+  const document = prepareNativePanelUpdate(panel.binding, { ...structuredClone(panel.session), captions: deriveNativePanelPhrases(panel.binding, { ...panel.session, captions: typed }) });
+  assert.equal(document.captions[0].words[0].text, 'Word0');
+  assert.deepEqual(document.captions[0].words.map(word => [word.start, word.end]), fixture()[0].words.map(word => [word.startTime, word.endTime]));
+  // The agent cannot set a floor itself; existing native IDs keep theirs.
+  const patch = structuredClone(panel.session.captions).map(({ timelineFloor: _floor, ...caption }) => caption);
+  assert.equal(validateCaptionPatch(patch, panel.session.captions)[0].timelineFloor, panel.binding.timelineOffsetSeconds);
+  assert.throws(() => validateCaptionPatch(patch.map(caption => ({ ...caption, id: caption.id + '-new' })), panel.session.captions), /end must be after start/);
+});
+
+test('the panel controller merges and reflows a before-zero native layer as one exact write each', async () => {
+  for (const action of ['merge', 'reflow']) {
+    const ui = await controller(connected(action === 'merge' ? fixture() : merge(fixture(), 0), 15, BEFORE_ZERO));
+    if (action === 'merge') ui.updateCaptions(changeTranscriptLineBreak(ui.session.captions, transcriptLines(ui.session.captions)[0]), true, 'Merge lines');
+    else ui.changeCharacterLimit(24);
+    assert.equal(ui.problem(), '', action);
+    await ui.applyNativeOutput();
+    assert.equal(ui.writes.length, 1, action);
+    assert.deepEqual(sourceTimes(ui.writes[0].documentText), originalSource(), action + ': preserved source words stay exact');
+    const boundaries = decodeNativePanelDocumentFor(ui.writes[0].documentText).captions.flatMap(caption => caption.words.map(word => word.lineBreakBefore ?? '-'));
+    assert.deepEqual(boundaries, action === 'merge' ? ['edge', 'join', 'join', 'join', 'edge', '-', '-', '-', '-', '-'] : Array(10).fill('-'), action);
+  }
 });

@@ -1,14 +1,17 @@
 import type {CaptionItem,CaptionWord} from '../types';
 let nextSplitId=0;
+/** Earliest allowed start: 0, or a native layer's (possibly negative) source zero. */
+const timeFloor=(c:CaptionItem)=>Number.isFinite(c.timelineFloor)?Math.min(0,c.timelineFloor!):0;
 export function validateCaptions(captions:CaptionItem[]){
   if(!captions.length)throw new Error('Transcribe or load captions first.');
   const ids=new Set<string>();
   captions.forEach((c,i)=>{
     if(ids.has(c.id))throw new Error('Duplicate caption ID.');ids.add(c.id);
-    if(!Number.isFinite(c.startTime)||!Number.isFinite(c.endTime)||c.startTime<0||c.endTime<=c.startTime)throw new Error(`Caption ${i+1}: end must be after start.`);
+    const floor=timeFloor(c),native=c.timelineFloor!==undefined;
+    if(!Number.isFinite(c.startTime)||!Number.isFinite(c.endTime)||c.startTime<floor||c.endTime<=c.startTime)throw new Error(`Caption ${i+1}: end must be after start.`);
     if(i&&c.startTime<captions[i-1].endTime-.0001)throw new Error(`Caption ${i+1} overlaps the previous caption.`);
     if(!c.words.length)throw new Error(`Caption ${i+1} needs at least one word.`);
-    c.words.forEach((w,j)=>{if(!w.text.trim()||!Number.isFinite(w.startTime)||!Number.isFinite(w.endTime)||w.startTime<c.startTime-.0001||w.endTime>c.endTime+.0001||w.endTime<=w.startTime)throw new Error(`Caption ${i+1}, word ${j+1}: keep word timing inside the caption.`);if(j&&w.startTime<c.words[j-1].endTime-.0001)throw new Error(`Caption ${i+1}: word timings overlap.`);});
+    c.words.forEach((w,j)=>{if(!w.text.trim()||!Number.isFinite(w.startTime)||!Number.isFinite(w.endTime)||w.startTime<c.startTime-.0001||native&&w.startTime<floor||w.endTime>c.endTime+.0001||w.endTime<=w.startTime)throw new Error(`Caption ${i+1}, word ${j+1}: keep word timing inside the caption.`);if(j&&w.startTime<c.words[j-1].endTime-.0001)throw new Error(`Caption ${i+1}: word timings overlap.`);});
   });return true;
 }
 export function replaceText(c:CaptionItem,text:string):CaptionItem{
@@ -59,7 +62,7 @@ export function replaceText(c:CaptionItem,text:string):CaptionItem{
   return {...c,text:tokens.join(' '),timingEstimated:true,words:keepLine(canPreserve?words:estimate(tokens,c.startTime,last))};
 }
 export function retime(c:CaptionItem,start:number,end:number):CaptionItem{
-  if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start)throw new Error('Line end must be after its nonnegative start.');
+  if(!Number.isFinite(start)||!Number.isFinite(end)||start<timeFloor(c)||end<=start)throw new Error('Line end must be after its nonnegative start.');
   validateCaptions([c]);const scale=(end-start)/(c.endTime-c.startTime);
   const updated={...c,startTime:start,endTime:end,words:c.words.map(w=>({...w,startTime:start+(w.startTime-c.startTime)*scale,endTime:start+(w.endTime-c.startTime)*scale}))};
   validateCaptions([updated]);return updated;

@@ -125,7 +125,7 @@ function fixture(t, options = {}) {
     return { sequenceId: info.id, sequenceName: info.name, transcriptJson: null, captions, style: clone(types.DEFAULT_STYLE), animation: clone(types.DEFAULT_ANIMATION), hasTranscript: true, isLoading: false, currentTime: .25, duration: info.duration, frameRate: info.frameRate, frameWidth: info.frameWidth, frameHeight: info.frameHeight };
   }
   main = execute(script(resolve(sourceRoot, 'main-webview.svelte')) + `
-    export { refreshSequence, transcribe, restoreTranscription, updateStyle, changeCharacterLimit, updateCaptions, outputSignature, selectionPauseReason, motionPauseReason, motionContext, ensureLegacyBaseline, getState, recordApplied, recordMonitorApplied, flushSave, setTimelineBusy, inspectConnections };
+    export { refreshSequence, transcribe, restoreTranscription, updateStyle, changeCharacterLimit, updateCaptions, outputSignature, selectionPauseReason, motionPauseReason, motionContext, ensureLegacyBaseline, getState, recordApplied, recordMonitorApplied, flushSave, setTimelineBusy, inspectConnections, setCharacterLimitGesture };
     export function setExport(value) { exportButton = value; }
     export function setPhase(value) { outputPhase = value; }
     export function selectForTest(id) { selectedId = id; const s=sessionManager.current,c=s?.captions.find(c=>c.id===id); nativeSelection=c?.clipNodeId?{sequenceId:s.sequenceId,captionId:id,clipNodeId:c.clipNodeId}:null; }
@@ -535,4 +535,46 @@ test('read-only reconnect never replaces pending edits already belonging to the 
   await h.main.inspectConnections();
   assert.equal(h.manager.current.style.activeWord.color,'#123456');assert.equal(h.context().needed,true);
   assert.equal(h.calls.saves.length,0);assert.equal(h.calls.commits.length,0);
+});
+
+test('one Characters per line gesture makes one native write holding the original merges and limit', async t => {
+  const decode = text => nativePanel.decodeNativePanelDocument(text, t.info.id);
+  for (const gesture of [true, false]) {
+    let native; const writes = [], h = fixture(t, { stored: null,
+      connections: async (_id, _links, options) => {
+        const { documentText, revision, ...summary } = native.entry;
+        return connectionSnapshot(h.info, [], { nativeSequenceId: native.entry.locator.sequenceId, selectedClipNodeIds: ['native-layer'], native: [options.includeDocuments ? clone(native.entry) : summary] });
+      },
+      writeNative: async (snapshot, documentText) => {
+        writes.push({ snapshot: clone(snapshot), documentText });
+        native.entry.documentText = documentText; if (snapshot.grouping) native.entry.maxChars = snapshot.grouping.value; native.entry.revision = native.revision();
+        return { ok: true, readbackVerified: true, documentText, revision: native.entry.revision, maxChars: native.entry.maxChars };
+      },
+    });
+    t.info = h.info; h.info.id = 'f18a14ea-2be5-4393-a113-c1b43bfcab1e'; native = nativeConnection(h.info);
+    // Ten words, rows 2-5 merged (edges at 2 and 6, joins inside), limit 15.
+    const marks = { 2: 'edge', 3: 'join', 4: 'join', 5: 'join', 6: 'edge' };
+    native.document.captions = [{ id: 'merged', start: 0, end: 4.9, manualSplit: false, words: Array.from({ length: 10 }, (_, i) => ({ text: 'word' + i, start: i * .5, end: i * .5 + .4, endOfSentence: false, ...(marks[i] ? { lineBreakBefore: marks[i] } : {}) })) }];
+    native.entry.maxChars = 15; native.entry.documentText = encodeNativeTransportText(native.document); native.entry.revision = native.revision();
+    await h.start();
+    const original = native.entry.revision;
+    assert.equal(h.manager.current.style.maxChars, 15); assert.equal(h.context().needed, false);
+    if (gesture) h.main.setCharacterLimitGesture(true);
+    for (const value of [20, 30, 24]) { h.main.changeCharacterLimit(value); h.sync(); await h.advance(1000); }
+    if (!gesture) { assert.equal(writes.length, 3, 'without the gesture hold every pause in a long drag wrote'); assert.equal(writes[1].snapshot.grouping.before, 20, 'and later writes lost the original limit'); continue; }
+    await h.advance(3000);
+    assert.equal(writes.length, 0, 'nothing is written while the drag or typing session is open');
+    assert.equal(h.context().ready, false); assert.equal(h.context().needed, true);
+    assert.equal(h.manager.current.style.maxChars, 24, 'the panel previews the latest value');
+    assert.ok(h.manager.current.captions.every(caption => caption.words.every(word => word.lineBreakBefore === undefined)), 'and the reflowed rows');
+    // Released, it writes at live output's next readiness check (within 500 ms).
+    h.main.setCharacterLimitGesture(false); h.sync(); await h.advance(500); await h.settle();
+    assert.equal(writes.length, 1, 'one write, so one Premiere Undo');
+    assert.deepEqual(writes[0].snapshot.grouping, { before: 15, value: 24 }, 'the write carries the original limit');
+    assert.equal(writes[0].snapshot.revision, original, 'against the layer as it was before the gesture');
+    const written = decode(writes[0].documentText).captions[0];
+    assert.ok(written.words.every(word => word.lineBreakBefore === undefined), 'merges cleared in the same write');
+    assert.deepEqual(written.words.map(word => [word.text, word.start, word.end]), native.document.captions[0].words.map(word => [word.text, word.start, word.end]));
+    await h.advance(5000); assert.equal(writes.length, 1); assert.equal(h.context().needed, false);
+  }
 });
