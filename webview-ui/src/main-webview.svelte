@@ -9,6 +9,7 @@
   import { connectionKey, reconnectLegacyCaptions, chooseNativeCaptionConnection, sameSequenceId, type CaptionConnections } from "./lib/clip-connections";
   import { rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate, deriveNativePanelPhrases, nativeLineFitCharacterCapacity, nativeDocumentWriteSnapshot } from "./lib/native-effect/panel";
   import { extendNativeCaptions } from "./lib/native-effect/extension-workflow";
+  import { confirmLineControls, confirmedLineScope, type ConfirmedLineControls } from './lib/native-effect/line-controls';
   import NativeEffectControls from './components/NativeEffectControls.svelte';
   import NativePauseLineControl from './components/NativePauseLineControl.svelte';
   import NativeRollUpControls from './components/NativeRollUpControls.svelte';
@@ -63,11 +64,11 @@
   let nativeGeometryInteracting = $state(false);
   let pauseControls = $state.raw<{blankLineSeconds:number;visibleLines:number}|null>(null);
   // Line positions offered as style scopes: Visible lines while scrolling, lines per page otherwise.
-  let lineControls = $state.raw<{rolling:boolean;visibleLines?:number;groups?:number}|null>(null);
+  let lineControls = $state.raw<ConfirmedLineControls>({clipKey:null,count:null});
   function noteLineControls(controls:{rollUp?:{value:unknown};rollUpLines?:{value:unknown};groups?:{value:unknown}}|null){
-    if(!controls){lineControls=null;return;}
-    const count=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)?Math.round(value):undefined;
-    lineControls={rolling:Number(controls.rollUp?.value??0)>=.5,visibleLines:count(controls.rollUpLines?.value),groups:count(controls.groups?.value)};
+    const next=confirmLineControls(lineControls,lineClipKey,controls);
+    wordState=confirmedLineScope(wordState,lineControls,next);
+    lineControls=next;
   }
   let timelineBusy = $state(false);
   let exportBusy = $state(false);
@@ -93,10 +94,10 @@
   let reconnect: ReturnType<typeof startCaptionReconnect> | null = null;
   let nativeBinding = $state.raw<ReturnType<typeof rehydrateNativePanel>['binding'] | null>(null);
   let pauseSettings = $derived(nativeBinding ? pauseControls : null);
-  const lineCount = $derived(nativeBinding && lineControls ? Math.max(0, Math.min(8, lineControls.rolling ? lineControls.visibleLines ?? 0 : lineControls.groups ?? 1)) : 0);
-  // Settings of lines beyond Visible lines stay in the document; only the scope closes.
-  $effect(() => { const position = Number(/^line-([1-8])$/.exec(wordState)?.[1] ?? 0); if (position > lineCount) wordState = 'all'; });
-  const lineFitCapacity=$derived.by(()=>{const session=sessionManager.current;return nativeBinding&&session?nativeLineFitCharacterCapacity(nativeBinding,session,undefined,lineCount||8):null;});
+  const lineClipKey = $derived(nativeBinding ? JSON.stringify([nativeBinding.snapshot.locator.projectPath,nativeBinding.snapshot.locator.sequenceId,nativeBinding.snapshot.locator.clipNodeId]) : null);
+  const lineCount = $derived(lineControls.clipKey===lineClipKey ? lineControls.count??0 : 0);
+  $effect(() => { noteLineControls(null); });
+  const lineFitCapacity=$derived.by(()=>{const session=sessionManager.current;return nativeBinding&&session?nativeLineFitCharacterCapacity(nativeBinding,session,undefined,lineCount):null;});
   let connectionStatus = $state("");
   let connectionRevision = "";
   let lastDocumentRead = 0;
@@ -608,7 +609,7 @@
     if(editsLocked||isSyncing||isRefreshing||session.isLoading){error='Wait for the current caption operation to finish.';return;}
     if(!session.nativeClipId||!binding){error='Smart line fit measures the native caption layer. Connect or create one first.';return;}
     if(binding.clip.maxChars===undefined){error='The character limit is animated in Effect Controls. Remove its keyframes to use Smart line fit.';return;}
-    const capacity=nativeLineFitCharacterCapacity(binding,session,undefined,lineCount||8);
+    const capacity=nativeLineFitCharacterCapacity(binding,session,undefined,lineCount);
     if(capacity===null){error='Smart line fit measurement is unavailable in this editor.';return;}
     error='';
     changeCharacterLimit(capacity, 'Smart line fit');

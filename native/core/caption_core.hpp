@@ -71,10 +71,18 @@ struct Style { WordStyle upcoming,current,spoken; double wordSpacing=12,lineHeig
 bool hasPositionStyles(const Style&,std::size_t lines=kMaxLinePositions);
 // Precedence: a position's set fields win over the word's state style.
 WordStyle applyPositionStyle(const WordStyle& state,const PositionStyle& position);
+// The weight a style actually renders with: its absolute weight, or the
+// document base weight plus its relative step, resolved against the faces the
+// font engine has. Hosts supply their engine's resolution; nominalWeight is
+// the fallback without one (base or 400, a relative step adding 100).
+using ResolveWeight=std::function<double(const WordStyle&)>;
+double nominalWeight(const WordStyle&,double baseWeight);
 // A line moving between slots blends both slot styles. t<=0 returns a and
 // t>=1 returns b exactly. Numbers and colors interpolate; a background or
 // font choice switches halfway, a background fading in from zero alpha.
-WordStyle blendWordStyles(const WordStyle& a,const WordStyle& b,double t);
+// Weights in one family interpolate between their resolved weights, so a
+// relative bold step blends numerically too.
+WordStyle blendWordStyles(const WordStyle& a,const WordStyle& b,double t,const ResolveWeight& resolve={});
 struct CaptionContainer { std::string id; bool manualSplit=false; std::vector<Word> words; };
 struct Document { std::uint32_t schemaVersion=kSchemaVersion; std::vector<CaptionContainer> containers; Style style; double timeOriginSeconds=0; };
 struct WordRef { std::size_t containerIndex=0,wordIndex=0; };
@@ -158,7 +166,9 @@ double rollUpAlpha(double x,double y,const Frame&);
 // Consecutive phrase groups share one page; every group starts a new line.
 // Pages consume consecutive lines across storage containers. Source documents
 // and word times stay unchanged; pause lines occupy ordinary line slots.
+// resolveWeight resolves weights for blends between line position styles;
+// without it nominalWeight with the document base weight is used.
 Frame layoutFrame(const Document&, double time, const LayoutBox&, const MeasureText&,
                   std::size_t maxChars=56,double pauseSeconds=0.6,const TransformText& transform={},
-                  std::size_t groupsPerPage=1,const RollUpSettings& rollUp={});
+                  std::size_t groupsPerPage=1,const RollUpSettings& rollUp={},const ResolveWeight& resolveWeight={});
 } // namespace better_captions

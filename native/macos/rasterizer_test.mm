@@ -382,6 +382,21 @@ int main(){
  auto relative=upright;relative.fontWeightOffset=100;const auto next=macos::fontSelection(relative,400);
  check(next.weight==700,"B did not choose Arial's next available heavier face");
  relative.fontWeightOffset=0;check(macos::fontSelection(relative,400).weight==400,"Relative B off did not follow shared base");
+ // During a slot transition, relative +100 resolves to Arial Bold (700)
+ // before blending, exactly like an explicitly authored 700 endpoint.
+ Document weightedScroll;weightedScroll.style.baseFontWeight=400;
+ weightedScroll.containers.push_back({"weight-scroll",false,{}});
+ for(int index=0;index<6;++index)weightedScroll.containers[0].words.push_back({"Caption",double(index),index+.8,true});
+ for(auto* s:{&weightedScroll.style.upcoming,&weightedScroll.style.current,&weightedScroll.style.spoken}){*s=upright;s->fontSize=24;s->fontWeightOffset=0;s->padding=0;}
+ auto& topWeight=weightedScroll.style.positions[0];topWeight.fields=PositionWeight;topWeight.value=upright;topWeight.value.fontWeightOffset=100;
+ auto absoluteScroll=weightedScroll;absoluteScroll.style.positions[0].value=bold;
+ auto plainScroll=weightedScroll;plainScroll.style.positions[0]=PositionStyle{};
+ RollUpSettings weightScroll;weightScroll.enabled=true;weightScroll.visibleLines=4;weightScroll.boundaryEnabled=false;
+ const LayoutBox weightBox{20,20,500,220};
+ const auto relativePixels=macos::rasterize(weightedScroll,4.935,weightBox,640,280,56,.6,1,weightScroll);
+ const auto absolutePixels=macos::rasterize(absoluteScroll,4.935,weightBox,640,280,56,.6,1,weightScroll);
+ check(relativePixels.pixels==absolutePixels.pixels,"Relative weight blend did not use the same supported-weight resolution as rasterization");
+ check(relativePixels.pixels!=macos::rasterize(plainScroll,4.935,weightBox,640,280,56,.6,1,weightScroll).pixels,"Weight blend fixture did not reach the heavier face");
  auto naturalItalic=upright;naturalItalic.italic=1;const auto italicFace=macos::fontSelection(naturalItalic);
  check(italicFace.nativeItalic&&!italicFace.syntheticItalic,"Available real italic face was not preferred");
  auto legacyFace=upright;legacyFace.fontFamily="Arial-BoldItalicMT";legacyFace.fontWeight=0;legacyFace.italic=-1;

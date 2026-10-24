@@ -147,17 +147,19 @@ function nativeFitOptions(binding:NativePanelBinding,session:SessionState,lines=
   if (typeof width !== 'number' || !Number.isFinite(width) || width < 1 || width > 8192 || typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0 || scale > 16) throw new Error('Native line fit geometry is unavailable. Refresh S-Captions.');
   const overrides = clip.lineFitStates;
   if (overrides !== undefined && (typeof overrides !== 'object' || overrides === null || Array.isArray(overrides) || Object.keys(overrides).length !== 3 || !['upcoming','current','spoken'].every(key => Object.hasOwn(overrides,key) && overrides[key as keyof NativeLineFitStates] !== undefined))) throw new Error('Invalid native line fit state overrides.');
-  const appearances = pairs.map(([key,nativeKey]) => applyNativeFitState(resolveAppearance(session.style,key),scale,overrides?.[nativeKey]));
-  // A line position's own font or spacing also has to fit while a line sits there.
-  for (const position of LINE_POSITIONS.slice(0, lines)) {
+  const states = pairs.map(([key,nativeKey]) => applyNativeFitState(resolveAppearance(session.style,key),scale,overrides?.[nativeKey]));
+  // Measure each state as it can actually appear in each active slot. Keeping
+  // unpositioned states here would prevent smaller position fonts from fitting more.
+  const appearances = LINE_POSITIONS.slice(0, lines).flatMap(position => {
     const line = session.style.lineStyles?.[position];
-    if (line) for (const state of appearances.slice(0, 3)) appearances.push(lineFitAppearance(session.style, line, state, scale));
-  }
+    return states.map(state => line ? lineFitAppearance(session.style, line, state, scale) : state);
+  });
   return {width,wordSpacing:session.style.wordSpacing??binding.document.style.wordSpacing,appearances};
 }
 
 /** Measures how many characters fit one line at the layer's Width and font, for the line fit button. */
 export function nativeLineFitCharacterCapacity(binding:NativePanelBinding,session:SessionState,measure:SmartFitMeasure|null=createCanvasWordMeasure(),lines=8):number|null{
+  if(!Number.isInteger(lines)||lines<1||lines>LINE_POSITIONS.length)return null;
   if(binding.clip.lineFitWidth===undefined||binding.clip.lineFitFontScale===undefined)return null;
   const options=nativeFitOptions(binding,session,lines);
   return measure?smartFitCharacterCapacity(session.captions,options,measure):null;

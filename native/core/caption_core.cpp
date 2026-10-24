@@ -155,14 +155,25 @@ WordStyle applyPositionStyle(const WordStyle& state,const PositionStyle& positio
  if(position.fields&PositionFontSize)result.sizeScale=1;
  return result;
 }
-WordStyle blendWordStyles(const WordStyle& a,const WordStyle& b,double t) {
+double nominalWeight(const WordStyle& style,double baseWeight) {
+ const double base=baseWeight>0?baseWeight:400;
+ if(style.fontWeightOffset==0)return base;
+ if(style.fontWeightOffset==100)return std::min(1000.0,base+100);
+ return style.fontWeight>0?style.fontWeight:400;
+}
+WordStyle blendWordStyles(const WordStyle& a,const WordStyle& b,double t,const ResolveWeight& resolve) {
  if(!(t>0))return a;if(t>=1)return b;
  auto mix=[t](double x,double y){return x==y?x:x+(y-x)*t;};
  auto mixColor=[&](const Color& x,const Color& y){return Color{mix(x.r,y.r),mix(x.g,y.g),mix(x.b,y.b),mix(x.a,y.a)};};
- // Font family, faces, underline and space filling switch halfway.
+ // Font family, italic, underline and space filling switch halfway.
  WordStyle result=t<.5?a:b;
  if(a.fontSize!=b.fontSize||a.sizeScale!=b.sizeScale){result.fontSize=mix(a.fontSize*a.sizeScale,b.fontSize*b.sizeScale);result.sizeScale=1;}
- if(a.fontFamily==b.fontFamily&&a.fontWeightOffset==-1&&b.fontWeightOffset==-1&&a.fontWeight>0&&b.fontWeight>0)result.fontWeight=mix(a.fontWeight,b.fontWeight);
+ // Within one family, resolve both weights as rendered (a relative step from
+ // the base included), then interpolate as an absolute weight.
+ if(a.fontFamily==b.fontFamily&&(a.fontWeight!=b.fontWeight||a.fontWeightOffset!=b.fontWeightOffset)){
+  const double from=resolve?resolve(a):nominalWeight(a,0),to=resolve?resolve(b):nominalWeight(b,0);
+  if(finite(from)&&finite(to)&&from>=1&&from<=1000&&to>=1&&to<=1000){result.fontWeight=mix(from,to);result.fontWeightOffset=-1;}
+ }
  result.opacity=mix(a.opacity,b.opacity);result.color=mixColor(a.color,b.color);
  result.outlineWidth=mix(a.outlineWidth,b.outlineWidth);result.outlineColor=mixColor(a.outlineColor,b.outlineColor);
  result.shadowBlur=mix(a.shadowBlur,b.shadowBlur);result.shadowX=mix(a.shadowX,b.shadowX);result.shadowY=mix(a.shadowY,b.shadowY);result.shadowColor=mixColor(a.shadowColor,b.shadowColor);
@@ -430,15 +441,15 @@ std::vector<ComposedRow> composeRows(const Document& d,
  return rows;
 }
 // One word between two settled placements: geometry and style blend together.
-DrawWord blendRuns(const DrawWord& a,const DrawWord& b,double t) {
+DrawWord blendRuns(const DrawWord& a,const DrawWord& b,double t,const ResolveWeight& resolve) {
  if(!(t>0))return a;if(t>=1)return b;
  auto mix=[t](double x,double y){return x==y?x:x+(y-x)*t;};
  DrawWord result=t<.5?a:b;
  result.x=mix(a.x,b.x);result.baseline=mix(a.baseline,b.baseline);result.width=mix(a.width,b.width);result.height=mix(a.height,b.height);
- result.bubbleExtraWidth=mix(a.bubbleExtraWidth,b.bubbleExtraWidth);result.style=blendWordStyles(a.style,b.style,t);
+ result.bubbleExtraWidth=mix(a.bubbleExtraWidth,b.bubbleExtraWidth);result.style=blendWordStyles(a.style,b.style,t,resolve);
  return result;
 }
-Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measure,const TransformText& transform,const std::vector<Phrase>& phrases,const RollUpSettings& settings) {
+Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measure,const TransformText& transform,const std::vector<Phrase>& phrases,const RollUpSettings& settings,const ResolveWeight& resolveWeight) {
  Frame result;
  if(phrases.empty())return result;
  double streamStart=phrases.front().start,streamEnd=0;for(const auto& phrase:phrases){streamStart=std::min(streamStart,phrase.start);streamEnd=std::max(streamEnd,phrase.end);}
@@ -560,7 +571,7 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    const auto& from=d.style.positions[low];const auto& to=d.style.positions[high];
    const RowStyler styler=[&](const WordStyle& state,std::size_t){
     auto style=applyPositionStyle(state,from);
-    return t>0&&high!=low?blendWordStyles(style,applyPositionStyle(state,to),t):style;
+    return t>0&&high!=low?blendWordStyles(style,applyPositionStyle(state,to),t,resolveWeight):style;
    };
    auto composed=composeRows(d,phrases,index,index+1,time,box,measure,transform,0,styler);
    if(composed.front().width>box.width)result.overflow=true;
@@ -668,7 +679,7 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    std::vector<DrawWord> merged;merged.reserve(result.words.size()-firstLayer);
    for(auto index=firstLayer;index<secondLayer;++index){auto& run=result.words[index];if(settledIncoming.find(wordId(run))!=settledIncoming.end())continue;if(run.state==WordState::Current)run.style.opacity=authoredOpacity[index];merged.push_back(std::move(run));}
    for(auto index=secondLayer;index<result.words.size();++index){auto& run=result.words[index];
-    if(outgoingIds.find(wordId(run))!=outgoingIds.end()){const auto id=wordId(run);run=settledIncoming.at(id);if(positioned)run=blendRuns(settledOutgoing.at(id),run,progress);}
+    if(outgoingIds.find(wordId(run))!=outgoingIds.end()){const auto id=wordId(run);run=settledIncoming.at(id);if(positioned)run=blendRuns(settledOutgoing.at(id),run,progress,resolveWeight);}
     else if(run.state==WordState::Current)run.style.opacity=authoredOpacity[index];merged.push_back(std::move(run));}
    result.words.resize(firstLayer);for(auto& run:merged)result.words.push_back(std::move(run));
   }
@@ -709,7 +720,7 @@ double rollUpAlpha(double x,double y,const Frame& frame) {
  const double strength=rollCurve(feather>0?1-(position-start)/feather:(position<=start?1:0),settings.transitionCurve);
  return 1-settings.fadeAmount*strength;
 }
-Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measureInput,std::size_t maxChars,double pause,const TransformText& transform,std::size_t groupsPerPage,const RollUpSettings& rollUp) {
+Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measureInput,std::size_t maxChars,double pause,const TransformText& transform,std::size_t groupsPerPage,const RollUpSettings& rollUp,const ResolveWeight& resolveInput) {
  require(finite(time),"invalid time");require(finite(box.x)&&finite(box.y)&&finite(box.width)&&finite(box.height)&&box.width>0&&box.height>0,"invalid layout box");require(bool(measureInput),"missing text measurer");
  require(std::abs(box.x)<=1e7&&std::abs(box.y)<=1e7&&box.width<=1e7&&box.height<=1e7,"layout geometry exceeds bounds");
  require(box.alignment>=1&&box.alignment<=3,"invalid text alignment");
@@ -728,7 +739,8 @@ Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const Measu
  };
  Frame result;auto phrases=regroup(d,maxChars,pause);
  phrases=withSilenceRows(d,phrases,pause,rollUp);
- if(rollUp.enabled)return rollingFrame(d,time,box,measure,transform,phrases,rollUp);
+ const ResolveWeight resolveWeight=resolveInput?resolveInput:ResolveWeight([&](const WordStyle& style){return nominalWeight(style,d.style.baseFontWeight);});
+ if(rollUp.enabled)return rollingFrame(d,time,box,measure,transform,phrases,rollUp,resolveWeight);
  // On a page, a line position is the row within the page (Line 1 on top).
  RowStyler pageStyler;
  if(hasPositionStyles(d.style,groupsPerPage))pageStyler=[&](const WordStyle& state,std::size_t row){return row<d.style.positions.size()?applyPositionStyle(state,d.style.positions[row]):state;};

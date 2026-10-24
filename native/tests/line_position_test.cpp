@@ -199,6 +199,40 @@ void pauseLines(){
  auto later=baselines(frameAt(d,3.5,r));assert(later.size()==2&&near(later[2]-later[1],10+7));
 }
 
+void weightInterpolation(){
+ WordStyle regular;regular.fontFamily="Fixture";regular.fontWeight=400;regular.fontWeightOffset=0;
+ auto bold=regular;bold.fontWeightOffset=100;
+ // Like Arial, this family has Regular and Bold, with no 500/600 face.
+ const ResolveWeight supported=[](const WordStyle& s){return s.fontWeightOffset==100?700.0:s.fontWeightOffset==0?400.0:s.fontWeight;};
+ for(double t:{.25,.5,.75}){
+  const auto blended=blendWordStyles(regular,bold,t,supported);
+  assert(blended.fontWeightOffset==-1&&near(blended.fontWeight,400+300*t));
+ }
+ assert(blendWordStyles(regular,bold,0,supported).fontWeightOffset==0);
+ assert(blendWordStyles(regular,bold,1,supported).fontWeightOffset==100);
+ auto absolute=bold;absolute.fontWeightOffset=-1;absolute.fontWeight=700;
+ assert(near(blendWordStyles(regular,absolute,.5,supported).fontWeight,550));
+ auto other=bold;other.fontFamily="Other";
+ assert(blendWordStyles(regular,other,.25,supported).fontFamily==regular.fontFamily);
+ assert(blendWordStyles(regular,other,.75,supported).fontFamily==other.fontFamily);
+ assert(blendWordStyles(regular,other,.75,supported).fontWeightOffset==100);
+
+ // The real layout path must pass the resolver through continuous scrolling
+ // and shared-line fade/slide/pop transitions, in both vertical directions.
+ auto d=lineDocument(6);d.style.baseFontWeight=600;
+ for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){s->fontFamily=regular.fontFamily;s->fontWeightOffset=0;}
+ for(int direction:{1,2})for(int transition:{1,2,3,4}){
+  for(auto& p:d.style.positions)p=PositionStyle{};
+  auto& target=d.style.positions[direction==1?0:3];target.fields=PositionWeight;target.value=bold;
+  const auto r=rolling(4,1,direction,transition);
+  const auto frame=layoutFrame(d,4.89,box,measure,56,.6,{},1,r,supported);
+  const auto& moving=word(frame,2);
+  assert(moving.style.fontWeightOffset==-1&&near(moving.style.fontWeight,550,1e-6));
+  const auto fallback=frameAt(d,4.89,r);
+  assert(word(fallback,2).style.fontWeightOffset==-1&&near(word(fallback,2).style.fontWeight,650,1e-6));
+ }
+}
+
 void pagedMode(){
  auto d=lineDocument(6);
  auto& two=d.style.positions[1];two.fields=PositionColor;two.value.color={1,0,0,1};
@@ -283,6 +317,6 @@ void paintOutset(){
 }
 
 int main(){
- codec();precedence();slotGeometry();scrollInterpolation();pauseLines();pagedMode();horizontal();transitions();visibleLinesChange();legacyParity();paintOutset();
+ codec();precedence();slotGeometry();scrollInterpolation();pauseLines();weightInterpolation();pagedMode();horizontal();transitions();visibleLinesChange();legacyParity();paintOutset();
  std::cout<<"line positions: codec, precedence, slot geometry, interpolation, pause lines, pages, sideways, transitions, visible lines and legacy parity passed\n";
 }

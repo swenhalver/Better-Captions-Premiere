@@ -17,15 +17,19 @@ template<class T> struct Ref {
 // Reuse selections for that frame only; installed-font changes take effect on
 // the next render without a global cache or a font-registration observer.
 struct FrameFonts {
- struct Entry {std::string family;double size,weight,base;int italic,offset;CTFontRef font;bool synthetic;};
+ struct Entry {std::string family;double size,weight,base;int italic,offset;CTFontRef font;bool synthetic;double resolvedWeight;};
  std::vector<Entry> entries;
  ~FrameFonts(){for(const auto& entry:entries)CFRelease(entry.font);}
- CTFontRef select(const WordStyle& style,double base,bool& synthetic){
+ CTFontRef select(const WordStyle& style,double base,bool& synthetic,double* resolvedWeight=nullptr){
   const auto size=style.fontSize*style.sizeScale;
-  for(const auto& entry:entries)if(entry.family==style.fontFamily&&entry.size==size&&entry.weight==style.fontWeight&&entry.base==base&&entry.italic==style.italic&&entry.offset==style.fontWeightOffset){synthetic=entry.synthetic;return static_cast<CTFontRef>(CFRetain(entry.font));}
+  for(const auto& entry:entries)if(entry.family==style.fontFamily&&entry.size==size&&entry.weight==style.fontWeight&&entry.base==base&&entry.italic==style.italic&&entry.offset==style.fontWeightOffset){synthetic=entry.synthetic;if(resolvedWeight)*resolvedWeight=entry.resolvedWeight;return static_cast<CTFontRef>(CFRetain(entry.font));}
   auto choice=font_detail::choose(style,base);synthetic=choice.info.syntheticItalic;
-  if(entries.size()<16)entries.push_back({style.fontFamily,size,style.fontWeight,base,style.italic,style.fontWeightOffset,static_cast<CTFontRef>(CFRetain(choice.font)),synthetic});
+  if(resolvedWeight)*resolvedWeight=choice.info.weight;
+  if(entries.size()<16)entries.push_back({style.fontFamily,size,style.fontWeight,base,style.italic,style.fontWeightOffset,static_cast<CTFontRef>(CFRetain(choice.font)),synthetic,choice.info.weight});
   return choice.font;
+ }
+ double weight(const WordStyle& style,double base){
+  bool synthetic=false;double result=400;auto font=select(style,base,synthetic,&result);CFRelease(font);return result;
  }
 };
 // Preserve the exact legacy path when no join is needed. Joined edges have
@@ -102,7 +106,7 @@ Bitmap rasterize(const Document& document,double time,const LayoutBox& box,std::
  validate(document);
  if(!width||!height||width>8192||height>8192||width*height>33554432)throw std::invalid_argument("Native frame exceeds bitmap bounds");
  FrameFonts fonts;
- auto frame=layoutFrame(document,time,box,[&](const std::string& text,const WordStyle& style){return Shaped(text,style,document.style.baseFontWeight,&fonts).metrics();},maxChars,pause,transformText,groupsPerPage,rollUp);
+ auto frame=layoutFrame(document,time,box,[&](const std::string& text,const WordStyle& style){return Shaped(text,style,document.style.baseFontWeight,&fonts).metrics();},maxChars,pause,transformText,groupsPerPage,rollUp,[&](const WordStyle& style){return fonts.weight(style,document.style.baseFontWeight);});
  Bitmap bitmap{width,height,width*4,std::vector<std::uint8_t>(width*height*4,0),frame.overflow};
  Ref<CGColorSpaceRef> space(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
  Ref<CGContextRef> context(CGBitmapContextCreate(bitmap.pixels.data(),width,height,8,bitmap.stride,space,kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big));
