@@ -39,6 +39,11 @@ int main(){try{
  auto axes=source;axes.style.current.bubblePaddingInline=10;axes.style.current.bubblePaddingBlock=3;
  adobe::applyNativeStyle(axes,64,{1,1,1,1},.5,.25,controls);
  check(axes.style.current.bubblePaddingInline==10&&axes.style.current.bubblePaddingBlock==1.5); // native Padding% then axis-specific downsampling
+ // Line position overrides take global size, tint and output scale, not per-state controls.
+ auto positioned=source;auto& line=positioned.style.positions[0];line.fields=PositionFontSize|PositionMarginTop|PositionColor|PositionOpacity;
+ line.value.fontSize=40;line.value.marginTop=10;line.value.opacity=.5;
+ adobe::applyNativeStyle(positioned,128,{0.5,1,1,1},1,.5,controls);
+ check(positioned.style.positions[0].value.fontSize==40&&positioned.style.positions[0].value.marginTop==5&&near(positioned.style.positions[0].value.color.r,.5)&&positioned.style.positions[0].value.opacity==.5);
  controls.current.bubbleMode=3;auto off=source;adobe::applyNativeStyle(off,64,{1,1,1,1},1,1,controls);check(!off.style.current.bubble);
  bool rejected=false;controls.current.sizePercent=0;try{adobe::applyNativeStyle(off,64,{1,1,1,1},1,1,controls);}catch(const std::invalid_argument&){rejected=true;}check(rejected);
  std::cout<<"Native styles passed: neutral byte equality, independent state overrides, bubble mode/tint/opacity/extents, alpha preservation and downsampling.\n";return 0;

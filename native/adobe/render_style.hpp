@@ -2,6 +2,7 @@
 #include "../core/caption_core.hpp"
 #include <cmath>
 #include <stdexcept>
+#include <vector>
 
 namespace better_captions::adobe {
 struct NativeWordControls {
@@ -37,7 +38,12 @@ inline void applyNativeStyle(Document& document,double globalSize,const Color& t
  applyNativeWordControls(document.style.upcoming,appearances.upcoming);
  applyNativeWordControls(document.style.current,appearances.current);
  applyNativeWordControls(document.style.spoken,appearances.spoken);
- for(auto* style:{&document.style.upcoming,&document.style.current,&document.style.spoken}) {
+ // Line position overrides take the global size, tint and output scale too.
+ // Per-state Word styles controls modulate state styles only; a value a
+ // position overrides is the position's own.
+ std::vector<WordStyle*> styles{&document.style.upcoming,&document.style.current,&document.style.spoken};
+ for(auto& position:document.style.positions)if(!position.empty())styles.push_back(&position.value);
+ for(auto* style:styles) {
   style->fontSize*=globalSize/64.0*sy;
   style->color.r*=tint.r;style->color.g*=tint.g;style->color.b*=tint.b;
   style->scaleGeometry(sx,sy);style->padding*=sy;if(style->bubblePaddingInline>=0)style->bubblePaddingInline*=sx;if(style->bubblePaddingBlock>=0)style->bubblePaddingBlock*=sy;style->radius*=sy;style->outlineWidth*=sy;
