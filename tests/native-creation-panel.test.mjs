@@ -21,6 +21,7 @@ test('new transcript becomes one zero-origin native creation with measured spaci
  assert.equal(plan.startFrame,0);assert.equal(plan.endFrame,96);assert.equal(plan.sourceInTicks,'0');assert.equal(plan.document.timeOriginSeconds,0);assert.equal(plan.document.style.wordSpacing,20);
  assert.equal(plan.document.style.current.bubble,true);assert.equal(plan.document.style.spoken.color.r,170/255);assert.equal(plan.document.style.current.fontSize,73.6);assert.equal(plan.document.style.current.sizeScale,1);
  assert.deepEqual(decodeNativePanelDocument(plan.documentText,sequenceId),plan.document);assert.equal(plan.geometry.width,576);assert.equal(plan.geometry.maxChars,56);
+ assert.equal(plan.document.style.lineWrap,'pretty');
  assert.deepEqual({...input,style:baseline.style},baseline);assert.equal('mediaPath' in plan,false);
 });
 test('creation refuses unrepresentable formatting instead of silently changing existing movies',()=>{
@@ -58,6 +59,8 @@ test('native creation carries every wrap mode with and without position override
   assert.equal(Buffer.from(plan.documentText.slice(7), 'hex').readUInt32LE(4), positions ? 12 : 11);
   assert.equal(plan.document.binaryVersion, positions ? 12 : 11);
   assert.equal(decoded.style.lineWrap ?? 'fill', mode);
+  const restored=rehydrateNativePanel(entry(plan.documentText),{id:sequenceId,name:'Native',duration:10,frameWidth:720,frameHeight:1280,frameRate:24});
+  assert.equal(restored.session.style.lineWrap,mode,'stored choices override the new-session Pretty default');
   assert.deepEqual(decoded.style.lineStyles, positions ? { '1': { marginTop: 12 }, '4': { color: { r: 1, g: 0, b: 0 }, fontWeight: 0, fontWeightOffset: 100 } } : undefined);
   assert.deepEqual(input, before);
  }

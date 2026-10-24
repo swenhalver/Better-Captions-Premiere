@@ -180,7 +180,7 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
     shadowColor: hexColor(document.style.upcoming.shadowColor), shadowOpacity: document.style.upcoming.shadowColor.a, shadowBlur: document.style.upcoming.shadowBlur,
     shadowOffsetX: document.style.upcoming.shadowX, shadowOffsetY: document.style.upcoming.shadowY, backgroundEnabled: false, textAlign: 'center',
     lineHeight: document.style.lineHeight, wordSpacing: document.style.wordSpacing, textTransform: document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none'),
-    ...(document.style.lineWrap ? { lineWrap: document.style.lineWrap } : {}),
+    lineWrap: document.style.lineWrap ?? 'fill',
     upcomingWord: panelWord(document.style.upcoming, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')), activeWord: panelWord(document.style.current, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')), spokenWord: panelWord(document.style.spoken, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')) };
   const lineStyles = panelLineStyles(document.style.lineStyles);
   if (lineStyles) style.lineStyles = lineStyles;

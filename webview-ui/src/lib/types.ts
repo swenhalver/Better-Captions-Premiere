@@ -173,7 +173,7 @@ export interface StyleConfig {
   wordSpacing?: number;
   textTransform: TextTransform;
   maxChars: number;
-  /** Native line wrap between hard breaks; absent means Fill. A grouping setting, not part of a look. */
+  /** Native line wrap between hard breaks; new sessions use Pretty, saved absence means Fill. Not part of a look. */
   lineWrap?: LineWrap;
   activeWord: WordAppearance;
   spokenWord: WordAppearance;
@@ -251,6 +251,7 @@ export const DEFAULT_STYLE: StyleConfig = {
   wordSpacing: 100,
   textTransform: "none",
   maxChars: DEFAULT_MAX_CHARS,
+  lineWrap: 'pretty',
   activeWord: {fontFamily:"",fontWeight:700,sizeScale:1.15,color:"#171717",opacity:1,bubble:true,bubbleColor:"#FFD84D",bubbleOpacity:1,padding:10,radius:14},
   spokenWord: {fontFamily:"",fontWeight:700,sizeScale:1,color:"#AAAAAA",opacity:1,bubble:false,bubbleColor:"#333333",bubbleOpacity:1,padding:8,radius:10},
 };

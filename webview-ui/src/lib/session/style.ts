@@ -9,7 +9,8 @@ export function restoreSessionStyle(value?: Partial<StyleConfig> & { maxWords?: 
   const style = { ...DEFAULT_STYLE, ...saved, maxChars,
     activeWord: { ...DEFAULT_STYLE.activeWord, ...saved.activeWord },
     spokenWord: { ...DEFAULT_STYLE.spokenWord, ...saved.spokenWord } };
-  if (saved.lineWrap !== undefined && saved.lineWrap !== 'balance' && saved.lineWrap !== 'pretty') delete style.lineWrap;
+  // Fresh sessions use Pretty; saved absence still represents the original Fill choice.
+  if (value !== undefined && saved.lineWrap !== 'fill' && saved.lineWrap !== 'balance' && saved.lineWrap !== 'pretty') delete style.lineWrap;
   // Old sessions did not store word spacing. Keep their output unchanged until
   // the editor explicitly chooses the new normal spacing or a custom amount.
   if (value !== undefined && (typeof saved.wordSpacing !== 'number' || !Number.isFinite(saved.wordSpacing) || saved.wordSpacing < 0 || saved.wordSpacing > 300)) delete style.wordSpacing;

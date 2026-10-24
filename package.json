@@ -1,7 +1,7 @@
 {
   "name": "better-captions-swen",
   "private": true,
-  "version": "0.7.89",
+  "version": "0.7.90",
   "type": "module",
   "scripts": {
     "build": "npm --prefix webview-ui run build && npm --prefix webview-ui run build:service",

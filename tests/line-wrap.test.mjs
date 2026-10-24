@@ -14,6 +14,7 @@ import { nativeCaptionPhrases } from '../webview-ui/src/lib/native-effect/phrase
 import { transcriptLines } from '../webview-ui/src/lib/transcript/lines.ts';
 import { capturePresetLook, applyPresetLook } from '../webview-ui/src/lib/style-presets.ts';
 import { DEFAULT_STYLE, DEFAULT_ANIMATION } from '../webview-ui/src/lib/types.ts';
+import { restoreSessionStyle } from '../webview-ui/src/lib/session/style.ts';
 import { nativeCarrier, legacyNativeDocumentBytes } from './helpers/native-document.mjs';
 
 const words = text => text.split(' ').map((text, i) => ({ text, startTime: i * .25, endTime: i * .25 + .2, isActive: false, endOfSentence: false }));
@@ -84,6 +85,11 @@ for (const mode of LINE_WRAPS) {
 }
 
 test('v11 sparse mode footer roundtrips; every older codec defaults to Fill', () => {
+  assert.equal(restoreSessionStyle().lineWrap,'pretty','new sessions default to Pretty');
+  for (const lineWrap of [undefined,'fill','balance','pretty']) {
+    const saved=lineWrap===undefined?{}:{lineWrap};
+    assert.equal(restoreSessionStyle(saved).lineWrap??'fill',lineWrap??'fill','restoring saved sessions retains their grouping choice');
+  }
   for (const [value, mode] of LINE_WRAPS.entries()) {
     const doc = documentFor(fox, mode), bytes = encodeNativeDocument(doc), view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     assert.equal(view.getUint32(4, true), 11); assert.equal(view.getUint32(bytes.length - 4, true), value);
