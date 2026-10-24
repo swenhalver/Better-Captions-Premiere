@@ -42,6 +42,13 @@ void sameFrame(const Frame& a,const Frame& b,double tolerance){
  }
 }
 
+// Same words at the same places: a crossfade frame that is not mid-transition.
+bool sameLayout(const Frame& a,const Frame& b){
+ if(a.words.size()!=b.words.size())return false;
+ for(std::size_t index=0;index<a.words.size();++index)if(a.words[index].wordIndex!=b.words[index].wordIndex||!near(a.words[index].baseline,b.words[index].baseline,1e-6)||!near(a.words[index].x,b.words[index].x,1e-6)||a.words[index].style.opacity!=b.words[index].style.opacity)return false;
+ return true;
+}
+
 void codec(){
  auto plain=lineDocument(3);
  const auto legacy=encode(plain);assert(legacy[4]==kSchemaVersion);
@@ -222,14 +229,21 @@ void horizontal(){
 
 void transitions(){
  // Fades, slides and pops paint two settled windows, each with its own slot
- // styles: the incoming line takes Line 4's red, shared history Line 3's.
- auto d=lineDocument(6);auto& bottom=d.style.positions[3];bottom.fields=PositionColor;bottom.value.color={1,0,0,1};
+ // styles: the incoming line takes Line 4's red at once while it fades in.
+ // A line in both windows is drawn once and glides from Line 4 to Line 3,
+ // blending red to white and its spacing, with no jump at either end.
+ auto d=lineDocument(6);auto& bottom=d.style.positions[3];bottom.fields=PositionColor|PositionMarginTop;bottom.value.color={1,0,0,1};bottom.value.marginTop=6;
  for(int transition:{2,3,4}){
   const auto r=rolling(4,1,1,transition);
-  const auto settled=frameAt(d,4.5,r);assert(word(settled,4).style.color.g==0&&word(settled,3).style.color.g==1);
+  const auto settled=frameAt(d,4.5,r),after=frameAt(d,5.5,r);assert(word(settled,4).style.color.g==0&&word(settled,3).style.color.g==1);
   const auto mid=frameAt(d,4.89,r);
-  assert(word(mid,5).style.color.g==0&&word(mid,5).style.opacity<1&&word(mid,4).style.color.g==1&&word(mid,1).style.color.g==1);
+  assert(word(mid,5).style.color.g==0&&word(mid,5).style.opacity<1&&word(mid,1).style.color.g==1);
   assert(std::count_if(mid.words.begin(),mid.words.end(),[](const DrawWord& w){return w.wordIndex==4;})==1);
+  const auto& shared=word(mid,4);assert(shared.style.color.g>0&&shared.style.color.g<1);
+  assert(shared.baseline<word(settled,4).baseline&&shared.baseline>word(after,4).baseline);
+  double previous=word(settled,4).baseline;
+  for(double time=4.8;time<5;time+=.004){const double y=word(frameAt(d,time,r),4).baseline;assert(y<=previous+1e-9&&previous-y<2);previous=y;}
+  assert(near(previous,word(after,4).baseline,1e-6));
  }
 }
 
@@ -246,6 +260,8 @@ void visibleLinesChange(){
 void legacyParity(){
  // Overrides equal to the state values take the positioned layout path; it
  // must reproduce the legacy layout for every direction, transition and lead.
+ // (Fade, slide and pop differ only mid-transition, where a positioned shared
+ // line glides instead of jumping; compare those at settled times.)
  auto plain=lineDocument(7);plain.style.current.fontSize=14;plain.style.spoken.opacity=.6;plain.style.current.marginBottom=3;
  plain.containers[0].words[3].start=3.5;// a pause line
  plain.containers[0].words[3].end=4.2;
@@ -253,7 +269,9 @@ void legacyParity(){
  for(int direction:{1,2,3,4})for(int transition:{1,2,3,4})for(std::size_t lead:{std::size_t(1),std::size_t(2),std::size_t(3)})
   for(double time=0;time<7;time+=.0625){
    auto r=rolling(3,lead,direction,transition);r.blankLineSeconds=.5;
-   sameFrame(frameAt(same,time,r),frameAt(plain,time,r),1e-6);
+   const auto legacy=frameAt(plain,time,r);
+   if(transition!=1){auto settled=r;settled.transition=1;if(!sameLayout(legacy,frameAt(plain,time,settled)))continue;}
+   sameFrame(frameAt(same,time,r),legacy,1e-6);
   }
 }
 

@@ -429,6 +429,15 @@ std::vector<ComposedRow> composeRows(const Document& d,
  }
  return rows;
 }
+// One word between two settled placements: geometry and style blend together.
+DrawWord blendRuns(const DrawWord& a,const DrawWord& b,double t) {
+ if(!(t>0))return a;if(t>=1)return b;
+ auto mix=[t](double x,double y){return x==y?x:x+(y-x)*t;};
+ DrawWord result=t<.5?a:b;
+ result.x=mix(a.x,b.x);result.baseline=mix(a.baseline,b.baseline);result.width=mix(a.width,b.width);result.height=mix(a.height,b.height);
+ result.bubbleExtraWidth=mix(a.bubbleExtraWidth,b.bubbleExtraWidth);result.style=blendWordStyles(a.style,b.style,t);
+ return result;
+}
 Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measure,const TransformText& transform,const std::vector<Phrase>& phrases,const RollUpSettings& settings) {
  Frame result;
  if(phrases.empty())return result;
@@ -638,24 +647,29 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    if(std::abs(steps-std::round(steps))<1e-9)steps=std::round(steps);
    const double previous=std::floor(steps),progress=steps-previous;
    const double beforeOffset=previous,afterOffset=previous+1;
-   const auto firstLayer=result.words.size();std::map<WordId,DrawWord> settledIncoming;
+   const auto firstLayer=result.words.size();std::map<WordId,DrawWord> settledIncoming,settledOutgoing;
+   auto* outgoing=positioned?&settledOutgoing:nullptr;
    std::size_t secondLayer=firstLayer;
-   if(settings.transition==2){paint(beforeOffset,1-progress,1,0,0);secondLayer=result.words.size();paint(afterOffset,progress,1,0,0,&settledIncoming);}
+   if(settings.transition==2){paint(beforeOffset,1-progress,1,0,0,outgoing);secondLayer=result.words.size();paint(afterOffset,progress,1,0,0,&settledIncoming);}
    else if(settings.transition==3){
     const double extent=horizontal?box.width:viewportHeight;
     const double sign=settings.direction==1||settings.direction==3?-1:1;
-    paint(beforeOffset,1-progress,1,horizontal?sign*progress*extent:0,horizontal?0:sign*progress*extent);
+    paint(beforeOffset,1-progress,1,horizontal?sign*progress*extent:0,horizontal?0:sign*progress*extent,outgoing);
     secondLayer=result.words.size();paint(afterOffset,progress,1,horizontal?-sign*(1-progress)*extent:0,horizontal?0:-sign*(1-progress)*extent,&settledIncoming);
-   }else{paint(beforeOffset,1-progress,1-.15*progress,0,0);secondLayer=result.words.size();paint(afterOffset,progress,.8+.2*progress,0,0,&settledIncoming);}
+   }else{paint(beforeOffset,1-progress,1-.15*progress,0,0,outgoing);secondLayer=result.words.size();paint(afterOffset,progress,.8+.2*progress,0,0,&settledIncoming);}
    // History shared by both settled windows is one unchanged word, not two
    // crossfading copies. Keep it once at the incoming settled position. The
    // currently spoken word retains its authored opacity even while entering;
    // creative motion/scale is retained for genuinely incoming-only words.
+   // With line position styles the shared word instead glides from its
+   // outgoing to its incoming settled slot, blending both slot styles.
    std::set<WordId> outgoingIds;
    for(auto index=firstLayer;index<secondLayer;++index)outgoingIds.insert(wordId(result.words[index]));
    std::vector<DrawWord> merged;merged.reserve(result.words.size()-firstLayer);
    for(auto index=firstLayer;index<secondLayer;++index){auto& run=result.words[index];if(settledIncoming.find(wordId(run))!=settledIncoming.end())continue;if(run.state==WordState::Current)run.style.opacity=authoredOpacity[index];merged.push_back(std::move(run));}
-   for(auto index=secondLayer;index<result.words.size();++index){auto& run=result.words[index];if(outgoingIds.find(wordId(run))!=outgoingIds.end())run=settledIncoming.at(wordId(run));else if(run.state==WordState::Current)run.style.opacity=authoredOpacity[index];merged.push_back(std::move(run));}
+   for(auto index=secondLayer;index<result.words.size();++index){auto& run=result.words[index];
+    if(outgoingIds.find(wordId(run))!=outgoingIds.end()){const auto id=wordId(run);run=settledIncoming.at(id);if(positioned)run=blendRuns(settledOutgoing.at(id),run,progress);}
+    else if(run.state==WordState::Current)run.style.opacity=authoredOpacity[index];merged.push_back(std::move(run));}
    result.words.resize(firstLayer);for(auto& run:merged)result.words.push_back(std::move(run));
   }
  }return result;

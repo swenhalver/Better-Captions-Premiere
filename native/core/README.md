@@ -82,7 +82,9 @@ interpolate, a background present on one side fades its alpha, and font
 choices switch halfway. Rows stack on the current-line slot by their restyled
 advances, so their positions follow the uneven spacing smoothly. Sideways
 scrolling and pages use the row within the page; fade, slide and pop
-transitions paint two settled windows, each with its own slot styles. Pause
+transitions paint two settled windows, each with its own slot styles, and a
+line present in both glides from its old slot to its new one, blending both
+slot styles (without position styles such a line still moves at once, as before). Pause
 lines take slots like text lines. Slots beyond Visible lines (or beyond the
 rows a page or the box can hold) are kept but unused. With no position styles
 in the visible slots the original layout code runs unchanged. The native
