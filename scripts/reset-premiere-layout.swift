@@ -39,7 +39,7 @@ for _ in 0..<90 {
     if let reset = resetItem(), value(reset, kAXEnabledAttribute) as? Bool == true {
         if dryRun { print("Found enabled: Window › Workspaces › \(title(reset))"); exit(0) }
         guard AXUIElementPerformAction(reset, kAXPressAction as CFString) == .success else { fail("Premiere refused Reset to Saved Layout.") }
-        print("Reset Premiere to its saved workspace layout.")
+        print("Requested Reset to Saved Layout. Verify the rendered window with scripts/check-premiere-layout.swift; a successful menu press alone is not acceptance.")
         exit(0)
     }
     Thread.sleep(forTimeInterval: 1)

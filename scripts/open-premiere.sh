@@ -12,6 +12,7 @@
 # launches after it is gone. Opening while it is still shutting down shows the
 # Finder dialog "The application is not open anymore".
 set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
 bundle=com.adobe.PremierePro.26
 dry_run=0 main_display=0 project=""
 for arg in "$@"; do
@@ -48,7 +49,6 @@ else
 # launch-premiere-test.swift registers Premiere with S-Space, launches it
 # hidden, places every window on S-Space and only then reveals it.
 sspace="/Users/swenhalverson/Cursor Projects/S-Space/tools/s-space"
-root="$(cd "$(dirname "$0")/.." && pwd)"
 if ! python3 "$sspace" status 2>/dev/null | grep -q '"displayActive": true'; then
   python3 "$sspace" start >/dev/null 2>&1 || true
   sleep 3
@@ -60,21 +60,29 @@ fi
 swift "$root/scripts/launch-premiere-test.swift" --project "$project"
 echo "Opened Premiere on S-Space with: $project"
 # Fill S-Space with the project window (same as double-clicking its title bar).
-swift "$root/scripts/maximize-premiere-sspace.swift" || echo "Could not maximize Premiere on S-Space; double-click its title bar." >&2
+swift "$root/scripts/maximize-premiere-sspace.swift"
 fi
-# The window size changes during launch, and Premiere spreads that change
-# across its panels, squeezing S-Captions. Swen's saved workspace holds the
-# layout he wants (docs/testing/panel-layout-good-full.png), so restore it.
-swift "$(cd "$(dirname "$0")/.." && pwd)/scripts/reset-premiere-layout.swift" || echo "Could not reset Premiere's layout; use Window > Workspaces > Reset to Saved Layout." >&2
 
 # The Premiere Pro MCP bridge (MCPBridgeCEP) starts itself in the background
 # when Premiere launches and refreshes bridge-owner.json while running. Only the
 # file is checked here; Premiere itself is never queried.
 owner="${PREMIERE_TEMP_DIR:-/tmp/premiere-mcp-bridge}/bridge-owner.json"
+bridge_ready=0
 for _ in $(seq 1 60); do
   if [ -f "$owner" ] && [ $(( $(date +%s) - $(stat -f %m "$owner" 2>/dev/null || echo 0) )) -le 3 ]; then
-    echo "Premiere Pro MCP bridge is running"; exit 0
+    echo "Premiere Pro MCP bridge is running"; bridge_ready=1; break
   fi
   sleep 2
 done
-echo "Premiere Pro MCP bridge did not report within 2 minutes (open Window > Extensions > MCP Bridge (CEP) to check)" >&2
+if [ "$bridge_ready" != 1 ]; then
+  echo "Premiere Pro MCP bridge did not report within 2 minutes (open Window > Extensions > MCP Bridge (CEP) to check)" >&2
+  exit 1
+fi
+# Restore after project/extension startup and the final outer-window sizing.
+# Shrink/grow alone can collapse the dock while the workspace name stays the
+# same. A successful menu press is not rendered-layout verification.
+if [ "$main_display" != 1 ]; then
+  swift "$root/scripts/maximize-premiere-sspace.swift"
+fi
+swift "$root/scripts/reset-premiere-layout.swift"
+echo "Capture the settled window with Computer Use and run scripts/check-premiere-layout.swift before testing."
