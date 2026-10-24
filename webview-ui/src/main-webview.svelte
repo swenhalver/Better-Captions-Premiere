@@ -24,7 +24,7 @@
   import type { NativePanelBinding } from "./lib/native-effect/panel";
   import { refreshCaptionGroups, regroupCaptions } from "./lib/transcript/parser";
   import { captionLinks, confirmCaptionGeometry, createCaptionSelectionSync, legacyMotionBaseline, legacyMotionIdentity, panelVisibilityMessage, startProgramMonitorWatcher, type CaptionGeometryCue, type CaptionLink, type MotionWatchContext, type ReflowStatus } from "./lib/program-monitor";
-  import type { TranscriptJSON, SequenceInfo, SessionState, StyleConfig, CaptionItem, AnimationConfig, MotionProfile } from "./lib/types";
+  import type { TranscriptJSON, SequenceInfo, SessionState, StyleConfig, CaptionItem, AnimationConfig, MotionProfile, LineWrap } from "./lib/types";
   import TextAreaControls from "./components/TextAreaControls.svelte";
   import PanelTabs from "./components/PanelTabs.svelte";
   import SequenceStatus from "./components/SequenceStatus.svelte";
@@ -665,6 +665,19 @@
     updateCaptions(nativeBinding ? reflowed : regroupCaptions(reflowed, maxChars));
     undoLabel = label;
   }
+  // A line wrap change is a reflow too: merges clear, manual breaks stay, and
+  // the mode rides in the same document write, so one Undo restores both.
+  function changeLineWrap(lineWrap: LineWrap) {
+    try { reflowLineWrap(lineWrap); } catch (problem) { error = message(problem); }
+  }
+  function reflowLineWrap(lineWrap: LineWrap) {
+    const session = sessionManager.current;
+    if (!session || (session.style.lineWrap ?? 'fill') === lineWrap) return;
+    updateStyle({ lineWrap });
+    const reflowed = clearLineMerges(plain(session.captions));
+    updateCaptions(nativeBinding ? reflowed : regroupCaptions(reflowed, session.style.maxChars));
+    undoLabel = 'Line wrap';
+  }
   async function applyStylePreset(look: PresetLook) {
     if(transcriptDraftActive)throw new Error("Finish or cancel the sentence edit before applying a preset.");
     if (editsLocked || isRefreshing || isSyncing || sessionManager.current?.isLoading) throw new Error("Wait for the current caption operation to finish.");
@@ -997,9 +1010,10 @@
     getState,
     async patchStyle(patch) {
       // A limit change reflows exactly like the panel control: merges clear.
-      const { maxChars, ...rest } = validateStylePatch(patch);
+      const { maxChars, lineWrap, ...rest } = validateStylePatch(patch);
       if (Object.keys(rest).length) updateStyle(rest);
       if (maxChars !== undefined && maxChars !== sessionManager.current?.style.maxChars) reflowCharacterLimit(maxChars);
+      if (lineWrap !== undefined) reflowLineWrap(lineWrap);
       await flushSave(); return getState();
     },
     async patchAnimation(patch: Partial<AnimationConfig>) { updateAnimation(patch); await flushSave(); return getState(); },
@@ -1196,7 +1210,7 @@
           {#if session.isLoading}<div class="caption-app__loading" role="status"><p>Transcribing in Premiere…</p><p class="caption-help">Timed words will appear here when Premiere finishes.</p><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div><div class="caption-app__skeleton"></div></div>{/if}
           {#if transcriptionBackup && transcriptionBackup.sequenceId === session.sequenceId}<div class="caption-app__backup"><button class="caption-button" onclick={restoreTranscription} disabled={session.captions.some((caption) => caption.clipNodeId)}>Restore previous transcription</button></div>{/if}
           {#snippet nativeGrouping()}{#if session.nativeClipId && nativeBinding}<NativePauseLineControl onControlsChange={controls=>{const seconds=controls?.rollUpBlankLineSeconds?.value,lines=controls?.rollUpLines?.value;pauseControls=typeof seconds==='number'&&typeof lines==='number'?{blankLineSeconds:seconds,visibleLines:lines}:null;}} onInteracting={active=>{nativeGeometryInteracting=active;if(!active){reconnect?.notify();liveOutput?.notify();}}} snapshot={nativeBinding.snapshot} sequenceId={session.sequenceId} currentTime={session.currentTime} visible={activeTab==='transcript'&&hostPanelVisible&&documentVisible} disabled={timelineBusy||isRefreshing||isSyncing||session.isLoading} read={api.readNativeCaptionControls} edit={api.editNativeCaptionControl} seek={api.seekNativeCaptionKeyframe} onTimeChange={time=>sessionManager.setCurrentTime(time)}/>{/if}{/snippet}
-          <TranscriptPreview {pauseSettings} {nativeGrouping} {lineFitCapacity} typing={session.nativeClipId && nativeBinding && !api.isDemo ? transcriptTyping : null} onEditingChange={(active)=>transcriptDraftActive=active} onSmartLineFit={fitCharacterLimit} onCharacterLimitGesture={setCharacterLimitGesture} frameRate={session.frameRate} {selectedWord} onSelectWord={(index) => selectedWord = index} sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxChars={session.style.maxChars} groupingDisabled={!!session.nativeClipId && nativeBinding?.clip.maxChars === undefined} {selectedId} onSelect={(id) => { selectedId = id; selectedWord = 0; }} onSeek={seekCaption} onMaxCharsChange={changeCharacterLimit} onUpdate={(captions,label)=>updateCaptions(captions,true,label)} onShowInPremiere={seekCaption} isDemo={api.isDemo} disabled={editsLocked || isRefreshing || isSyncing || session.isLoading} />
+          <TranscriptPreview {pauseSettings} {nativeGrouping} {lineFitCapacity} typing={session.nativeClipId && nativeBinding && !api.isDemo ? transcriptTyping : null} onEditingChange={(active)=>transcriptDraftActive=active} onSmartLineFit={fitCharacterLimit} onCharacterLimitGesture={setCharacterLimitGesture} frameRate={session.frameRate} {selectedWord} onSelectWord={(index) => selectedWord = index} sequenceId={session.sequenceId} captions={session.captions} currentTime={session.currentTime} maxChars={session.style.maxChars} lineWrap={session.nativeClipId && nativeBinding ? session.style.lineWrap ?? 'fill' : null} onLineWrapChange={changeLineWrap} groupingDisabled={!!session.nativeClipId && nativeBinding?.clip.maxChars === undefined} {selectedId} onSelect={(id) => { selectedId = id; selectedWord = 0; }} onSeek={seekCaption} onMaxCharsChange={changeCharacterLimit} onUpdate={(captions,label)=>updateCaptions(captions,true,label)} onShowInPremiere={seekCaption} isDemo={api.isDemo} disabled={editsLocked || isRefreshing || isSyncing || session.isLoading} />
         </div>
         <div id="workspace-panel-style" role="tabpanel" aria-labelledby="workspace-tab-style" tabindex="0" hidden={activeTab !== "style"}>
           {#key session.sequenceId}

@@ -56,3 +56,50 @@ empty rows per gap. Future words remain hidden until the gap ends. Static pages
 retain their existing single empty row per qualifying gap; separate containers
 never acquire connecting silence rows. The layout is derived independently for
 each requested frame, including backward seeks.
+
+## Current BCAP v11 format and line wrapping
+
+This section supersedes the historical version-selection descriptions above.
+New documents and every encode write BCAP **v11**; readers accept v1–11. JSON
+panel protocol `version` remains 1. V8 made word boundaries explicit and made
+storage-container edges and `manualSplit` metadata independent of rendered line
+boundaries. V9 added each word's `pauseLinesRemoved` uint32 (0–8), immediately
+after its boundary uint32; it suppresses derived pause rows without changing
+speech timing.
+
+V10 defines the word boundary enum as 0 automatic, 1 manual `break`, 2 `join`,
+and 3 merge `edge`. Both `break` and `edge` render as hard line boundaries.
+Reflow clears joins and merge edges while preserving manual breaks and removed
+pause rows. Pre-v10 documents upgrade breaks adjacent to joined runs to merge
+edges once on decode; v10+ manual breaks remain manual even beside joins.
+
+V11 retains the v10 word layout and appends one little-endian uint32 **after the
+v7 style footer**: 0 Fill, 1 Balance, 2 Pretty. Older documents decode as Fill;
+unknown values, truncation and trailing bytes are rejected. Native C++ stores
+`Style::lineWrap`; sparse panel JSON omits `style.lineWrap` for Fill and stores
+`"balance"` or `"pretty"` otherwise.
+
+All modes count Unicode scalars, include spaces between ordinary words and glue
+leading punctuation without a space. Explicit joins make an indivisible unit,
+even across sentence ends, pauses or the character/duration limit. Other hard
+boundaries are sentence ends, manual breaks, merge edges and gaps **greater
+than 0.6 seconds**. Within these boundaries, lines respect the character limit
+and a **5.5-second** duration cap; one overlong word or joined unit stands alone.
+
+- **Fill** places as many units as fit on each line.
+- **Balance** minimizes line count first, then the sum of squared line widths;
+  equal costs prefer a longer earlier line. It retains Fill's line count.
+- **Pretty** uses Fill unless the final line is a single unit or shorter than
+  one third of the character limit. It resplits only the last two lines,
+  preferring a final line with multiple units, then the smallest sum of squared
+  widths, then a longer first line. All fit constraints still apply.
+
+At 20 characters, “The quick brown fox jumps over the lazy dog.” becomes:
+Fill `The quick brown fox / jumps over the lazy / dog.`, Balance
+`The quick brown / fox jumps over / the lazy dog.`, and Pretty
+`The quick brown fox / jumps over / the lazy dog.`
+
+`caption_core_tests --lines input.bcap MAXCHARS` prints the first global word
+index of each derived line. `tests/line-wrap.test.mjs` compiles a temporary
+standalone core executable and checks the TypeScript mirror against this output
+for all three modes; it does not require an SDK, installed plug-in or Premiere.

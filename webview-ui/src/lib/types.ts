@@ -131,6 +131,9 @@ export interface WordAppearance {
   radius: number;
 }
 
+/** How native caption words fill the lines between hard breaks; see native-effect/line-wrap.ts. */
+export type LineWrap = 'fill' | 'balance' | 'pretty';
+
 export interface StyleConfig {
   fontFamily: string;
   fontSize: number;
@@ -160,6 +163,8 @@ export interface StyleConfig {
   wordSpacing?: number;
   textTransform: TextTransform;
   maxChars: number;
+  /** Native line wrap between hard breaks; absent means Fill. A grouping setting, not part of a look. */
+  lineWrap?: LineWrap;
   activeWord: WordAppearance;
   spokenWord: WordAppearance;
   upcomingWord?: Partial<WordAppearance>;

@@ -1,4 +1,5 @@
 import { nativeCaptionPhrases } from './phrases.ts';
+import { validateLineWrap } from './line-wrap.ts';
 import { createCanvasWordMeasure, smartFitCharacterCapacity, applyNativeFitState, type SmartFitMeasure } from './smart-fit.ts';
 import type { NativeLineFitStates } from '../../cep-api.ts';
 import { validateCharacterLimit } from '../transcript/parser.ts';
@@ -56,7 +57,7 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
   const flag = () => { const value = u(); if (value > 1) throw new Error('Invalid native document flag.'); return value === 1; };
   const string = (limit: number) => { const size = u(); if (!size || size > limit) throw new Error('Invalid native document string.'); need(size); const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(offset, offset + size)); offset += size; return value; };
   if (u() !== 0x50414342) throw new Error('Invalid native document magic.');
-  const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10) throw new Error('Unsupported native binary version.');
+  const version = u(); if (!Number.isInteger(version) || version < 1 || version > 11) throw new Error('Unsupported native binary version.');
   const count = u(); if (count > 10000) throw new Error('Too many native caption containers.');
   const captions: NativeCaption[] = []; let totalWords = 0;
   for (let i = 0; i < count; i++) {
@@ -93,6 +94,7 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
   if(version>=6)for(const word of [style.upcoming,style.current,style.spoken])for(const axis of ['bubblePaddingInline','bubblePaddingBlock'] as const){const value=d();if(value!==-1)word[axis]=value;}
   if(version>=6)for(const word of [style.upcoming,style.current,style.spoken]){const mode=u();if(mode>2)throw new Error('Invalid native underline mode.');if(mode)word.underline=mode===2;}
   if(version>=7)for(const word of [style.upcoming,style.current,style.spoken])for(const key of ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const){const value=d();if(!key.startsWith('margin')?value!==-1:value!==0)word[key]=value;}
+  if(version>=11){const wrap=u();if(wrap>2)throw new Error('Invalid native line wrap.');if(wrap)style.lineWrap=wrap===1?'balance':'pretty';}
   if (offset !== bytes.length) throw new Error('Trailing native document bytes.');
   if (version < 10) {
     // Before v10 a merge also wrote plain breaks at its edges. A break right
@@ -100,7 +102,7 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
     const all = captions.flatMap(caption => caption.words);
     all.forEach((word, index) => { if (word.lineBreakBefore === 'break' && (all[index - 1]?.lineBreakBefore === 'join' || all[index + 1]?.lineBreakBefore === 'join')) word.lineBreakBefore = 'edge'; });
   }
-  return validateNativeDocument({ version: 1, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(sequenceId), captions, style, timeOriginSeconds, binaryVersion: 10 });
+  return validateNativeDocument({ version: 1, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(sequenceId), captions, style, timeOriginSeconds, binaryVersion: 11 });
 }
 
 function hexColor(color: NativeColor): string {
@@ -133,9 +135,9 @@ function bindingSnapshot(entry: NativePanelEntry): CepNativeSnapshot {
   return { locator: clone(entry.locator), revision: entry.revision };
 }
 
-/** Derive editor-only phrase rows. The native renderer groups using explicit boundaries and Characters per line. */
+/** Derive editor-only phrase rows. The native renderer groups using explicit boundaries, Characters per line and the line wrap. */
 export function deriveNativePanelPhrases(_binding: NativePanelBinding, session: SessionState): CaptionItem[] {
-  return nativeCaptionPhrases(session.captions, session.style.maxChars);
+  return nativeCaptionPhrases(session.captions, session.style.maxChars, session.style.lineWrap);
 }
 
 function nativeFitOptions(binding:NativePanelBinding,session:SessionState){
@@ -168,10 +170,11 @@ export function rehydrateNativePanel(entry: NativePanelEntry, sequence: Sequence
     shadowColor: hexColor(document.style.upcoming.shadowColor), shadowOpacity: document.style.upcoming.shadowColor.a, shadowBlur: document.style.upcoming.shadowBlur,
     shadowOffsetX: document.style.upcoming.shadowX, shadowOffsetY: document.style.upcoming.shadowY, backgroundEnabled: false, textAlign: 'center',
     lineHeight: document.style.lineHeight, wordSpacing: document.style.wordSpacing, textTransform: document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none'),
+    ...(document.style.lineWrap ? { lineWrap: document.style.lineWrap } : {}),
     upcomingWord: panelWord(document.style.upcoming, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')), activeWord: panelWord(document.style.current, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')), spokenWord: panelWord(document.style.spoken, document.style.letterCase ?? (document.style.titleCase ? 'titlecase' : 'none')) };
   const captions: CaptionItem[] = nativeCaptionPhrases(document.captions.map(caption => ({ id: caption.id, text: caption.words.map(word => word.text).join(' '),
     startTime: caption.start + timelineOffsetSeconds, endTime: caption.end + timelineOffsetSeconds, manualSplit: caption.manualSplit, timelineFloor: timelineOffsetSeconds,
-    words: caption.words.map(word => ({ text: word.text, startTime: word.start + timelineOffsetSeconds, endTime: word.end + timelineOffsetSeconds, endOfSentence: word.endOfSentence, ...(word.lineBreakBefore === undefined ? {} : { lineBreakBefore: word.lineBreakBefore }), ...(word.pauseLinesRemoved === undefined ? {} : { pauseLinesRemoved: word.pauseLinesRemoved }), isActive: false })) })), style.maxChars);
+    words: caption.words.map(word => ({ text: word.text, startTime: word.start + timelineOffsetSeconds, endTime: word.end + timelineOffsetSeconds, endOfSentence: word.endOfSentence, ...(word.lineBreakBefore === undefined ? {} : { lineBreakBefore: word.lineBreakBefore }), ...(word.pauseLinesRemoved === undefined ? {} : { pauseLinesRemoved: word.pauseLinesRemoved }), isActive: false })) })), style.maxChars, style.lineWrap);
   const session: SessionState = { sequenceId: sequence.id, sequenceName: sequence.name, transcriptJson: null, captions, style, animation: { ...clone(DEFAULT_ANIMATION), preset: 'karaoke' },
     hasTranscript: captions.length > 0, isLoading: false, currentTime: sequence.playhead ?? 0, duration: sequence.duration, frameRate: sequence.frameRate, frameWidth: sequence.frameWidth, frameHeight: sequence.frameHeight };
   const binding: NativePanelBinding = { snapshot, document: clone(document), baseline: clone(session), timelineOffsetSeconds, clip: clone(entry) };
@@ -234,7 +237,11 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
   const styles = pairs.map(([key]) => resolveAppearance(edited.style, key));
   if (!styles.every(style => style.textTransform === styles[0].textTransform) || !['none', 'titlecase', 'uppercase', 'lowercase'].includes(styles[0].textTransform)) unsupported('different word-state case');
   const document = clone(binding.document);
-  document.binaryVersion = 10;
+  document.binaryVersion = 11;
+  if ((edited.style.lineWrap ?? 'fill') !== (before.style.lineWrap ?? 'fill')) {
+    const wrap = validateLineWrap(edited.style.lineWrap ?? 'fill');
+    if (wrap === 'fill') delete document.style.lineWrap; else document.style.lineWrap = wrap;
+  }
   if(edited.style.fontWeight!==before.style.fontWeight||pairs.some(([key])=>edited.style[key]?.fontWeightOffset!==before.style[key]?.fontWeightOffset&&(edited.style[key]?.fontWeightOffset===0||edited.style[key]?.fontWeightOffset===100)))document.style.baseFontWeight=edited.style.fontWeight;
   for (const [key, nativeKey] of pairs) document.style[nativeKey] = updateWord(document.style[nativeKey], resolveAppearance(before.style, key), resolveAppearance(edited.style, key),before.style[key],edited.style[key]);
   if (edited.style.lineHeight !== before.style.lineHeight) document.style.lineHeight = edited.style.lineHeight;

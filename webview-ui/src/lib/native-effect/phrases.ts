@@ -1,33 +1,31 @@
 import type { CaptionItem, CaptionSegment } from '../types.ts';
 import { validateCharacterLimit } from '../transcript/parser.ts';
+import { lineStarts, type LineWrap } from './line-wrap.ts';
 
 /** Derived editor rows, matching native/core/caption_core.cpp::regroup.
  * Storage containers preserve source identities; rows span their boundaries.
- * Native grouping counts Unicode scalars and uses a 0.6-second pause threshold. */
-export function nativeCaptionPhrases(captions: CaptionItem[], maxChars: number): CaptionItem[] {
+ * Line breaks come from line-wrap.ts, the shared mirror of the native algorithm. */
+export function nativeCaptionPhrases(captions: CaptionItem[], maxChars: number, lineWrap: LineWrap = 'fill'): CaptionItem[] {
   validateCharacterLimit(maxChars);
   const all = captions.flatMap(caption => caption.words);
+  const starts = lineStarts(all, maxChars, lineWrap);
   const rows: { start: number; end: number; segment: CaptionSegment }[] = [];
-  let first = 0, count = 0, length = 0, owner = 0, ownerOffset = 0;
+  let first = 0, count = 0, owner = 0, ownerOffset = 0;
   const flush = () => {
     if (!count) return;
     const words = all.slice(first, first + count).map(word => ({ ...word }));
     rows.push({ start: first, end: first + count, segment: { id: `native-phrase-${captions[owner].id}-${first - ownerOffset}`,
       words, text: words.map(word => word.text).join(' '), startTime: words[0].startTime, endTime: Math.max(...words.map(word => word.endTime)) } });
-    count = 0; length = 0;
+    count = 0;
   };
   let container = 0, offset = 0;
-  all.forEach((word, index) => {
+  all.forEach((_word, index) => {
     while (container < captions.length - 1 && index >= offset + captions[container].words.length) {
       offset += captions[container].words.length; container++;
     }
-    const punctuation = /^[.,!?;:%)\]}]/.test(word.text), chars = Array.from(word.text).length;
-    const previous = all[index - 1];
-    const automatic = previous && (previous.endOfSentence || /[.!?]$/.test(previous.text) ||
-      !punctuation && (length + chars + 1 > maxChars || word.startTime - previous.endTime > .6));
-    if (count && (word.lineBreakBefore === 'break' || word.lineBreakBefore === 'edge' || word.lineBreakBefore !== 'join' && automatic)) flush();
+    if (count && starts[index]) flush();
     if (!count) { first = index; owner = container; ownerOffset = offset; }
-    length += chars + (count && !punctuation ? 1 : 0); count++;
+    count++;
   });
   flush();
   let firstRow = 0;

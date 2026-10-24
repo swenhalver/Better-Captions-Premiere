@@ -45,15 +45,15 @@ test('native creation keeps upper/lower display modes separate from source words
  for(const mode of ['uppercase','lowercase']){
   const input=session();input.style.textTransform=mode;const before=structuredClone(input);
   const plan=prepareNativeCreation(input,16),decoded=decodeNativePanelDocument(plan.documentText,sequenceId);
-  assert.equal(decoded.style.letterCase,mode);assert.equal(decoded.binaryVersion,10);assert.equal(decoded.captions[0].words[0].text,'Hello');assert.deepEqual(input,before);
+  assert.equal(decoded.style.letterCase,mode);assert.equal(decoded.binaryVersion,11);assert.equal(decoded.captions[0].words[0].text,'Hello');assert.deepEqual(input,before);
  }
 });
 
 
 test('native creation retains explicit independent bubble padding and underline in the v9 document',()=>{
- const legacy=prepareNativeCreation(session(),16);assert.equal(decodeNativePanelDocument(legacy.documentText,sequenceId).binaryVersion,10);
+ const legacy=prepareNativeCreation(session(),16);assert.equal(decodeNativePanelDocument(legacy.documentText,sequenceId).binaryVersion,11);
  const input=session();Object.assign(input.style.activeWord,{bubblePaddingInline:22,bubblePaddingBlock:3,underline:true});input.style.spokenWord.underline=false;
- const plan=prepareNativeCreation(input,16),decoded=decodeNativePanelDocument(plan.documentText,sequenceId);assert.equal(decoded.binaryVersion,10);assert.equal(decoded.style.current.bubblePaddingInline,22);assert.equal(decoded.style.current.bubblePaddingBlock,3);assert.equal(decoded.style.current.padding,input.style.activeWord.padding);assert.equal(decoded.style.current.underline,true);assert.equal(decoded.style.spoken.underline,false);assert.equal(decoded.style.upcoming.bubblePaddingInline,undefined);assert.equal(decoded.style.upcoming.underline,undefined);
+ const plan=prepareNativeCreation(input,16),decoded=decodeNativePanelDocument(plan.documentText,sequenceId);assert.equal(decoded.binaryVersion,11);assert.equal(decoded.style.current.bubblePaddingInline,22);assert.equal(decoded.style.current.bubblePaddingBlock,3);assert.equal(decoded.style.current.padding,input.style.activeWord.padding);assert.equal(decoded.style.current.underline,true);assert.equal(decoded.style.spoken.underline,false);assert.equal(decoded.style.upcoming.bubblePaddingInline,undefined);assert.equal(decoded.style.upcoming.underline,undefined);
 });
 
 test('native creation writes explicit row boundaries without changing words or their storage', () => {
@@ -63,7 +63,7 @@ test('native creation writes explicit row boundaries without changing words or t
   input.captions[0].words[0].pauseLinesRemoved = 3;
   input.captions[0].words[1].pauseLinesRemoved = 8;
   const before = structuredClone(input), plan = prepareNativeCreation(input, 16);
-  assert.equal(plan.document.binaryVersion, 10);
+  assert.equal(plan.document.binaryVersion, 11);
   assert.deepEqual(decodeNativePanelDocument(plan.documentText, sequenceId).captions[0].words.map(word => word.lineBreakBefore), ['break', 'join']);
   assert.deepEqual(decodeNativePanelDocument(plan.documentText, sequenceId).captions[0].words.map(word => word.pauseLinesRemoved), [3, 8]);
   assert.deepEqual(input, before);

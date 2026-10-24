@@ -2311,7 +2311,7 @@ var BetterCaptionsHost = (function () {
         function skip(bytes) { if (offset + bytes * 2 > text.length) throw new Error('Truncated caption extension words.'); offset += bytes * 2; }
         if (u() !== 1346454338) throw new Error('Invalid caption extension document magic.');
         var version = u(), n = u(), captions = [];
-        if (version < 1 || version > 10 || n > 10000) throw new Error('Invalid caption extension document version or size.');
+        if (version < 1 || version > 11 || n > 10000) throw new Error('Invalid caption extension document version or size.');
         for (var c = 0; c < n; c++) {
             var identityStart = offset, length = u();
             if (!length || length > 256) throw new Error('Invalid caption extension identity.');
@@ -2375,8 +2375,10 @@ var BetterCaptionsHost = (function () {
         }
         if (version >= 6) for (var underline = 0; underline < 3; underline++) if (u() > 2) throw new Error('Invalid caption extension underline flag.');
         if(version>=7)for(var geometry=0;geometry<36;geometry++){var lo=u(),hi=u(),absHi=hi&2147483647;var margin=(geometry%12)>=8;if(!((margin?absHi:hi)<1085276160||(margin?absHi:hi)===1085276160&&lo===0||!margin&&hi===3220176896&&lo===0))throw new Error('Invalid caption geometry.');}
+        // v11 appends the line wrap: 0 Fill, 1 Balance, 2 Pretty.
+        if (version >= 11 && u() > 2) throw new Error('Invalid caption extension line wrap.');
         if (offset !== text.length) throw new Error('Trailing caption extension document bytes.');
-        // Compare old layouts as v9 without rewriting the stored document.
+        // Compare old layouts as the current version without rewriting the stored document.
         // Only fields absent in that layout get their exact decode defaults;
         // all existing style/origin bytes remain immutable.
         var trailer = text.substring(trailerStart), zero = '0000000000000000', absent = '000000000000f0bf';
@@ -2392,11 +2394,12 @@ var BetterCaptionsHost = (function () {
             trailer += '000000000000000000000000';
         }
         if (version < 7) for (var stateGeometry = 0; stateGeometry < 36; stateGeometry++) trailer += stateGeometry % 12 < 8 ? absent : zero;
+        if (version < 11) trailer += '00000000';
         return { version: version, captions: captions, trailer: trailer };
     }
     function nativeExtensionAppendOnly(before, after) {
         var old = nativeExtensionBinary(before, false), next = nativeExtensionBinary(after, old.version < 10), changed = 0;
-        if ((old.version !== next.version && next.version !== 10) || old.captions.length !== next.captions.length || old.trailer !== next.trailer) throw new Error('Caption extension must preserve every previous style and manual container.');
+        if ((old.version !== next.version && next.version !== 11) || old.captions.length !== next.captions.length || old.trailer !== next.trailer) throw new Error('Caption extension must preserve every previous style and manual container.');
         for (var i = 0; i < old.captions.length; i++) {
             var a = old.captions[i], b = next.captions[i];
             if (a.identity !== b.identity || b.count < a.count || b.words.slice(0, a.words.length) !== a.words) throw new Error('Caption extension cannot replace previous caption text or timings.');

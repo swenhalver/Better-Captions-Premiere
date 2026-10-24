@@ -9,7 +9,7 @@ import { legacyNativeDocumentBytes, nativeCarrier } from './helpers/native-docum
 
 const word = (text, start, end, lineBreakBefore) => ({ text, start, end, endOfSentence: /[.!?]$/.test(text), ...(lineBreakBefore === undefined ? {} : { lineBreakBefore }) });
 function document() {
-  return { version: 1, binaryVersion: 10, animationAuthority: 'premiere-effect', sequenceId: 'sequence', timeOriginSeconds: 12.125,
+  return { version: 1, binaryVersion: 11, animationAuthority: 'premiere-effect', sequenceId: 'sequence', timeOriginSeconds: 12.125,
     style: defaultNativeStyle(), captions: [
       { id: 'left', start: .1, end: .8, manualSplit: true, words: [word('Hello.', .1, .3, 'break'), word('more', .4, .8, 'join')] },
       { id: 'right', start: 2.1, end: 2.8, manualSplit: false, words: [word('world', 2.1, 2.3, 'join'), word('next', 2.4, 2.8, 'break')] },
@@ -24,7 +24,7 @@ test('v9 stores boundary then removed-pause u32 per word and validates both boun
   const doc = document(), baseline = structuredClone(doc);
   delete doc.captions[0].words[0].lineBreakBefore;
   const bytes = encodeNativeDocument(doc), decoded = decodeNativePanelDocument(nativeCarrier(bytes), 'sequence');
-  assert.equal(new DataView(bytes.buffer).getUint32(4, true), 10);
+  assert.equal(new DataView(bytes.buffer).getUint32(4,true),11);
   assert.deepEqual(decoded, doc);
   assert.equal(decodeNativeTransportTimeOrigin(nativeCarrier(bytes)), doc.timeOriginSeconds);
   const invalid = bytes.slice(), firstWordBoundary = 12 + 4 + 4 + 4 + 4 + 4 + new TextEncoder().encode('Hello.').length + 8 + 8 + 4;
@@ -71,7 +71,7 @@ test('every historical v1–7 storage boundary migrates to a word break with sou
   for (let version = 1; version <= 7; version++) {
     const text = nativeCarrier(legacyNativeDocumentBytes(doc, version));
     const decoded = decodeNativePanelDocument(text, 'sequence');
-    assert.equal(decoded.binaryVersion, 10);
+    assert.equal(decoded.binaryVersion, 11);
     assert.equal(decoded.timeOriginSeconds, version === 1 ? 0 : doc.timeOriginSeconds);
     assert.deepEqual(decoded.captions, doc.captions.map((caption, index) => ({ ...caption,
       words: caption.words.map((word, wordIndex) => ({ ...word, ...(index > 0 && wordIndex === 0 ? { lineBreakBefore: 'break' } : {}) })) })));
@@ -142,7 +142,7 @@ test('merged and split cross-container rows survive encoding and subsequent auto
 test('pre-v10 merge edges become clearable once at decode, while v10 manual breaks beside joins stay breaks', () => {
   const doc = document();
   doc.captions.push({ id: 'tail', start: 3, end: 4, manualSplit: false, words: [word('alone', 3, 3.4, 'break'), word('after', 3.5, 4)] });
-  const v9 = encodeNativeDocument(doc); new DataView(v9.buffer).setUint32(4, 9, true); // v9 differs only by its version
+  const v9 = encodeNativeDocument(doc).slice(0, -4); new DataView(v9.buffer).setUint32(4, 9, true); // v9 lacks only the v11 line wrap word
   const legacy = decodeNativePanelDocument(nativeCarrier(v9), 'sequence');
   assert.deepEqual(legacy.captions.flatMap(caption => caption.words.map(word => word.lineBreakBefore ?? '-')), ['edge', 'join', 'join', 'edge', 'break', '-'], 'only breaks beside joins came from merges');
   const current = decodeNativePanelDocument(encodeNativeTransportText(doc), 'sequence');

@@ -92,23 +92,100 @@ void validate(const Document& d) {
  require(d.style.letterCase>=0&&d.style.letterCase<=2&&!(d.style.letterCase&&d.style.titleCase),"invalid display letter case");
  require(finite(d.style.wordSpacing)&&d.style.wordSpacing>=0&&d.style.wordSpacing<=4096,"invalid word spacing");
  require(finite(d.style.lineHeight)&&d.style.lineHeight>=.6&&d.style.lineHeight<=10,"invalid line height");
+ require(static_cast<std::uint32_t>(d.style.lineWrap)<=2,"invalid line wrap");
+}
+namespace {
+// Words glued to the previous one (a merge join, or a leading punctuation
+// token) form one unbreakable unit. Width counts Unicode scalars plus one space
+// before each word that does not start with punctuation.
+struct WrapUnit { std::size_t first=0,width=0; double start=0,end=0; bool hardBefore=false; };
+struct WrapRun {
+ const std::vector<WrapUnit>& units;std::size_t maxChars;
+ // A line of units [i,j) fits Characters per line and the line duration limit;
+ // a single unit always fits, so an overlong word or merged run stands alone.
+ bool fits(std::size_t i,std::size_t j,std::size_t width,double end)const{return j==i+1||(width<=maxChars&&end-units[i].start<=kMaxLineSeconds);}
+ std::vector<std::size_t> fill(std::size_t a,std::size_t b)const{
+  std::vector<std::size_t> starts;
+  for(std::size_t i=a;i<b;){
+   std::size_t j=i+1,width=units[i].width;double end=units[i].end;
+   while(j<b&&fits(i,j+1,width+1+units[j].width,std::max(end,units[j].end))){width+=1+units[j].width;end=std::max(end,units[j].end);++j;}
+   starts.push_back(i);i=j;
+  }
+  return starts;
+ }
+ // Fewest lines first, then the smallest sum of squared line widths (the most
+ // even lines). Equal costs keep the longer earlier line, nearest to Fill.
+ std::vector<std::size_t> balance(std::size_t a,std::size_t b)const{
+  const auto n=b-a;std::vector<std::size_t> lines(n+1,0),next(n+1,b);std::vector<std::uint64_t> cost(n+1,0);
+  for(std::size_t k=n;k-->0;){
+   const auto i=a+k;std::size_t width=0;double end=0;bool chosen=false;
+   for(std::size_t j=i+1;j<=b;++j){
+    width+=units[j-1].width+(j-1>i?1:0);end=j-1>i?std::max(end,units[j-1].end):units[i].end;
+    if(!fits(i,j,width,end))break;
+    const auto l=1+lines[j-a];const auto c=std::uint64_t(width)*width+cost[j-a];
+    if(!chosen||l<lines[k]||(l==lines[k]&&c<=cost[k])){lines[k]=l;cost[k]=c;next[k]=j;chosen=true;}
+   }
+  }
+  std::vector<std::size_t> starts;for(auto i=a;i<b;i=next[i-a])starts.push_back(i);return starts;
+ }
+ std::size_t width(std::size_t i,std::size_t j)const{std::size_t w=0;for(auto k=i;k<j;++k)w+=units[k].width+(k>i?1:0);return w;}
+ double end(std::size_t i,std::size_t j)const{double e=units[i].end;for(auto k=i+1;k<j;++k)e=std::max(e,units[k].end);return e;}
+ // Fill, unless its last line is one unit or under a third of the limit. Then
+ // the last two lines are split again: a last line of two or more units first,
+ // then the most even pair, then the longer first line.
+ std::vector<std::size_t> pretty(std::size_t a,std::size_t b)const{
+  auto starts=fill(a,b);if(starts.size()<2)return starts;
+  const auto last=starts.back();
+  if(b-last>1&&3*width(last,b)>=maxChars)return starts;
+  const auto tail=starts[starts.size()-2];std::size_t best=last;bool bestSingle=true;std::uint64_t bestCost=std::numeric_limits<std::uint64_t>::max();
+  for(auto s=tail+1;s<b;++s){
+   const auto first=width(tail,s),second=width(s,b);
+   if(!fits(tail,s,first,end(tail,s))||!fits(s,b,second,end(s,b)))continue;
+   const bool single=b-s==1;const auto cost=std::uint64_t(first)*first+std::uint64_t(second)*second;
+   if((!single&&bestSingle)||(single==bestSingle&&cost<=bestCost)){best=s;bestSingle=single;bestCost=cost;}
+  }
+  starts.back()=best;return starts;
+ }
+};
+}
+std::vector<bool> lineStarts(const std::vector<const Word*>& words,std::size_t maxChars,double pause,LineWrap mode) {
+ require(maxChars>=1&&maxChars<=500,"invalid character count");require(finite(pause)&&pause>=0&&pause<=60,"invalid pause");require(static_cast<std::uint32_t>(mode)<=2,"invalid line wrap");
+ std::vector<WrapUnit> units;
+ for(std::size_t i=0;i<words.size();++i){const auto& w=*words[i];const auto n=chars(w.text);const bool punct=punctuation(w.text);
+  bool hard=i==0,glue=false;
+  if(i){const auto& previous=*words[i-1];
+   const bool previousEnds=previous.endOfSentence||(!previous.text.empty()&&std::string(".!?").find(previous.text.back())!=std::string::npos);
+   if(w.lineBreakBefore==LineBreakBefore::Break||w.lineBreakBefore==LineBreakBefore::MergeEdge)hard=true;
+   else if(w.lineBreakBefore==LineBreakBefore::Join)glue=true;
+   else if(previousEnds)hard=true;
+   else if(punct)glue=true;
+   else hard=w.start-previous.end>pause;
+  }
+  if(glue){auto& unit=units.back();unit.width+=n+(punct?0:1);unit.end=std::max(unit.end,w.end);}
+  else units.push_back({i,n,w.start,w.end,hard});
+ }
+ std::vector<bool> starts(words.size(),false);const WrapRun run{units,maxChars};
+ for(std::size_t a=0;a<units.size();){
+  auto b=a+1;while(b<units.size()&&!units[b].hardBefore)++b;
+  const auto lines=mode==LineWrap::Balance?run.balance(a,b):mode==LineWrap::Pretty?run.pretty(a,b):run.fill(a,b);
+  for(auto unit:lines)starts[units[unit].first]=true;
+  a=b;
+ }
+ return starts;
 }
 std::vector<Phrase> regroup(const Document& d,std::size_t maxChars,double pause) {
  validate(d);require(maxChars>=1&&maxChars<=500,"invalid character count");require(finite(pause)&&pause>=0&&pause<=60,"invalid pause");
- std::vector<WordRef> stream;
- for(std::size_t c=0;c<d.containers.size();++c)for(std::size_t w=0;w<d.containers[c].words.size();++w)stream.push_back({c,w});
- auto word=[&](const WordRef& ref)->const Word&{return d.containers[ref.containerIndex].words[ref.wordIndex];};
- std::vector<Phrase> out;Phrase phrase;std::size_t len=0;const Word* previous=nullptr;
- auto flush=[&](){if(phrase.wordCount){out.push_back(std::move(phrase));phrase=Phrase{};len=0;}};
- for(const auto& ref:stream){const auto& w=word(ref);const auto n=chars(w.text);const bool punct=punctuation(w.text);
-  const bool previousEnds=previous&&(previous->endOfSentence||(!previous->text.empty()&&std::string(".!?").find(previous->text.back())!=std::string::npos));
-  const bool automatic=previous&&(previousEnds||(!punct&&(len+n+(phrase.wordCount?1:0)>maxChars||w.start-previous->end>pause)));
-  if(phrase.wordCount&&(w.lineBreakBefore==LineBreakBefore::Break||w.lineBreakBefore==LineBreakBefore::MergeEdge||(w.lineBreakBefore!=LineBreakBefore::Join&&automatic)))flush();
+ std::vector<WordRef> stream;std::vector<const Word*> words;
+ for(std::size_t c=0;c<d.containers.size();++c)for(std::size_t w=0;w<d.containers[c].words.size();++w){stream.push_back({c,w});words.push_back(&d.containers[c].words[w]);}
+ const auto starts=lineStarts(words,maxChars,pause,d.style.lineWrap);
+ std::vector<Phrase> out;Phrase phrase;
+ for(std::size_t index=0;index<stream.size();++index){const auto& ref=stream[index];const auto& w=*words[index];
+  if(starts[index]&&phrase.wordCount){out.push_back(std::move(phrase));phrase=Phrase{};}
   if(!phrase.wordCount){phrase.containerId=d.containers[ref.containerIndex].id;phrase.firstWord=ref.wordIndex;phrase.start=w.start;phrase.end=w.end;}
   else phrase.end=std::max(phrase.end,w.end);
-  len+=n+(phrase.wordCount&&!punct?1:0);++phrase.wordCount;phrase.wordRefs.push_back(ref);previous=&w;
+  ++phrase.wordCount;phrase.wordRefs.push_back(ref);
  }
- flush();return out;
+ if(phrase.wordCount)out.push_back(std::move(phrase));return out;
 }
 std::vector<std::uint8_t> encode(const Document& d) {
  validate(d);const auto wireVersion=kSchemaVersion;
@@ -122,6 +199,7 @@ std::vector<std::uint8_t> encode(const Document& d) {
  if(wireVersion>=6)for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){w.d(s->bubblePaddingInline);w.d(s->bubblePaddingBlock);}
  if(wireVersion>=6)for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken})w.u(static_cast<std::uint32_t>(s->underline+1));
  if(wireVersion>=7)for(const auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){w.d(s->paddingTop);w.d(s->paddingRight);w.d(s->paddingBottom);w.d(s->paddingLeft);w.d(s->radiusTL);w.d(s->radiusTR);w.d(s->radiusBR);w.d(s->radiusBL);w.d(s->marginTop);w.d(s->marginRight);w.d(s->marginBottom);w.d(s->marginLeft);}
+ if(wireVersion>=11)w.u(static_cast<std::uint32_t>(d.style.lineWrap));
  require(w.b.size()<=kMaxDocumentBytes,"document size exceeded");return w.b;
 }
 Document decode(const std::vector<std::uint8_t>& b) {
@@ -136,6 +214,7 @@ Document decode(const std::vector<std::uint8_t>& b) {
  if(wireVersion>=6)for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){s->bubblePaddingInline=r.d();s->bubblePaddingBlock=r.d();}
  if(wireVersion>=6)for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){auto mode=r.u();require(mode<=2,"invalid underline mode");s->underline=static_cast<int>(mode)-1;}
  if(wireVersion>=7)for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){s->paddingTop=r.d();s->paddingRight=r.d();s->paddingBottom=r.d();s->paddingLeft=r.d();s->radiusTL=r.d();s->radiusTR=r.d();s->radiusBR=r.d();s->radiusBL=r.d();s->marginTop=r.d();s->marginRight=r.d();s->marginBottom=r.d();s->marginLeft=r.d();}
+ if(wireVersion>=11){const auto wrap=r.u();require(wrap<=2,"invalid line wrap");d.style.lineWrap=static_cast<LineWrap>(wrap);}
  require(r.p==b.size(),"trailing document bytes");validate(d);return d;
 }
 std::string displayText(const std::string& text,bool title,int letterCase) {

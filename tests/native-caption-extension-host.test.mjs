@@ -224,10 +224,10 @@ test('duration-only extension can reveal existing hidden words without rewriting
 
 test('v5 extension preserves background space flags, all styles/manual splits, native keys and old words',()=>{
  const h=fixture({binaryVersion:5,fillSpaces:true}),curves=JSON.stringify(h.params.slice(0,4)),before=decodeNativePanelDocument(h.originalText,'seq-a');
- assert.equal(Buffer.from(h.originalText.slice(7),'hex').readUInt32LE(4),5);assert.equal(before.binaryVersion,10);assert.equal(before.style.current.bubbleFillSpaces,true);assert.equal(before.style.spoken.bubbleFillSpaces,true);
+ assert.equal(Buffer.from(h.originalText.slice(7),'hex').readUInt32LE(4),5);assert.equal(before.binaryVersion,11);assert.equal(before.style.current.bubbleFillSpaces,true);assert.equal(before.style.spoken.bubbleFillSpaces,true);
  const result=h.extend(h.read());assert.equal(result.ok,true,result.error);assert.equal(result.connection.documentText,h.appendedText);
  const after=decodeNativePanelDocument(result.connection.documentText,'seq-a');
- assert.equal(after.binaryVersion,10);assert.deepEqual(after.style,before.style);assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);
+ assert.equal(after.binaryVersion,11);assert.deepEqual(after.style,before.style);assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);
  assert.deepEqual(after.captions[0],before.captions[0]);assert.deepEqual(after.captions[1].words.slice(0,before.captions[1].words.length),before.captions[1].words);
  assert.equal(after.captions[1].id,before.captions[1].id);assert.equal(after.captions[1].manualSplit,true);assert.equal(JSON.stringify(h.params.slice(0,4)),curves);
  assert.equal(result.connection.startTicks,tick(10));assert.equal(result.connection.inTicks,tick(3600));
@@ -237,7 +237,7 @@ test('v1 through v7 extension migrates boundaries and defaults to v10 without ch
  for(const binaryVersion of [1,2,3,4,5,6,7]){
   const h=fixture({binaryVersion}),before=decodeNativePanelDocument(h.originalText,'seq-a'),result=h.extend(h.read());
   assert.equal(result.ok,true,result.error);assert.equal(result.connection.documentText,h.appendedText);
-  const after=decodeNativePanelDocument(result.connection.documentText,'seq-a');assert.equal(Buffer.from(h.originalText.slice(7),'hex').readUInt32LE(4),binaryVersion);assert.equal(after.binaryVersion,10);assert.deepEqual(after.style,before.style);
+  const after=decodeNativePanelDocument(result.connection.documentText,'seq-a');assert.equal(Buffer.from(h.originalText.slice(7),'hex').readUInt32LE(4),binaryVersion);assert.equal(after.binaryVersion,11);assert.deepEqual(after.style,before.style);
   assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);assert.deepEqual(after.captions[0],before.captions[0]);assert.deepEqual(after.captions[1].words.slice(0,1),before.captions[1].words);assert.equal(after.captions[1].words[0].lineBreakBefore,'break');assert.equal(after.captions[1].manualSplit,true);
  }
 });
@@ -307,10 +307,10 @@ test('v5 footer flag edits, malformed booleans, trailing bytes and truncation re
 
 test('v6 extension preserves both padding axes and absent-axis fallback with every previous style, word and native key',()=>{
  const h=fixture({binaryVersion:6,paddingAxes:true,fillSpaces:true,underline:true}),curves=JSON.stringify(h.params.slice(0,4)),before=decodeNativePanelDocument(h.originalText,'seq-a');
- assert.equal(Buffer.from(h.originalText.slice(7),'hex').readUInt32LE(4),6);assert.equal(before.binaryVersion,10);assert.equal(before.style.current.bubblePaddingInline,19);assert.equal(before.style.current.bubblePaddingBlock,4096);assert.equal(before.style.spoken.bubblePaddingBlock,undefined);
+ assert.equal(Buffer.from(h.originalText.slice(7),'hex').readUInt32LE(4),6);assert.equal(before.binaryVersion,11);assert.equal(before.style.current.bubblePaddingInline,19);assert.equal(before.style.current.bubblePaddingBlock,4096);assert.equal(before.style.spoken.bubblePaddingBlock,undefined);
  assert.equal(before.style.upcoming.underline,true);assert.equal(before.style.current.underline,false);assert.equal(before.style.spoken.underline,undefined);
  const result=h.extend(h.read());assert.equal(result.ok,true,result.error);const after=decodeNativePanelDocument(result.connection.documentText,'seq-a');
- assert.equal(after.binaryVersion,10);assert.deepEqual(after.style,before.style);assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);assert.deepEqual(after.captions[0],before.captions[0]);
+ assert.equal(after.binaryVersion,11);assert.deepEqual(after.style,before.style);assert.equal(after.timeOriginSeconds,before.timeOriginSeconds);assert.deepEqual(after.captions[0],before.captions[0]);
  assert.deepEqual(after.captions[1].words.slice(0,before.captions[1].words.length),before.captions[1].words);assert.equal(after.captions[1].manualSplit,true);assert.equal(JSON.stringify(h.params.slice(0,4)),curves);
  assert.equal(result.connection.startTicks,tick(10));assert.equal(result.connection.inTicks,tick(3600));
 });

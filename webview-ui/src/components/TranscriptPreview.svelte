@@ -3,7 +3,7 @@
   import { numericInput, numericInputValue } from '../lib/numeric-input';
   import ScrubbableNumber from "./ScrubbableNumber.svelte";
   import WordTimeline from "./WordTimeline.svelte";
-  import type { CaptionItem } from "../lib/types";
+  import type { CaptionItem, LineWrap } from "../lib/types";
   import { formatTime, validateCharacterLimit } from "../lib/transcript/parser";
   import { replaceText, retime, validateCaptions } from "../lib/transcript/edit";
   import { captionWordOffset, changeTranscriptLineBreak, lineSegment, replaceTranscriptLine, replaceTranscriptWords, transcriptLineCaption, transcriptLineLane, transcriptLines, transcriptWords, withTranscriptLines, type TranscriptLine } from "../lib/transcript/lines";
@@ -27,6 +27,8 @@
     sequenceId: string; captions: CaptionItem[]; currentTime: number; maxChars: number; selectedId?: string | null;
     onSeek: (time: number) => void; onSelect: (id: string) => void;
     onMaxCharsChange: (maxChars: number) => void; onUpdate: (captions: CaptionItem[], historyLabel?: string) => void;
+    /** The native layer's line wrap; null hides the control (legacy captions group without it). */
+    lineWrap?: LineWrap | null; onLineWrapChange?: (lineWrap: LineWrap) => void;
     onEditingChange?: (active:boolean)=>void;
     onShowInPremiere?: (time: number) => void; isDemo?: boolean; disabled?: boolean; groupingDisabled?: boolean; lineFitCapacity?:number|null; onSmartLineFit?:()=>void;
     /** A Characters per line drag or typing session started (true) or ended (false). */
@@ -35,7 +37,7 @@
     nativeGrouping?: Snippet;
     pauseSettings?: PauseLineSettings | null;
   }
-  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, disabled = false, groupingDisabled = false, onEditingChange=()=>{}, lineFitCapacity=null, onSmartLineFit, onCharacterLimitGesture, typing = null, nativeGrouping, pauseSettings = null }: Props = $props();
+  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, lineWrap = null, onLineWrapChange, disabled = false, groupingDisabled = false, onEditingChange=()=>{}, lineFitCapacity=null, onSmartLineFit, onCharacterLimitGesture, typing = null, nativeGrouping, pauseSettings = null }: Props = $props();
   let activeId = $derived(captions.find((caption) => currentTime >= caption.startTime && currentTime < caption.endTime)?.id ?? null);
   let selectedContainer = $derived(captions.find((caption) => caption.id === selectedId) ?? captions[0]);
   let selectedRowKey = $state<string | null>(null);
@@ -403,6 +405,11 @@
       void tick().then(() => listEl?.querySelector<HTMLButtonElement>('.transcript-editor__cue--selected .transcript-editor__cue-text')?.focus({ preventScroll: true }));
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
   }
+  const lineWraps: { value: LineWrap; label: string; title: string }[] = [
+    { value: 'fill', label: 'Fill', title: 'Fill: as many words on each line as fit' },
+    { value: 'balance', label: 'Balance', title: 'Balance: the same number of lines as Fill, with lengths as even as possible' },
+    { value: 'pretty', label: 'Pretty', title: 'Pretty: like Fill, but a short or one-word last line shares the last two lines evenly' },
+  ];
   function changeCharacterLimit(value: number) {
     if (disabled || value === maxChars) return;
     try { onMaxCharsChange(validateCharacterLimit(value)); error = ''; }
@@ -457,7 +464,7 @@
     <section class="transcript-editor__grouping" aria-label="Caption grouping">
       <div class="transcript-editor__grouping-heading"><h3>Caption grouping</h3><span>{maxChars} characters · {sentenceCount} {sentenceCount === 1 ? 'line' : 'lines'}</span></div>
       <div class="transcript-editor__grouping-body">
-        <div class="transcript-editor__grouping-controls"><div class="caption-field"><span>Characters per line</span><ScrubbableNumber label="Characters per line" min={15} max={150} step={1} decimals={0} value={maxChars} defaultValue={56} inputRealtime disabled={disabled} onChange={changeCharacterLimit} onDragState={onCharacterLimitGesture} onEditState={onCharacterLimitGesture}/></div><button type="button" class="caption-button transcript-editor__smart-fit" title="Measure the text to fit one line, with a 5% safety margin for letter widths and highlighting" disabled={disabled} onclick={() => onSmartLineFit?.()}>Smart line fit</button></div>
+        <div class="transcript-editor__grouping-controls"><div class="caption-field"><span>Characters per line</span><ScrubbableNumber label="Characters per line" min={15} max={150} step={1} decimals={0} value={maxChars} defaultValue={56} inputRealtime disabled={disabled} onChange={changeCharacterLimit} onDragState={onCharacterLimitGesture} onEditState={onCharacterLimitGesture}/></div><button type="button" class="caption-button transcript-editor__smart-fit" title="Measure the text to fit one line, with a 5% safety margin for letter widths and highlighting" disabled={disabled} onclick={() => onSmartLineFit?.()}>Smart line fit</button>{#if lineWrap}<div class="caption-field transcript-editor__wrap-field"><span id="transcript-line-wrap">Line wrap</span><div class="transcript-editor__wrap" role="group" aria-labelledby="transcript-line-wrap">{#each lineWraps as option (option.value)}<button type="button" class="transcript-editor__wrap-option" title={option.title} aria-pressed={lineWrap === option.value} {disabled} onclick={() => { if (lineWrap !== option.value) onLineWrapChange?.(option.value); }}>{option.label}</button>{/each}</div></div>{/if}</div>
         {@render nativeGrouping?.()}
       </div>
     </section>
@@ -526,7 +533,17 @@
   .transcript-editor__grouping-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--caption-space-xs) var(--caption-space-s); padding: var(--caption-space-m) var(--caption-space-l); & h3 { margin: 0; font: inherit; } & span { color: var(--color-panel-secondary); font-size: var(--caption-type-xs); } }
   .transcript-editor__grouping-body { padding: 0 var(--caption-space-l) var(--caption-space-m); }
   .transcript-editor__smart-fit { font-size:var(--caption-type-s);font-variant-numeric:tabular-nums; }
-  .transcript-editor__grouping-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--caption-space-s); align-items: end; margin-block-end: var(--caption-space-s); }
+  .transcript-editor__grouping-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--caption-space-s); align-items: end; margin-block-end: var(--caption-space-s); @container (min-width: 36rem) { grid-template-columns: minmax(0, 1fr) auto auto; } }
+  .transcript-editor__wrap-field { grid-column: 1 / -1; @container (min-width: 36rem) { grid-column: auto; } }
+  .transcript-editor__wrap { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .transcript-editor__wrap-option { min-block-size: 2.25rem; padding: .4rem .6rem; border: 1px solid var(--color-panel-border); background: var(--color-input); color: var(--color-panel-secondary); font: inherit; font-size: var(--caption-type-s); cursor: pointer;
+    &:first-child { border-start-start-radius: var(--caption-radius); border-end-start-radius: var(--caption-radius); }
+    &:last-child { border-start-end-radius: var(--caption-radius); border-end-end-radius: var(--caption-radius); }
+    & + & { border-inline-start: 0; }
+    &[aria-pressed="true"] { background: var(--color-selection); color: var(--color-accent); }
+    &:hover:enabled { color: var(--color-panel-text); }
+    &:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -2px; }
+    &:disabled { opacity: .5; cursor: default; } }
   .transcript-editor__search { display: flex; align-items: center; gap: var(--caption-space-s); flex: 1; min-inline-size: 0; margin: 0; padding-inline: .5rem; border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); background: var(--color-input); }
   .transcript-editor__search svg { inline-size: 1.1rem; block-size: 1.1rem; color: var(--color-panel-secondary); flex-shrink: 0; }
   .transcript-editor__search input { min-inline-size: 0; inline-size: 100%; padding: .45rem 0; background: transparent; color: var(--color-panel-text); border: 0; font-size: var(--caption-type-s); }

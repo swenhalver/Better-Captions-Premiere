@@ -86,3 +86,46 @@ marginRight, marginBottom, marginLeft. Padding/radius use -1 to inherit legacy
 axis/uniform values; explicit values are finite 0–4096. Margins default to zero
 and accept finite -4096–4096. Values participate in layout and native render
 scaling. Unedited v1–6 documents retain their byte representation.
+
+## Current authoritative codec: BCAP v11
+
+The earlier codec/version-selection sections describe historical formats.
+Every current encoder writes **BCAP v11**, including edits to older documents;
+readers accept v1–11. JSON panel protocol `version` remains 1. V8 added an
+explicit per-word boundary uint32 after `endOfSentence`; v9 added a
+`pauseLinesRemoved` uint32 (0–8) immediately after it. Storage-container edges
+and `manualSplit` flags no longer create rendered line boundaries in v8+.
+Removed-pause counts suppress derived empty rows without changing word timing.
+
+The v10 boundary enum is 0 automatic, 1 manual `break`, 2 `join`, 3 merge
+`edge`. A merge edge renders as a hard break, but a reflow clears it and all
+joins. Manual breaks and removed-pause counts survive reflow. On a pre-v10
+read, breaks beside joined runs are upgraded to merge edges once; v10+ manual
+breaks are never reinterpreted this way.
+
+V11 preserves the v10 body and appends a little-endian uint32 immediately after
+the v7 style footer: **0 Fill, 1 Balance, 2 Pretty**. V1–10 default to Fill.
+Both bounded TypeScript readers and the C++ decoder reject values above 2,
+truncation and trailing bytes. Sparse native JSON omits `style.lineWrap` for
+Fill, and uses `"balance"` or `"pretty"` otherwise. Panel `StyleConfig.lineWrap`
+may explicitly select `"fill"`; preparing a native update normalizes that
+selection back to the omitted native default.
+
+`line-wrap.ts` mirrors native `lineStarts`: widths count Unicode scalars and
+punctuation glued to its preceding word. Joined runs are indivisible until
+reflow. Sentence endings, manual breaks, merge edges and gaps greater than
+0.6 seconds bound every mode. Lines respect both Characters per line and a
+5.5-second cap, except that a single word or joined run may exceed either.
+Fill greedily fills each line. Balance keeps Fill's line count and minimizes
+the sum of squared widths, preferring longer earlier lines on ties. Pretty
+keeps Fill unless its last line is one unit or under one third of the limit;
+it resplits the last two lines, preferring a multi-unit last line, then even
+widths, then a longer first line.
+
+Changing wrapping mode is one `Line wrap` document edit: the new mode and
+cleared merge markers share one document and one Premiere edit token, so Undo
+restores both together. Smart line fit updates the character limit and clears
+merges while preserving the wrapping mode. Mode is grouping configuration and
+is excluded from captured style presets; applying a preset preserves it.
+Offline codec/parity, controller and mock-host Undo tests are separate from
+installed-host rendering and persistence acceptance.

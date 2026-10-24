@@ -87,7 +87,7 @@ function nativeWriter(source) {
 }
 
 test('the bounded native reader restores source Unicode, manual splits, styles and origin', () => {
-  assert.deepEqual(decodeNativePanelDocument(encodeNativeTransportText(document()), `{${id.toUpperCase()}}`), { ...document(), binaryVersion: 10 });
+  assert.deepEqual(decodeNativePanelDocument(encodeNativeTransportText(document()), `{${id.toUpperCase()}}`), { ...document(), binaryVersion: 11 });
   const text = nativeCarrier(legacyNativeDocumentBytes({ ...document(), timeOriginSeconds: 0 }, 1));
   assert.equal(decodeNativePanelDocument(text, id).timeOriginSeconds, 0, 'Legacy v1 origin remains zero');
 });
@@ -242,7 +242,7 @@ test('legacy v1 and v2 reads upgrade losslessly to v9 before typography edits', 
     assert.deepEqual(decodeNativePanelDocument(encodeNativeTransportText(prepareNativePanelUpdate(connected,session)),id),connected.document);
     const edited=clone(session);edited.style.activeWord.italic=true;
     const prepared=prepareNativePanelUpdate(connected,edited), bytes=encodeNativeDocument(prepared);
-    assert.equal(new DataView(bytes.buffer).getUint32(4,true),10);
+    assert.equal(new DataView(bytes.buffer).getUint32(4,true),11);
     assert.deepEqual(prepared.captions,connected.document.captions);
     assert.deepEqual(prepared.style.current.color,connected.document.style.current.color);
     assert.equal(prepared.timeOriginSeconds,0);
@@ -386,7 +386,7 @@ test('upper/lower display modes round trip without altering source words, times 
   const {session,binding:connected}=binding();const edited=clone(session);edited.style.textTransform=mode;
   for(const key of ['activeWord','upcomingWord','spokenWord'])edited.style[key].textTransform=mode;
   const prepared=prepareNativePanelUpdate(connected,edited),carrier=encodeNativeTransportText(prepared),decoded=decodeNativePanelDocument(carrier,id);
-  assert.equal(decoded.style.letterCase,mode);assert.equal(decoded.binaryVersion,10);assert.deepEqual(decoded.captions,connected.document.captions);
+  assert.equal(decoded.style.letterCase,mode);assert.equal(decoded.binaryVersion,11);assert.deepEqual(decoded.captions,connected.document.captions);
   assert.equal(decodeNativeTransportTimeOrigin(carrier),connected.document.timeOriginSeconds);assert.equal(encodeNativeTransportText(decoded),carrier);
   const restored=rehydrateNativePanel(entry(decoded),{id,name:'Native',frameWidth:1920,frameHeight:1080,frameRate:24,duration:7200});
   assert.equal(restored.session.style.textTransform,mode);assert.equal(restored.session.style.activeWord.textTransform,mode);
@@ -493,7 +493,7 @@ test('per-side padding, negative margins and corner radius survive native transp
  const old=document(),oldBytes=encodeNativeDocument(old),input=document();
  const geometry={paddingTop:2,paddingRight:9,paddingBottom:7,paddingLeft:4,radiusTL:0,radiusTR:6,radiusBR:14,radiusBL:3,marginTop:6,marginRight:5,marginBottom:8,marginLeft:-3};
  Object.assign(input.style.current,geometry);
- const bytes=encodeNativeDocument(input);assert.equal(new DataView(bytes.buffer).getUint32(4,true),10);
+ const bytes=encodeNativeDocument(input);assert.equal(new DataView(bytes.buffer).getUint32(4,true),11);
  const decoded=decodeNativePanelDocument(encodeNativeTransportText(input),id);
  for(const [key,value] of Object.entries(geometry))assert.equal(decoded.style.current[key],value,key);
  assert.deepEqual(encodeNativeDocument(decoded),bytes);

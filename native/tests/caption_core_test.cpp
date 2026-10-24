@@ -25,7 +25,7 @@ std::vector<std::uint8_t> legacyWire(const Document& document,std::uint32_t vers
   for(std::uint32_t word=0;word<count;++word){const auto start=pos;pos+=4+u(pos)+8+8+4;if(version>=8)pos+=4;legacy.insert(legacy.end(),current.begin()+start,current.begin()+pos);pos+=version>=8?4:8;}
  }
  legacy.insert(legacy.end(),current.begin()+pos,current.end());
- const std::size_t removed=(version<7?288:0)+(version<6?60:0)+(version<5?12:0)+(version<4?4:0)+(version<3?56:0)+(version<2?8:0);
+ const std::size_t removed=4+(version<7?288:0)+(version<6?60:0)+(version<5?12:0)+(version<4?4:0)+(version<3?56:0)+(version<2?8:0);
  legacy.resize(legacy.size()-removed);return legacy;
 }
 void sameRenderedFrame(const Frame& a,const Frame& b){
@@ -59,7 +59,71 @@ Frame ordinaryPauseFrame(const Document& source,double time,const LayoutBox& box
  for(auto& word:frame.words)word.wordIndex=indices.at(word.wordIndex);
  return frame;
 }
+// Line wrap fixtures share their expected lines with tests/line-wrap.test.mjs.
+std::string wrapped(const Document& d,std::size_t maxChars){
+ std::string out;for(const auto& phrase:regroup(d,maxChars)){if(!out.empty())out+=" / ";for(std::size_t i=0;i<phrase.wordRefs.size();++i){if(i)out+=" ";out+=d.containers[phrase.wordRefs[i].containerIndex].words[phrase.wordRefs[i].wordIndex].text;}}
+ return out;
+}
+Document spoken(const std::string& text,LineWrap mode,double step=.3){
+ Document d;d.style.lineWrap=mode;CaptionContainer c{"wrap",false,{}};double t=0;std::size_t at=0;
+ while(at<=text.size()){auto next=text.find(' ',at);if(next==std::string::npos)next=text.size();c.words.push_back({text.substr(at,next-at),t,t+step*.9,false});t+=step;at=next+1;}
+ d.containers.push_back(c);return d;
+}
+void lineWrapChecks(){
+ const std::string fox="The quick brown fox jumps over the lazy dog.";
+ assert(wrapped(spoken(fox,LineWrap::Fill),20)=="The quick brown fox / jumps over the lazy / dog.");
+ assert(wrapped(spoken(fox,LineWrap::Balance),20)=="The quick brown / fox jumps over / the lazy dog.");
+ assert(wrapped(spoken(fox,LineWrap::Pretty),20)=="The quick brown fox / jumps over / the lazy dog.");
+ // A full last line keeps Pretty identical to Fill; Balance evens two lines.
+ const std::string it="The quick brown fox jumps over it.";
+ assert(wrapped(spoken(it,LineWrap::Pretty),20)=="The quick brown fox / jumps over it."&&wrapped(spoken(it,LineWrap::Balance),20)=="The quick brown / fox jumps over it.");
+ // Pretty prefers a two-word last line over the most even pair.
+ const std::string count="one two three four five six seven eight nine ten eleven";
+ assert(wrapped(spoken(count,LineWrap::Fill),12)=="one two / three four / five six / seven eight / nine ten / eleven");
+ assert(wrapped(spoken(count,LineWrap::Pretty),12)=="one two / three four / five six / seven eight / nine / ten eleven");
+ // Unicode scalars count once; an overlong word stands alone in every mode.
+ for(auto mode:{LineWrap::Fill,LineWrap::Balance,LineWrap::Pretty}){
+  assert(wrapped(spoken("日本語 café naïve über",mode),10)=="日本語 café / naïve über");
+  assert(wrapped(spoken("go extraordinarily far",mode),6)=="go / extraordinarily / far");
+ }
+ // Hard breaks bound every mode: sentence ends, pauses, manual and merge edges.
+ for(auto mode:{LineWrap::Fill,LineWrap::Balance,LineWrap::Pretty}){
+  auto d=spoken("aa bb. cc dd ee ff",mode);assert(wrapped(d,56)=="aa bb. / cc dd ee ff");
+  d.containers[0].words[4].start=3;d.containers[0].words[4].end=3.2;d.containers[0].words[5].start=3.3;d.containers[0].words[5].end=3.5;assert(wrapped(d,56)=="aa bb. / cc dd / ee ff");
+  d=spoken("aa bb cc dd",mode);d.containers[0].words[2].lineBreakBefore=LineBreakBefore::Break;assert(wrapped(d,56)=="aa bb / cc dd");
+  d.containers[0].words[2].lineBreakBefore=LineBreakBefore::MergeEdge;assert(wrapped(d,56)=="aa bb / cc dd");
+  // A merged run is one unit: never split, even past the limit.
+  d=spoken("aa bb cc dd ee",mode);d.containers[0].words[1].lineBreakBefore=LineBreakBefore::MergeEdge;for(int i:{2,3})d.containers[0].words[i].lineBreakBefore=LineBreakBefore::Join;d.containers[0].words[4].lineBreakBefore=LineBreakBefore::MergeEdge;
+  assert(wrapped(d,5)=="aa / bb cc dd / ee");
+  // Characters per line is a maximum: glued punctuation counts toward it.
+  d=spoken("aaaa bbbb ...",mode);assert(wrapped(d,9)=="aaaa / bbbb ...");
+ }
+ // No line lasts longer than kMaxLineSeconds; one long word still stands alone.
+ for(auto mode:{LineWrap::Fill,LineWrap::Balance,LineWrap::Pretty}){
+  auto slow=spoken("a b c d e f g h",mode,1.5);assert(wrapped(slow,56)=="a b c / d e f / g h");
+  for(const auto& phrase:regroup(slow,56))assert(phrase.end-phrase.start<=kMaxLineSeconds);
+  auto longWord=spoken("hold this",mode);longWord.containers[0].words[0].end=7;longWord.containers[0].words[1].start=7;longWord.containers[0].words[1].end=7.3;assert(wrapped(longWord,56)=="hold / this");
+ }
+ // Balance keeps Fill's line count.
+ auto many=spoken("lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore",LineWrap::Fill);
+ const auto fillCount=regroup(many,24).size();many.style.lineWrap=LineWrap::Balance;assert(regroup(many,24).size()==fillCount);
+ // v11 stores the wrap as one u32 after the v7 footer; v10 bytes decode as Fill.
+ auto wire=spoken(fox,LineWrap::Pretty);const auto bytes=encode(wire);assert(bytes[4]==11&&bytes.back()==0&&bytes[bytes.size()-4]==2);
+ assert(decode(bytes).style.lineWrap==LineWrap::Pretty&&encode(decode(bytes))==bytes);
+ auto v10=bytes;v10.resize(v10.size()-4);v10[4]=10;assert(decode(v10).style.lineWrap==LineWrap::Fill);
+ auto bad=bytes;bad[bad.size()-4]=3;rejects([&]{decode(bad);});
+ auto invalid=wire;invalid.style.lineWrap=static_cast<LineWrap>(3);rejects([&]{validate(invalid);});
+}
 int main(int argc,char** argv){
+ if(argc==4&&std::string(argv[1])=="--lines"){
+  // Prints each line's first word index in the flat word stream.
+  std::ifstream input(argv[2],std::ios::binary);assert(input.good());
+  std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(input)),std::istreambuf_iterator<char>());
+  const auto d=decode(bytes);std::size_t offset=0;std::vector<std::size_t> starts(d.containers.size());
+  for(std::size_t c=0;c<d.containers.size();++c){starts[c]=offset;offset+=d.containers[c].words.size();}
+  for(const auto& phrase:regroup(d,static_cast<std::size_t>(std::stoul(argv[3]))))std::cout<<starts[phrase.wordRefs[0].containerIndex]+phrase.wordRefs[0].wordIndex<<"\n";
+  return 0;
+ }
  if(argc==4&&std::string(argv[1])=="--roundtrip"){
   std::ifstream input(argv[2],std::ios::binary);assert(input.good());
   std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(input)),std::istreambuf_iterator<char>());
@@ -197,7 +261,7 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  assert(typographyBytes.size()==encode(versionTwo).size());
  for(double invalidWeight:{0.999,1000.001,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}){auto invalid=typography;invalid.style.current.fontWeight=invalidWeight;rejects([&]{encode(invalid);});invalid=typography;invalid.style.baseFontWeight=invalidWeight;rejects([&]{encode(invalid);});}
  auto invalidTypography=typography;invalidTypography.style.current.italic=2;rejects([&]{encode(invalidTypography);});invalidTypography=typography;invalidTypography.style.current.fontWeightOffset=50;rejects([&]{encode(invalidTypography);});
- for(std::size_t offset:{typographyBytes.size()-364-40,typographyBytes.size()-364-36}){auto malformed=typographyBytes;malformed[offset]=3;rejects([&]{decode(malformed);});}
+ for(std::size_t offset:{typographyBytes.size()-368-40,typographyBytes.size()-368-36}){auto malformed=typographyBytes;malformed[offset]=3;rejects([&]{decode(malformed);});}
  auto bad=encoded;bad[4]=99;rejects([&]{decode(bad);});bad=encoded;bad.pop_back();rejects([&]{decode(bad);});bad=encoded;bad.push_back(0);rejects([&]{decode(bad);});rejects([&]{decode({});});
  bad=encoded;bad[8]=255;bad[9]=255;rejects([&]{decode(bad);});
  auto invalid=d;invalid.containers[1].id="original";rejects([&]{validate(invalid);});invalid=d;invalid.containers[0].words[0].start=std::numeric_limits<double>::quiet_NaN();rejects([&]{validate(invalid);});invalid=d;invalid.style.current.opacity=2;rejects([&]{validate(invalid);});rejects([&]{regroup(d,0);});
@@ -282,8 +346,8 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  auto underlined=axes;underlined.style.current.underline=1;underlined.style.spoken.underline=0;
  const auto underlineBytes=encode(underlined);assert(decode(underlineBytes).schemaVersion==kSchemaVersion&&encode(decode(underlineBytes))==underlineBytes);assert(decode(underlineBytes).style.current.underline==1&&decode(underlineBytes).style.spoken.underline==0&&decode(underlineBytes).style.upcoming.underline==-1);
  const auto underFrame=layoutFrame(underlined,.5,{0,0,200,300},measure);assert(underFrame.words[0].width==axisFrame.words[0].width&&underFrame.words[0].height==axisFrame.words[0].height&&underFrame.words[0].baseline==axisFrame.words[0].baseline);
- auto invalidUnderline=underlineBytes;invalidUnderline[invalidUnderline.size()-288-12]=3;rejects([&]{decode(invalidUnderline);});underlined.style.current.underline=2;rejects([&]{validate(underlined);});
- auto v5Bad=encode(bubbles);auto v5Fill=bubbles;v5Fill.style.current.bubbleFillSpaces=true;v5Bad=encode(v5Fill);v5Bad[v5Bad.size()-288-12-48-12]=2;rejects([&]{decode(v5Bad);});
+ auto invalidUnderline=underlineBytes;invalidUnderline[invalidUnderline.size()-4-288-12]=3;rejects([&]{decode(invalidUnderline);});underlined.style.current.underline=2;rejects([&]{validate(underlined);});
+ auto v5Bad=encode(bubbles);auto v5Fill=bubbles;v5Fill.style.current.bubbleFillSpaces=true;v5Bad=encode(v5Fill);v5Bad[v5Bad.size()-4-288-12-48-12]=2;rejects([&]{decode(v5Bad);});
  auto again=layoutFrame(bubbles,0.1,{0,0,1200,300},measure);
  assert(again.words.size()==bubbleFrame.words.size());for(std::size_t i=0;i<again.words.size();++i)assert(again.words[i].x==bubbleFrame.words[i].x&&again.words[i].baseline==bubbleFrame.words[i].baseline&&again.words[i].text==bubbleFrame.words[i].text);
  auto overlap=sample();overlap.containers[0].words={ {"long",0,2,false},{"short",0.5,1,false} };assert(layoutFrame(overlap,1.5,{0,0,1200,300},measure).words.size()==2);
@@ -1008,5 +1072,6 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  auto invalidGeo=geometry;invalidGeo.style.current.paddingTop=-2;rejects([&]{validate(invalidGeo);});invalidGeo=geometry;invalidGeo.style.current.marginTop=std::numeric_limits<double>::quiet_NaN();rejects([&]{validate(invalidGeo);});
  // Deterministic malformed-buffer stress: decode can reject or return a valid bounded document.
  std::uint32_t seed=17;for(unsigned trial=0;trial<1000;++trial){auto mutated=encoded;seed=1664525*seed+1013904223;auto index=seed%mutated.size();seed=1664525*seed+1013904223;mutated[index]^=static_cast<std::uint8_t>(seed>>24);try{validate(decode(mutated));}catch(const std::invalid_argument&){} }
+ lineWrapChecks();
  std::cout<<"caption_core: grouping, layout, styling, timing, codec and malformed-data checks passed\n";
 }

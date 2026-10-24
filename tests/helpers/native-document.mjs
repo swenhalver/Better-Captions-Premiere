@@ -1,6 +1,6 @@
 import { encodeNativeDocument } from '../../webview-ui/src/lib/native-effect/encode.ts';
 
-/** Legacy fixture builder. Production only writes v9; historical layouts omit
+/** Legacy fixture builder. Production only writes v11; historical layouts omit
  * each word's pause-removal count (and pre-v8 boundary enum) and truncate the append-only style footer. */
 export function legacyNativeDocumentBytes(document, version) {
   if (!Number.isInteger(version) || version < 1 || version > 8) throw new Error('Expected a historical BCAP version.');
@@ -16,7 +16,7 @@ export function legacyNativeDocumentBytes(document, version) {
     }
   }
   const footerSizes = [0, 0, 8, 64, 68, 80, 140, 428, 428];
-  parts.push(source.subarray(offset, source.length - 428 + footerSizes[version]));
+  parts.push(source.subarray(offset, source.length - 432 + footerSizes[version]));
   const bytes = Buffer.concat(parts); bytes.writeUInt32LE(version, 4);
   return new Uint8Array(bytes);
 }

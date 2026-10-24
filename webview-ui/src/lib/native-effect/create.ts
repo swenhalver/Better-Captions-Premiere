@@ -42,9 +42,9 @@ export function prepareNativeCreation(session: SessionState, measuredSpace: numb
         return { text: w.text, start: w.startTime, end: w.endTime, endOfSentence: !!w.endOfSentence, ...(lineBreakBefore === undefined ? {} : { lineBreakBefore }), ...(w.pauseLinesRemoved === undefined ? {} : { pauseLinesRemoved: w.pauseLinesRemoved }) };
       }) };
   });
-  const document = validateNativeDocument({ version: 1, binaryVersion: 10, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(session.sequenceId), timeOriginSeconds: 0,
+  const document = validateNativeDocument({ version: 1, binaryVersion: 11, animationAuthority: 'premiere-effect', sequenceId: nativePanelSequenceId(session.sequenceId), timeOriginSeconds: 0,
     captions, style: { upcoming: wordStyle(0), current: wordStyle(1), spoken: wordStyle(2), baseFontWeight: style.fontWeight,
-      wordSpacing: measuredSpace * (style.wordSpacing ?? 100) / 100, lineHeight: style.lineHeight, titleCase: appearances[0].textTransform === 'titlecase', ...(['uppercase','lowercase'].includes(appearances[0].textTransform) ? {letterCase:appearances[0].textTransform} : {}) } });
+      wordSpacing: measuredSpace * (style.wordSpacing ?? 100) / 100, lineHeight: style.lineHeight, titleCase: appearances[0].textTransform === 'titlecase', ...(['uppercase','lowercase'].includes(appearances[0].textTransform) ? {letterCase:appearances[0].textTransform} : {}), ...(style.lineWrap === 'balance' || style.lineWrap === 'pretty' ? {lineWrap:style.lineWrap} : {}) } });
   const endFrame = Math.ceil(Math.max(...captions.map(c => c.end)) * session.frameRate - 1e-7);
   if (endFrame < 1 || endFrame > 1000000) throw new Error('This caption duration exceeds native creation limits.');
   const width = Math.round(session.frameWidth * style.maxWidth);

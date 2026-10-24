@@ -6,10 +6,13 @@
 #include <vector>
 
 namespace better_captions {
-constexpr std::uint32_t kSchemaVersion = 10;
+constexpr std::uint32_t kSchemaVersion = 11;
 constexpr std::size_t kMaxWords = 100000;
 constexpr std::size_t kMaxDocumentBytes = 16 * 1024 * 1024;
 constexpr std::size_t kMaxGroupsPerPage = 100;
+// A line never lasts longer than this (first word start to last word end),
+// unless one word or glued run alone does. Matches the panel's grouping.
+constexpr double kMaxLineSeconds = 5.5;
 // Native integer sliders may interpolate fractional samples between keyframes.
 // Round finite host samples consistently; source/editor integer validation stays strict.
 std::size_t sampledGroupsPerPage(double);
@@ -43,7 +46,11 @@ struct WordStyle {
     double shadowBlur=0,shadowX=0,shadowY=0;
     Color shadowColor{0,0,0,0.5};
 };
-struct Style { WordStyle upcoming,current,spoken; double wordSpacing=12,lineHeight=1.3; bool titleCase=false; double baseFontWeight=0; int letterCase=0; }; // 0 legacy/as typed/title, 1 upper, 2 lower
+// How words fill the lines between hard breaks (v11). Fill packs each line;
+// Balance keeps Fill's line count with even lengths; Pretty is Fill unless the
+// last line is short or a single word, then the last two lines are split again.
+enum class LineWrap : std::uint32_t { Fill=0,Balance=1,Pretty=2 };
+struct Style { WordStyle upcoming,current,spoken; double wordSpacing=12,lineHeight=1.3; bool titleCase=false; double baseFontWeight=0; int letterCase=0; LineWrap lineWrap=LineWrap::Fill; }; // letterCase 0 legacy/as typed/title, 1 upper, 2 lower
 struct CaptionContainer { std::string id; bool manualSplit=false; std::vector<Word> words; };
 struct Document { std::uint32_t schemaVersion=kSchemaVersion; std::vector<CaptionContainer> containers; Style style; double timeOriginSeconds=0; };
 struct WordRef { std::size_t containerIndex=0,wordIndex=0; };
@@ -57,7 +64,12 @@ struct Phrase {
 // Joined interior-word overrides stay stored until that word starts a line again.
 // Regrouping is derived; explicit word breaks/joins govern lines. Containers
 // are storage only. Source words, IDs, metadata and word times never mutate.
+// Hard breaks (manual/merge-edge breaks, sentence ends, pauses) are never
+// crossed; between them document style.lineWrap places the automatic breaks.
 std::vector<Phrase> regroup(const Document&, std::size_t maxChars=56, double pauseSeconds=0.6);
+// For each word of the flat stream, whether it starts a line. Mirrors
+// webview-ui/src/lib/native-effect/line-wrap.ts exactly, including ties.
+std::vector<bool> lineStarts(const std::vector<const Word*>& words, std::size_t maxChars, double pauseSeconds, LineWrap mode);
 void validate(const Document&); // throws std::invalid_argument on untrusted/invalid data
 std::vector<std::uint8_t> encode(const Document&);
 Document decode(const std::vector<std::uint8_t>&);
