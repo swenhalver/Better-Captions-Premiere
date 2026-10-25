@@ -135,19 +135,22 @@ export function withTranscriptLines(captions: CaptionItem[], ranges: { start: nu
 }
 
 /** Replace one line's words. Text typed into an empty range (a pause row)
- * becomes its own line: a manual break before it and before the next line. */
+ * becomes its own line, and so does a line that is blanked or a blank that is
+ * filled again: a manual break before it and before the next line, so it keeps
+ * its own time however short its new text is. */
 export function replaceTranscriptLine(captions: CaptionItem[], line: TranscriptLine, updated: CaptionItem): CaptionItem[] {
   const rows = transcriptLines(captions), count = updated.words.length, delta = count - (line.end - line.start);
   const inserting = line.start === line.end;
+  const bounded = inserting || isBlankLine(updated.words) || isBlankLine(transcriptWords(captions).slice(line.start, line.end));
   let result = replaceTranscriptWords(captions, line.start, line.end,
-    inserting ? updated.words.map((word, index) => index ? word : { ...word, lineBreakBefore: 'break' as const }) : updated.words, updated.timingEstimated);
-  if (inserting) {
+    bounded ? updated.words.map((word, index) => index ? word : { ...word, lineBreakBefore: 'break' as const }) : updated.words, updated.timingEstimated);
+  if (bounded) {
     let offset = 0;
     const following = line.start + count;
     result = result.map(caption => {
       const first = offset; offset += caption.words.length;
       if (following < first || following >= offset) return caption;
-      const words = caption.words.map((word, index) => first + index === following && !word.lineBreakBefore ? { ...word, lineBreakBefore: 'break' as const } : word);
+      const words = caption.words.map((word, index) => first + index === following && word.lineBreakBefore !== 'break' ? { ...word, lineBreakBefore: 'break' as const } : word);
       return { ...caption, words };
     });
   }

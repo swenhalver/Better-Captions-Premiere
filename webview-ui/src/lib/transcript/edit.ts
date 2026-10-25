@@ -42,7 +42,12 @@ export function replaceText(c:CaptionItem,text:string):CaptionItem{
       return next;
     });
     const first=c.words[0]?.lineBreakBefore;
-    return (first==='break'||first==='edge')&&c.words.slice(1).every(word=>word.lineBreakBefore==='join')?bounded.map((word,index)=>({...word,lineBreakBefore:index===0?first:'join'})):bounded;
+    if(first!=='break'&&first!=='edge')return bounded;
+    // The line keeps its leading boundary even when its first word is retimed.
+    // A merged line (two or more words, the rest joined) stays one joined row;
+    // the new words of any other line, such as a refilled blank, still wrap.
+    const merged=c.words.length>1&&c.words.slice(1).every(word=>word.lineBreakBefore==='join');
+    return bounded.map((word,index)=>index===0?{...word,lineBreakBefore:first}:merged?{...word,lineBreakBefore:'join'}:word);
   };
   if(tokens.length===c.words.length)return {...c,text:tokens.join(' '),words:c.words.map((w,i)=>({...w,text:tokens[i]}))};
   const last=c.words[c.words.length-1]?.endTime??c.endTime;

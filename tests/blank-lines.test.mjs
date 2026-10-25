@@ -28,13 +28,14 @@ test('deleting every word of a line leaves one timed blank row and preserves all
   const before = grouped(story()), after = grouped(blankLine(before, 1));
   assert.deepEqual(lineText(after), ['First line.', '', 'Third line.']);
   const words = transcriptWords(after);
-  assert.deepEqual(words[2], word('', 2, 3.5, { pauseLinesRemoved: 1 }), 'the blank keeps the line time and its pause deletions');
-  assert.deepEqual([words[0], words[1], words[3], words[4]], [...before[0].words, ...before[2].words]);
+  assert.deepEqual(words[2], word('', 2, 3.5, { pauseLinesRemoved: 1, lineBreakBefore: 'break' }), 'the blank keeps the line time and its pause deletions');
+  // The only other change is the intentional break that keeps the next line apart.
+  assert.deepEqual([words[0], words[1], words[3], words[4]], [...before[0].words, { ...before[2].words[0], lineBreakBefore: 'break' }, before[2].words[1]]);
   assert.deepEqual(after.map(caption => caption.id), ['a', 'b', 'c'], 'storage identities stay');
   validateCaptions(after);
   // Retyping restores text in the same time window; one word takes all of it.
   const restored = grouped(replaceTranscriptLine(after, transcriptLines(after)[1], replaceText(transcriptLineCaption(after, transcriptLines(after)[1]), 'Back')));
-  assert.deepEqual(transcriptWords(restored)[2], word('Back', 2, 3.5, { pauseLinesRemoved: 1 }));
+  assert.deepEqual(transcriptWords(restored)[2], word('Back', 2, 3.5, { pauseLinesRemoved: 1, lineBreakBefore: 'break' }));
   const longer = grouped(replaceTranscriptLine(after, transcriptLines(after)[1], replaceText(transcriptLineCaption(after, transcriptLines(after)[1]), 'Back again now.')));
   assert.deepEqual(lineText(longer), ['First line.', 'Back again now.', 'Third line.']);
   const typed = transcriptWords(longer).slice(2, 5);
@@ -59,7 +60,8 @@ test('a line across storage containers becomes one blank word; an emptied contai
   assert.deepEqual(lineText(rows), ['One two three.', 'Later.']);
   const after = grouped(blankLine(rows, 0));
   assert.deepEqual(after.map(caption => [caption.id, caption.words.map(item => item.text)]), [['left', ['']], ['later', ['Later.']]]);
-  assert.deepEqual(after[0].words[0], word('', 0, 1.5));
+  assert.deepEqual(after[0].words[0], word('', 0, 1.5, { lineBreakBefore: 'break' }));
+  assert.deepEqual(after[1].words[0], word('Later.', 5, 6, { endOfSentence: true, lineBreakBefore: 'break' }));
 });
 
 test('typing into a pause slot inserts its own line there and leaves the other slots, including prior deletions', () => {
@@ -146,12 +148,12 @@ test('native documents carry a blank word through the codec, readers, panel and 
   const edited = { ...clone(session), captions: blankLine(session.captions, 1) };
   assert.equal(middle.end - middle.start, 2);
   const prepared = prepareNativePanelUpdate(binding, edited);
-  assert.deepEqual(prepared.captions[0].words, [original.captions[0].words[0], { text: '', start: 3.3, end: 4.7, endOfSentence: false, pauseLinesRemoved: 2 }, original.captions[0].words[3]],
+  assert.deepEqual(prepared.captions[0].words, [original.captions[0].words[0], { text: '', start: 3.3, end: 4.7, endOfSentence: false, lineBreakBefore: 'break', pauseLinesRemoved: 2 }, original.captions[0].words[3]],
     'the shifted Third. keeps its stored bytes; the blank keeps the exact stored line time');
   assert.deepEqual(prepared.style, original.style); assert.equal(prepared.timeOriginSeconds, 3600.37);
   const text = encodeNativeTransportText(prepared);
   assert.equal(decodeNativeTransportTimeOrigin(text), 3600.37);
-  assert.deepEqual(decodeNativePanelDocument(text, id).captions[0].words[1], { text: '', start: 3.3, end: 4.7, endOfSentence: false, pauseLinesRemoved: 2 });
+  assert.deepEqual(decodeNativePanelDocument(text, id).captions[0].words[1], { text: '', start: 3.3, end: 4.7, endOfSentence: false, lineBreakBefore: 'break', pauseLinesRemoved: 2 });
   // Reopening shows the blank row, which takes text again.
   const reopened = rehydrateNativePanel(entry(prepared), sequence()).session.captions;
   assert.deepEqual(lineText(reopened), ['First.', '', 'Third.']);
