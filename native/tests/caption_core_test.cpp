@@ -760,7 +760,8 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  mask.rollUp.direction=3;assert(rollUpAlpha(0,50,mask)==0&&rollUpAlpha(50,50,mask)==.5&&rollUpAlpha(100,50,mask)==1);
  mask.rollUp.direction=4;assert(rollUpAlpha(199.9,50,mask)<.01&&rollUpAlpha(150,50,mask)==.5);
  mask.rollUp.direction=1;mask.rollUp.transitionCurve=3;assert(rollUpAlpha(100,43.5,mask)==.75);mask.rollUp.transitionCurve=4;assert(rollUpAlpha(100,43.5,mask)==.25);
- mask.rollUp.boundaryPosition=.5;mask.rollUp.fadeAmount=0;assert(rollUpAlpha(100,43,mask)==0&&rollUpAlpha(100,51,mask)==1);
+ // A saved zero fade amount is ignored: the gradient always spans 0..100%.
+ mask.rollUp.boundaryPosition=.5;mask.rollUp.transitionCurve=1;mask.rollUp.fadeAmount=0;assert(rollUpAlpha(100,43,mask)==0&&rollUpAlpha(100,50,mask)==0&&rollUpAlpha(100,56.5,mask)==.5);
  mask.rollUp.boundaryEnabled=false;assert(rollUpAlpha(100,43,mask)==1);
  // Placement bounds are not a crop. Disabled directional masks pass all
  // overflowing paint; enabled masks affect only their designated edge.
@@ -772,7 +773,7 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  directional.rollUp.direction=4;assert(rollUpAlpha(-200,-200,directional)==1&&rollUpAlpha(-200,300,directional)==1);
 
  // Independent edges clip inward from the fixed viewport, with separate
- // fade amount/width/curve. Direction cannot swap the authored physical edges.
+ // fade width/curve. Direction cannot swap the authored physical edges.
  Frame independent;independent.rolling=true;independent.viewport={10,20,200,100};independent.rollUp.boundaryMode=1;
  for(auto& edge:independent.rollUp.edges)edge.fadeEnabled=false;
  const std::array<std::array<double,2>,4> halfPoints{{{{110,50}},{{110,90}},{{70,70}},{{150,70}}}};
@@ -781,12 +782,12 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
   auto frame=independent;auto& edge=frame.rollUp.edges[side];edge.inset=.2;edge.fadeEnabled=true;edge.thickness=.2;edge.curve=1;
   const auto p=halfPoints[side],outside=clippedPoints[side];
   for(int direction:{1,2,3,4}){frame.rollUp.direction=direction;assert(std::abs(rollUpAlpha(p[0],p[1],frame)-.5)<1e-9);assert(rollUpAlpha(outside[0],outside[1],frame)==0);}
-  edge.amount=.4;assert(std::abs(rollUpAlpha(p[0],p[1],frame)-.8)<1e-9);
+  edge.amount=.4;assert(std::abs(rollUpAlpha(p[0],p[1],frame)-.5)<1e-9);
   edge.amount=1;edge.curve=3;assert(std::abs(rollUpAlpha(p[0],p[1],frame)-.75)<1e-9);
   edge.curve=4;assert(std::abs(rollUpAlpha(p[0],p[1],frame)-.25)<1e-9);
   edge.fadeEnabled=false;assert(rollUpAlpha(p[0],p[1],frame)==1&&rollUpAlpha(outside[0],outside[1],frame)==0);
   edge.fadeEnabled=true;edge.thickness=0;assert(rollUpAlpha(p[0],p[1],frame)==1);
-  edge.thickness=.2;edge.amount=0;assert(rollUpAlpha(p[0],p[1],frame)==1&&rollUpAlpha(outside[0],outside[1],frame)==0);
+  edge.thickness=.2;edge.amount=0;assert(std::abs(rollUpAlpha(p[0],p[1],frame)-.5)<1e-9&&rollUpAlpha(outside[0],outside[1],frame)==0);
   for(std::size_t other=0;other<4;++other)if(other!=side)assert(frame.rollUp.edges[other].inset==0&&!frame.rollUp.edges[other].fadeEnabled);
  }
  auto corner=independent;corner.rollUp.edges[0].fadeEnabled=corner.rollUp.edges[2].fadeEnabled=true;

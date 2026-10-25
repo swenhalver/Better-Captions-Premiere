@@ -28,7 +28,6 @@
     {key:'rollUpFade',label:'Soft fade',type:'toggle'},
     {key:'rollUpFadePosition',label:'Boundary position, %',type:'number',min:0,max:100,step:1,decimals:1,factor:100,boundary:true},
     {key:'rollUpFadeThickness',label:'Transition thickness, %',type:'number',min:0,max:100,step:1,decimals:1,factor:100,boundary:true},
-    {key:'rollUpFadeAmount',label:'Fade amount, %',type:'number',min:0,max:100,step:1,decimals:1,factor:100,boundary:true},
     {key:'rollUpFadeCurve',label:'Transition curve',type:'curve',boundary:true},
   ];
   const sides=['Top','Bottom','Left','Right'] as const;
@@ -36,7 +35,6 @@
     {key:`boundary${side}Inset`,label:'Crop inset, %',type:'number',min:0,max:100,step:1,decimals:1},
     {key:`boundary${side}Fade`,label:'Fade enabled',type:'toggle'},
     {key:`boundary${side}Width`,label:'Fade width, %',type:'number',min:0,max:100,step:1,decimals:1},
-    {key:`boundary${side}Amount`,label:'Fade amount, %',type:'number',min:0,max:100,step:1,decimals:1},
     {key:`boundary${side}Curve`,label:'Fade curve',type:'curve'},
   ];
   let readTimer:ReturnType<typeof setTimeout>|undefined;

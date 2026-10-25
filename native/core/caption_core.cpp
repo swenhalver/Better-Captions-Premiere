@@ -791,10 +791,10 @@ double rollUpAlpha(double x,double y,const Frame& frame) {
   const std::array<double,4> distances{{y-y0,y1-y,x-x0,x1-x}};
   double alpha=1;
   for(std::size_t index=0;index<settings.edges.size();++index){const auto& edge=settings.edges[index];
-   if(!edge.fadeEnabled||edge.amount<=0||edge.thickness<=0)continue;
+   if(!edge.fadeEnabled||edge.thickness<=0)continue;
    const double length=index<2?box.height:box.width,feather=edge.thickness*length;
    const double strength=rollCurve(1-distances[index]/feather,edge.curve);
-   alpha=std::min(alpha,1-edge.amount*strength);
+   alpha=std::min(alpha,1-strength);
   }
   return alpha;
  }
@@ -809,7 +809,8 @@ double rollUpAlpha(double x,double y,const Frame& frame) {
  const double start=settings.boundaryPosition*length,feather=settings.transitionThickness*length;
  if(position<start)return 0;
  const double strength=rollCurve(feather>0?1-(position-start)/feather:(position<=start?1:0),settings.transitionCurve);
- return 1-settings.fadeAmount*strength;
+ // Always fade from fully transparent to full opacity; amount is retired.
+ return 1-strength;
 }
 Frame layoutFrame(const Document& d,double time,const LayoutBox& box,const MeasureText& measureInput,std::size_t maxChars,double pause,const TransformText& transform,std::size_t groupsPerPage,const RollUpSettings& rollUp,const ResolveWeight& resolveInput) {
  require(finite(time),"invalid time");require(finite(box.x)&&finite(box.y)&&finite(box.width)&&finite(box.height)&&box.width>0&&box.height>0,"invalid layout box");require(bool(measureInput),"missing text measurer");

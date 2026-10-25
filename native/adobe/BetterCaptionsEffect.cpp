@@ -77,7 +77,9 @@ PF_Err parameters(PF_InData* in_data, PF_OutData* out_data) {
  BC_ADD_CHOICE_SLIDER("Soft fade boundary",0,1,1,RollUpBoundaryId);
  PF_ADD_FLOAT_SLIDERX("Boundary position",0,1,0,1,0,PF_Precision_HUNDREDTHS,0,0,RollUpPositionId);
  PF_ADD_FLOAT_SLIDERX("Transition thickness",0,1,0,1,.35,PF_Precision_HUNDREDTHS,0,0,RollUpThicknessId);
- PF_ADD_FLOAT_SLIDERX("Fade amount",0,1,0,1,1,PF_Precision_HUNDREDTHS,0,0,RollUpFadeId);
+ // Retired Fade amount slot, hidden but kept for saved stream order.
+ AEFX_CLR_STRUCT(def);def.ui_flags=PF_PUI_NO_ECW_UI;
+ PF_ADD_FLOAT_SLIDER("Fade amount",0,1,0,1,AEFX_DEFAULT_CURVE_TOLERANCE,1,PF_Precision_HUNDREDTHS,0,false,RollUpFadeId);
  BC_ADD_CHOICE_SLIDER("Transition curve",1,4,2,RollUpCurveId);
  std::memset(&def,0,sizeof(def));PF_END_TOPIC(DirectionalFadeEndId);
  BC_ADD_CHOICE_SLIDER("Scroll direction",1,4,1,RollUpDirectionId);
