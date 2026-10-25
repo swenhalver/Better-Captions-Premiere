@@ -788,8 +788,11 @@ double rollUpAlpha(double x,double y,const Frame& frame) {
  // masks only its selected edge, leaving perpendicular overflow intact.
  if(settings.boundaryMode==1){
   const auto& top=settings.edges[0];const auto& bottom=settings.edges[1];const auto& left=settings.edges[2];const auto& right=settings.edges[3];
-  const double x0=box.x+left.inset*box.width,x1=box.x+(1-right.inset)*box.width;
-  const double y0=box.y+top.inset*box.height,y1=box.y+(1-bottom.inset)*box.height;
+  // A zero inset follows the complete paint (negative margins, effects), like
+  // the directional default edge; positive insets stay exact crops.
+  auto outset=[&](std::size_t edge){return settings.edges[edge].inset==0?frame.directionalPaintOutset[edge]:0.0;};
+  const double x0=box.x+left.inset*box.width-outset(2),x1=box.x+(1-right.inset)*box.width+outset(3);
+  const double y0=box.y+top.inset*box.height-outset(0),y1=box.y+(1-bottom.inset)*box.height+outset(1);
   if(x0>=x1||y0>=y1||x<x0||x>=x1||y<y0||y>=y1)return 0;
   const std::array<double,4> distances{{y-y0,y1-y,x-x0,x1-x}};
   double alpha=1;

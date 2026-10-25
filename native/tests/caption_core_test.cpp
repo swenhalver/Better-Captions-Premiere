@@ -824,16 +824,17 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
   assert(rollUpAlpha(x,y,on)==1);
   auto explicitBoundary=on;explicitBoundary.rollUp.boundaryPosition=.1;assert(rollUpAlpha(x,y,explicitBoundary)==0);
   auto independentBoundary=on;independentBoundary.rollUp.boundaryMode=1;for(auto& edge:independentBoundary.rollUp.edges)edge.fadeEnabled=false;
-  assert(rollUpAlpha(x,y,independentBoundary)==0);
+  assert(rollUpAlpha(x,y,independentBoundary)==1);
+  auto insetIndependent=independentBoundary;for(auto& edge:insetIndependent.rollUp.edges)edge.inset=.1;assert(rollUpAlpha(x,y,insetIndependent)==0);
   for(double inset:{.000001,.1,.5,.9})for(double thickness:{0.,.2,.7}){
    auto explicitMask=on;explicitMask.rollUp.boundaryPosition=inset;explicitMask.rollUp.transitionThickness=thickness;
    auto legacyMask=explicitMask;legacyMask.directionalPaintOutset={};
    for(double horizontal:{-10.,0.,.2,.5,1.,1.1})for(double vertical:{-10.,0.,.2,.5,1.,1.1})
     assert(rollUpAlpha(v.x+horizontal*v.width,v.y+vertical*v.height,explicitMask)==rollUpAlpha(v.x+horizontal*v.width,v.y+vertical*v.height,legacyMask));
   }
-  auto unexpandedIndependent=independentBoundary;unexpandedIndependent.directionalPaintOutset={};
+  auto unexpandedIndependent=insetIndependent;unexpandedIndependent.directionalPaintOutset={};
   for(double horizontal:{-.1,0.,.2,.5,1.,1.1})for(double vertical:{-.1,0.,.2,.5,1.,1.1})
-   assert(rollUpAlpha(v.x+horizontal*v.width,v.y+vertical*v.height,independentBoundary)==rollUpAlpha(v.x+horizontal*v.width,v.y+vertical*v.height,unexpandedIndependent));
+   assert(rollUpAlpha(v.x+horizontal*v.width,v.y+vertical*v.height,insetIndependent)==rollUpAlpha(v.x+horizontal*v.width,v.y+vertical*v.height,unexpandedIndependent));
   auto backgroundOff=overhangDoc;for(auto* style:{&backgroundOff.style.upcoming,&backgroundOff.style.current,&backgroundOff.style.spoken})style->bubble=false;
   assert(layoutFrame(backgroundOff,.5,overhangBox,measure,56,.6,{},1,overhangSettings).directionalPaintOutset==on.directionalPaintOutset);
   // Feather remains the original viewport fraction, translated outward only.

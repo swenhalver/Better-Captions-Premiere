@@ -54,7 +54,7 @@ int main(){
  for(int direction:{1,2,3,4}){RollUpSettings settings;settings.enabled=true;settings.visibleLines=1;settings.scrollDuration=0;settings.boundaryEnabled=false;settings.direction=direction;
   const auto frame=layoutFrame(outside,.5,placement,measureGlyphs,56,.6,{},1,settings);
   const auto pixels=macos::rasterize(outside,.5,placement,640,400,56,.6,1,settings);outsidePaint(pixels,frame.viewport);
-  auto independent=settings;independent.boundaryMode=1;for(auto& edge:independent.edges)edge.fadeEnabled=false;
+  auto independent=settings;independent.boundaryMode=1;for(auto& edge:independent.edges){edge.fadeEnabled=false;edge.inset=.01;}
   const auto maskedFrame=layoutFrame(outside,.5,placement,measureGlyphs,56,.6,{},1,independent);
   const auto masked=macos::rasterize(outside,.5,placement,640,400,56,.6,1,independent);
   check(count(masked)<count(pixels),"Explicit four-edge mask did not crop overflowing paint");
@@ -84,8 +84,10 @@ int main(){
   const auto masked=macos::rasterize(roundedEdge,.375,roundedBox,720,1280,28,.6,2,settings),full=macos::rasterize(roundedEdge,.375,roundedBox,720,1280,28,.6,2,unmasked);
   check(count(full)>100&&masked.pixels==full.pixels,"Default directional boundary cropped a settled rounded background with negative margins");
   auto explicitCrop=settings;explicitCrop.boundaryMode=1;for(auto& edge:explicitCrop.edges)edge.fadeEnabled=false;
+  check(macos::rasterize(roundedEdge,.375,roundedBox,720,1280,28,.6,2,explicitCrop).pixels==full.pixels,"Zero-inset four-edge crop cut a settled rounded background with negative margins");
+  for(auto& edge:explicitCrop.edges)edge.inset=.001;
   const auto cropped=macos::rasterize(roundedEdge,.375,roundedBox,720,1280,28,.6,2,explicitCrop);
-  check(count(cropped)<count(full),"Explicit four-edge crop no longer masks authored negative-margin overflow");
+  check(count(cropped)<count(full),"Positive four-edge crop no longer masks authored negative-margin overflow");
  }
  check(encode(roundedEdge)==roundedBytes,"Directional paint allowance changed saved margins or word styling");
  auto shortBox=macos::rasterize(d,.5,{20,10,150,10},640,240);check(shortBox.overflow,"Independent height overflow missing");
