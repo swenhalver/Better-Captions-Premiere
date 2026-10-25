@@ -5,9 +5,12 @@
 **Small UI text/cosmetic changes:** Swen's explicit instruction on 2026-10-25 is
 "don't test after small changes like this, just reload the plugin." For changes
 such as removing a placeholder label, build the client, sync the installed
-plugin assets and reload the panel. Skip test suites and live acceptance runs;
-preserve the running Premiere session. This exception takes precedence over
-the full release workflow below for those small changes.
+plugin assets and restart Premiere Pro. Swen clarified that "reload" means
+restart Premiere Pro, not just its panel. Use the safe save/quit and relaunch
+procedure below, preserving the project and layout. Skip test suites and live
+acceptance runs. If Swen has already restarted Premiere, do not restart it
+again. This exception takes precedence over the full release workflow below
+for those small changes.
 
 After each change to the plugin, reinstall it into Premiere without being asked. The user tests in Premiere right away, so the installed panel must match the latest code.
 
