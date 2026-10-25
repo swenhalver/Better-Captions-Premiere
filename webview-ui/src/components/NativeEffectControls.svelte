@@ -35,7 +35,7 @@
   {#each rows as parameter}
     {@const descriptor=controls?.[parameter]}
     {#if parameter!=='rollUpCurrentLine'||descriptor}
-    <div class="native-geometry__row" title={parameter==='rollUpCurrentLine' ? "Which visible line holds the line being spoken, counted from where new lines appear. 1 keeps today's behaviour; higher numbers show upcoming lines ahead of it." : undefined}>
+    <div class="native-geometry__row" title={parameter==='rollUpCurrentLine' ? "Which visible line holds the line being spoken, counted from the top. 1 is the top line; when lines scroll up, higher numbers show upcoming lines below it." : undefined}>
       <span class="native-geometry__animation" class:native-geometry__animation--enabled={descriptor?.animated} role="img" aria-label={descriptor?.animated ? `${labels[parameter]} keyframing enabled in Effect Controls` : `${labels[parameter]} keyframing off`} title={descriptor?.animated ? 'Keyframing enabled in Effect Controls. Edits change the value at the playhead.' : 'Keyframing is off. Enable it in Effect Controls.'}>
         <LucideIcon name="timer"/>
       </span>

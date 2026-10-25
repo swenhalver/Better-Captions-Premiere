@@ -596,8 +596,11 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
   const auto blockRows=horizontal?lines:1;
   const auto blocks=(rows.size()+blockRows-1)/blockRows;
   const double distance=horizontal?box.width:rowHeight;
-  // Horizontal scrolling pages ignore the current line position.
-  const auto lead=std::min(std::max<std::size_t>(settings.currentLine,1),lines);
+  // Current line position counts visible lines from the top, like line
+  // position styles (Line 1 is the top slot). lead counts that same slot from
+  // the edge where new lines appear. Horizontal pages ignore it.
+  const auto currentSlot=std::min(std::max<std::size_t>(settings.currentLine,1),lines);
+  const auto lead=settings.direction==1?lines+1-currentSlot:currentSlot;
   const double initialOffset=horizontal?0:-double(lines-lead)*rowHeight;double steps=0;
   // Virtual leading blanks let the first line enter at the new-line edge.
   // Glide through all lead-1 blank slots during the first scrollDuration

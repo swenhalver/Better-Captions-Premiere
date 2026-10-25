@@ -450,7 +450,7 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  }
  // Empty rows reserve slots without hiding upcoming speech beyond them.
  auto longSilence=silence;longSilence.containers[0].words.push_back({"Later.",4,5,true});
- for(int direction:{1,2,3,4}){RollUpSettings settings;settings.enabled=true;settings.visibleLines=8;settings.currentLine=8;settings.direction=direction;const auto frame=layoutFrame(longSilence,2,{0,0,400,400},measure,56,.6,{},1,settings);sameRenderedFrame(frame,ordinaryPauseFrame(longSilence,2,{0,0,400,400},settings));assert(std::any_of(frame.words.begin(),frame.words.end(),[](const DrawWord& word){return word.wordIndex==1&&word.state==WordState::Upcoming;}));}
+ for(int direction:{1,2,3,4}){RollUpSettings settings;settings.enabled=true;settings.visibleLines=8;settings.currentLine=direction==1?1:8;settings.direction=direction;const auto frame=layoutFrame(longSilence,2,{0,0,400,400},measure,56,.6,{},1,settings);sameRenderedFrame(frame,ordinaryPauseFrame(longSilence,2,{0,0,400,400},settings));assert(std::any_of(frame.words.begin(),frame.words.end(),[](const DrawWord& word){return word.wordIndex==1&&word.state==WordState::Upcoming;}));}
  assert(encode(silence)==silenceBytes);
  // Silence advances one empty row per complete pause interval, up to the
  // requested Visible lines. It clears existing history without carrier edits.
@@ -926,7 +926,7 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
   assert(centered.words.size()==3);
   for(std::size_t index=0;index<3;++index){const auto& word=centered.words[index];assert(word.wordIndex==index+3);assert(word.state==(index==0?WordState::Spoken:index==1?WordState::Current:WordState::Upcoming));assert(word.baseline==53+(direction==1?1:-1)*(double(index)-1)*10);}
   settings.currentLine=8;const auto clamped=positionedFrame(4.5,settings);settings.currentLine=3;samePositionedFrame(clamped,positionedFrame(4.5,settings));
-  assert(clamped.words.front().wordIndex==4&&clamped.words.back().wordIndex==6);
+  assert(direction==1?clamped.words.front().wordIndex==2&&clamped.words.back().wordIndex==4:clamped.words.front().wordIndex==4&&clamped.words.back().wordIndex==6);
   // Physical capacity clamps even when the requested Visible lines is larger.
   settings.visibleLines=8;settings.currentLine=8;const auto physical=positionedFrame(4.5,settings,25);settings.currentLine=2;samePositionedFrame(physical,positionedFrame(4.5,settings,25));assert(physical.words.size()==2);
   settings.visibleLines=5;settings.currentLine=3;const auto five=positionedFrame(4.5,settings);assert(five.words.size()==5&&five.words[2].wordIndex==4&&five.words[2].baseline==53);
@@ -943,7 +943,7 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
   auto settings=roll;settings.visibleLines=3;settings.direction=direction;settings.waitForLine=wait;
   for(double time:{3.99,4.0,4.01,4.09,4.18,4.5}){
    settings.currentLine=1;const auto edge=positionedFrame(time,settings);settings.currentLine=2;const auto center=positionedFrame(time,settings);bool shared=false;
-   for(const auto& a:edge.words)for(const auto& b:center.words)if(a.wordIndex==b.wordIndex){shared=true;assert(std::abs(b.baseline-a.baseline-(direction==1?-10:10))<1e-9);assert(a.x==b.x&&a.state==b.state&&a.style.opacity==b.style.opacity);}
+   for(const auto& a:edge.words)for(const auto& b:center.words)if(a.wordIndex==b.wordIndex){shared=true;assert(std::abs(b.baseline-a.baseline-10)<1e-9);assert(a.x==b.x&&a.state==b.state&&a.style.opacity==b.style.opacity);}
    assert(shared);
   }
  }
@@ -956,7 +956,7 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  // the blank becomes current it still counts, with history and next intact.
  for(int direction:{1,2})for(int transition:{1,2,3,4}){
   auto gap=positionedRows;gap.containers.front().words={{"Before.",0,1,true},{"After.",4,5,true}};
-  auto settings=roll;settings.visibleLines=3;settings.currentLine=3;settings.blankLineSeconds=3;settings.direction=direction;settings.transition=transition;
+  auto settings=roll;settings.visibleLines=3;settings.currentLine=direction==1?1:3;settings.blankLineSeconds=3;settings.direction=direction;settings.transition=transition;
   const auto current=layoutFrame(gap,.5,{0,0,400,100},measure,56,.6,{},1,settings);
   assert(current.words.size()==2&&current.words[0].state==WordState::Current&&current.words[1].state==WordState::Upcoming);
   assert(std::abs(current.words[1].baseline-current.words[0].baseline)==20);

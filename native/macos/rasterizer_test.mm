@@ -158,7 +158,8 @@ int main(){
   check(count(macos::rasterize(silence,3.5,silenceBox,640,360,56,.6,1,settings))>100,"Scrolling speech failed to resume after a blank row");
  }
  check(encode(silence)==silenceBytes,"Timed silence rows changed saved source words");
- // Leading virtual blanks use the same entry pixels as Current line 1, then
+ // Leading virtual blanks use the same entry pixels as the entry-edge Current
+ // line (the bottom line for Up, Line 1 for Down), then
  // converge to the previous settled slot without changing the speech clock.
  Document opening;opening.containers.push_back({"opening-pixels",false,{{"First.",10,11,true},{"Next.",11,12,true},{"Third.",12,13,true},{"Last.",13,14,true}}});
  for(auto* style:{&opening.style.current,&opening.style.spoken,&opening.style.upcoming}){style->fontFamily="Arial";style->fontSize=20;style->padding=0;style->bubble=false;style->shadowColor.a=0;}
@@ -167,7 +168,7 @@ int main(){
  for(int direction:{1,2})for(int transition:{1,2,3,4})for(bool wait:{false,true}){
   RollUpSettings settings;settings.enabled=true;settings.visibleLines=slots.first;settings.currentLine=slots.second;settings.direction=direction;settings.transition=transition;settings.waitForLine=wait;settings.scrollDuration=.4;settings.boundaryEnabled=false;
   auto renderOpening=[&](double time,const RollUpSettings& s){return macos::rasterize(opening,time,openingBox,240,260,56,.6,1,s);};
-  auto edge=settings;edge.currentLine=1;
+  auto edge=settings;edge.currentLine=direction==1?slots.first:1;
   const auto entry=renderOpening(10,settings);
   check(count(entry)>20&&entry.pixels==renderOpening(10,edge).pixels,"Leading blanks did not start at the normal entry edge");
   const auto moving=renderOpening(10.1,settings);

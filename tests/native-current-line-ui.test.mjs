@@ -42,7 +42,7 @@ test('Current line renders after Visible lines, with integer bounds, reset and i
  const html=view(controls()),field=input(html);
  assert.ok(html.indexOf('Visible lines')<html.indexOf('Current line'));
  assert.ok(field);assert.match(field,/aria-valuemin="1"/);assert.match(field,/aria-valuemax="3"/);assert.match(field,/role="spinbutton"/);assert.match(field,/aria-valuenow="2"/);
- assert.match(html,/Which visible line holds the line being spoken, counted from where new lines appear/);
+ assert.match(html,/Which visible line holds the line being spoken, counted from the top/);
  assert.match(html,/higher numbers show upcoming lines ahead of it/);
  assert.match(html,/aria-label="Reset caption Current line"/);
  assert.doesNotMatch(html,/aria-label="Previous Current line keyframe"/);

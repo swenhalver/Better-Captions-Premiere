@@ -163,7 +163,7 @@ void slotGeometry(){
  const auto down=frameAt(d,4.5,rolling(4,1,2));auto downLines=baselines(down);
  assert(near(downLines[3]-downLines[4],10+M)&&near(downLines[2]-downLines[3],10)&&near(downLines[1]-downLines[2],10+M));
  // Current line position: Line 2 holds the current line, upcoming lines below it.
- const auto led=frameAt(d,3.5,rolling(4,3));auto ledLines=baselines(led);
+ const auto led=frameAt(d,3.5,rolling(4,2));auto ledLines=baselines(led);
  assert(ledLines.count(2)&&ledLines.count(5)&&!ledLines.count(1));
  assert(near(ledLines[3]-ledLines[2],10+M)&&near(ledLines[4]-ledLines[3],10)&&near(ledLines[5]-ledLines[4],10+M));
  // A box too short for every slot shows fewer lines, like plain lines do.
@@ -196,10 +196,10 @@ void scrollInterpolation(){
  }
  assert(blended);
  sameRows(frameAt(d,4.99,r),after);assert(word(frameAt(d,4.99,r),2).style.color.r==1);
- // Entry glide-in with Current line position 3: the first line glides from the
+ // Entry glide-in with Current line position 2: the first line glides from the
  // bottom slot to Line 2's slot, blending through Line 3's style on the way.
  auto glide=d;auto& third=glide.style.positions[2];third.fields=PositionColor;third.value.color={0,0,1,1};
- const auto lead=rolling(4,3);double last=-1e9;
+ const auto lead=rolling(4,2);double last=-1e9;
  for(double time=0;time<=.2;time+=.01){const auto f=frameAt(glide,time,lead);const double y=word(f,0).baseline;assert(last==-1e9||(y<=last+1e-9&&last-y<4));last=y;}
  assert(word(frameAt(glide,.3,lead),0).style.color.g==1);
 }
