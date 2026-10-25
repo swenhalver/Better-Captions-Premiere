@@ -53,7 +53,7 @@ export function validateNativeDocument(input: unknown): NativeDocument {
     let previous = start;
     const result = caption.words.map(item => {
       const word = record(item, ['text', 'start', 'end', 'endOfSentence', 'lineBreakBefore', 'pauseLinesRemoved']); const [a, b] = interval(word);
-      if (typeof word.text !== 'string' || word.text.length > 500 || !word.text.trim() || new TextDecoder().decode(new TextEncoder().encode(word.text)) !== word.text || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(word.text) || (characters += word.text.length) > 2000000) throw new Error('Invalid or oversized native transcript text.');
+      if (typeof word.text !== 'string' || word.text.length > 500 || word.text !== '' && !word.text.trim() || new TextDecoder().decode(new TextEncoder().encode(word.text)) !== word.text || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(word.text) || (characters += word.text.length) > 2000000) throw new Error('Invalid or oversized native transcript text.');
       if (a < start || b > end || a < previous) throw new Error('Native words must be ordered inside their caption.');
       previous = a;
       if (typeof word.endOfSentence !== 'boolean') throw new Error('endOfSentence must be explicit.');

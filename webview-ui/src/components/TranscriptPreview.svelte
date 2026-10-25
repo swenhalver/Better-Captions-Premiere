@@ -6,7 +6,7 @@
   import type { CaptionItem, LineWrap } from "../lib/types";
   import { formatTime, validateCharacterLimit } from "../lib/transcript/parser";
   import { replaceText, retime, validateCaptions } from "../lib/transcript/edit";
-  import { captionWordOffset, changeTranscriptLineBreak, lineSegment, replaceTranscriptLine, replaceTranscriptWords, transcriptLineCaption, transcriptLineLane, transcriptLines, transcriptWords, withTranscriptLines, type TranscriptLine } from "../lib/transcript/lines";
+  import { captionWordOffset, changeTranscriptLineBreak, isBlankLine, lineSegment, replaceTranscriptLine, replaceTranscriptWords, transcriptLineCaption, transcriptLineLane, transcriptLines, transcriptWords, withTranscriptLines, type TranscriptLine } from "../lib/transcript/lines";
   import type { WordEdge } from '../lib/transcript/timing';
   import { applyTypingText, typingAnchor, typingRange, typingText, type TypingAnchor } from '../lib/transcript/typing';
   import { derivePauseLines, removePauseLine, type PauseLine, type PauseLineSettings } from '../lib/native-effect/pause-lines';
@@ -53,10 +53,15 @@
     return typingAt && editingRowKey ? pinTypingRow(rows, editingRowKey, typingAt) : rows;
   });
   let pauseRows = $derived(pauseSettings ? derivePauseLines(captions, pauseSettings) : []);
-  let transcriptRows = $derived.by((): TranscriptRow[] => sentenceRows.flatMap(line => [
-    ...pauseRows.filter(pause => pause.nextWordIndex === line.start).map(pause => ({ kind: 'pause' as const, key: pause.key, pause })),
-    { kind: 'text' as const, key: line.key, line },
-  ]));
+  // The pause slot an open editor types into; its empty row takes that slot's place.
+  let editingPauseSlot = $state(0);
+  let transcriptRows = $derived.by((): TranscriptRow[] => sentenceRows.flatMap((line, index) => {
+    if (line.start === line.end) return [];
+    const rows: TranscriptRow[] = pauseRows.filter(pause => pause.nextWordIndex === line.start).map(pause => ({ kind: 'pause' as const, key: pause.key, pause }));
+    const typed = sentenceRows[index - 1];
+    if (typed && typed.start === typed.end) { const at = Math.min(editingPauseSlot, rows.length); rows.splice(at, at < rows.length ? 1 : 0, { kind: 'text', key: typed.key, line: typed }); }
+    return [...rows, { kind: 'text' as const, key: line.key, line }];
+  }));
   let selectedPause = $derived(pauseRows.find(pause => pause.key === selectedPauseKey));
   let filteredRows = $derived(transcriptRows.filter((row, index) => {
     const text = row.kind === 'pause' ? `Pause ${formatTime(row.pause.startTime)} ${formatTime(row.pause.endTime)}` : rowCaption(row.line).text;
@@ -66,6 +71,11 @@
     const range = typingRange(captions, anchor);
     if (!range) return rows;
     const start = range.transcriptStart, end = start + range.words.length, result: SentenceRow[] = [];
+    if (start === end) {
+      // Typing into a pause row: an empty row before the next line, until text arrives.
+      const at = rows.findIndex(row => row.start >= start), typed = { key, caption: range.owner, start, end, window: anchor.window };
+      return at < 0 ? [...rows, typed] : [...rows.slice(0, at), typed, ...rows.slice(at)];
+    }
     let pinned = false;
     for (const row of rows) {
       if (row.end <= start || row.start >= end) { result.push(row); continue; }
@@ -78,7 +88,7 @@
   let selectedGlobalWord = $derived(selectedContainer ? captionWordOffset(captions, selectedContainer.id) + selectedWord : 0);
   let selectedRow = $derived(sentenceRows.find(row => row.key === selectedRowKey && (row.caption.id === selectedContainer?.id || row.start <= selectedGlobalWord && row.end > selectedGlobalWord)) ?? sentenceRows.find(row => row.start <= selectedGlobalWord && row.end > selectedGlobalWord) ?? sentenceRows.find(row => row.caption.id === selectedContainer?.id));
   // One neighbour on either side, including across a storage boundary.
-  let selectedLane = $derived(!selectedPause && selectedRow ? transcriptLineLane(captions, selectedRow) : null);
+  let selectedLane = $derived(!selectedPause && selectedRow && selectedRow.end > selectedRow.start ? transcriptLineLane(captions, selectedRow) : null);
   let selected = $derived(selectedLane?.caption);
   let selectedWordOffset = $derived(selectedLane && selectedRow ? selectedLane.start - captionWordOffset(captions, selectedContainer!.id) : 0);
   let query = $state("");
@@ -241,13 +251,12 @@
       const current = sentenceRows.find(item => item.key === row.key);
       if (!current || textSource(current) !== editingSource) throw new Error('This line changed while you were editing. Cancel and select it again.');
       const source = rowCaption(current), updated = replaceText(source, draftText);
-      if (updated.text !== source.text) {
+      if (updated.words.length !== source.words.length || updated.text !== source.text) {
         const next = replaceTranscriptLine(captions, current, updated);
-        if (!commit(next, updated.timingEstimated ? 'Text saved. Review the estimated word timings.' : 'Text saved with existing word timings.')) { editingError = error; return false; }
+        const message = !updated.text ? 'Line text deleted. The blank line keeps its time.' : updated.timingEstimated ? 'Text saved. Review the estimated word timings.' : 'Text saved with existing word timings.';
+        if (!commit(next, message, 'Edit transcript')) { editingError = error; return false; }
       }
-      editingRowKey = null;
-      editingSource = '';
-      editingError = '';
+      closeTextEdit();
       return true;
     } catch (problem) { editingError = problem instanceof Error ? problem.message : String(problem); return false; }
   }
@@ -415,7 +424,7 @@
     try { onMaxCharsChange(validateCharacterLimit(value)); error = ''; }
     catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
   }
-  function choose(row: SentenceRow) { selectedPauseKey = null; selectedRowKey = row.key; onSelect(row.caption.id); onSelectWord(row.start - captionWordOffset(captions, row.caption.id)); onSeek(row.segment?.startTime ?? row.caption.startTime); error = ""; notice = ""; }
+  function choose(row: SentenceRow) { selectedPauseKey = null; selectedRowKey = row.key; onSelect(row.caption.id); onSelectWord(Math.min(row.start - captionWordOffset(captions, row.caption.id), row.caption.words.length - 1)); onSeek(row.segment?.startTime ?? row.window?.startTime ?? row.caption.startTime); error = ""; notice = ""; }
   async function finishPauseEditing(): Promise<boolean> {
     const timingRow = sentenceRows.find(row => row.key === timingRowKey);
     if (timingRow && !saveInlineTiming(timingRow)) return false;
@@ -442,6 +451,28 @@
       onSeek(current.startTime);
       error = ''; notice = '';
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
+  }
+  // Typing into a pause row adds a line of text in that slot's time; the
+  // other pause rows stay around it.
+  async function beginPauseEdit(pause: PauseLine) {
+    if (disabled) return;
+    const nextWordTime = transcriptWords(captions)[pause.nextWordIndex]?.startTime;
+    try {
+      if (!await finishPauseEditing()) return;
+      const nextWordIndex = transcriptWords(captions).findIndex(word => word.startTime === nextWordTime);
+      const current = pauseRows.find(row => row.nextWordIndex === nextWordIndex && row.index === pause.index);
+      const next = sentenceRows.find(row => row.start === nextWordIndex);
+      if (!current || !next) throw new Error('This pause changed. Select it again.');
+      const window = { startTime: current.startTime, endTime: current.endTime };
+      const row: SentenceRow = { key: `typing-pause:${nextWordIndex}:${current.index}`, caption: next.caption, start: nextWordIndex, end: nextWordIndex, window };
+      editingPauseSlot = current.index;
+      choose(row);
+      typingAt = typingAnchor(captions, next.caption.id, nextWordIndex, nextWordIndex, true, window);
+      draftText = ''; editingCaret = 0; editingError = '';
+      editingSource = textSource(row);
+      editingRowKey = row.key;
+      typing?.open(typingAt, captions, '', 0, showTypingDraft);
+    } catch (problem) { typingAt = null; error = problem instanceof Error ? problem.message : String(problem); }
   }
   async function deletePause(pause: PauseLine) {
     if (disabled) return;
@@ -479,11 +510,15 @@
               {@const pause = entry.pause}
               <div class="transcript-editor__cue transcript-editor__cue--pause" class:transcript-editor__cue--selected={selectedPause?.key === pause.key} class:transcript-editor__cue--playing={currentTime >= pause.startTime && currentTime < pause.endTime} data-row-key={pause.key}>
                 <button class="transcript-editor__cue-select" aria-label="Select pause line {number}" aria-pressed={selectedPause?.key === pause.key} onclick={() => choosePause(pause)}><span class="transcript-editor__cue-number">{String(number).padStart(2,"0")}</span></button>
-                <button class="transcript-editor__pause-select" aria-label="Seek to pause line {number}" onclick={() => choosePause(pause)}><span class="transcript-editor__cue-time">{formatTime(pause.startTime)}<span aria-hidden="true">—</span>{formatTime(pause.endTime)}</span><span class="transcript-editor__pause-label">Pause</span></button>
+                <div class="transcript-editor__cue-body">
+                  <button class="transcript-editor__pause-select" aria-label="Seek to pause line {number}" onclick={() => choosePause(pause)}><span class="transcript-editor__cue-time">{formatTime(pause.startTime)}<span aria-hidden="true">—</span>{formatTime(pause.endTime)}</span></button>
+                  <button class="transcript-editor__cue-text" aria-label="Add text to pause line {number}" title="Type text into this pause" disabled={disabled} onclick={() => beginPauseEdit(pause)}>Pause</button>
+                </div>
                 <button type="button" class="transcript-editor__pause-delete" aria-label="Delete pause line {number}" title="Delete pause line" disabled={disabled} onclick={() => deletePause(pause)}>Delete</button>
               </div>
             {:else}
             {@const row = entry.line}
+            {@const blank = isBlankLine(rowCaption(row).words)}
             <div class="transcript-editor__cue" class:transcript-editor__cue--selected={!selectedPause && selectedRow?.key === row.key} class:transcript-editor__cue--playing={row.segment ? currentTime >= row.segment.startTime && currentTime < row.segment.endTime : activeId === row.caption.id} data-caption-id={row.caption.id} data-row-key={row.key}>
               <button class="transcript-editor__cue-select" aria-label="Select line {number}" aria-pressed={!selectedPause && selectedRow?.key === row.key} onclick={() => choose(row)}><span class="transcript-editor__cue-number">{String(number).padStart(2,"0")}</span></button>
               <div class="transcript-editor__cue-body">
@@ -501,7 +536,7 @@
                   <textarea class="transcript-editor__cue-input" aria-label="Edit line {number} text" aria-invalid={!!editingError} aria-describedby={editingError ? 'caption-inline-error' : undefined} rows="1" bind:value={draftText} bind:this={textEditor} spellcheck="true" use:focusTextEditor onselect={trackTextCaret} onclick={trackTextCaret} onkeyup={(event) => { if (event.key === 'Meta' || event.key === 'Control') typing?.hint(); trackTextCaret(event); }} oninput={(event) => { editingError = ''; trackTextCaret(event); resizeTextEditor(event.currentTarget); typing?.input(event.currentTarget.value, event.currentTarget.selectionStart ?? 0); }} onkeydown={(event) => textKeydown(event,row)} onfocus={() => textEditorFocused = true} onblur={() => { textEditorFocused = false; saveInlineText(row); }}></textarea>
                   {#if editingError}<p class="transcript-editor__text-error" id="caption-inline-error" role="alert">{editingError}</p>{:else if draftText !== rowCaption(row).text}<span class="transcript-editor__text-pending" role="status">Unsaved</span>{/if}
                 {:else}
-                  <button class="transcript-editor__cue-text" aria-label="Edit line {number} text" onclick={(event) => beginTextEdit(row,event)} disabled={disabled}>{#if row.segment}{row.segment.text}{:else if row.caption.renderSegments}{#each row.caption.renderSegments as group (group.id)}<span class="transcript-editor__cue-phrase">{group.text}</span>{/each}{:else}{row.caption.text}{/if}</button>
+                  <button class="transcript-editor__cue-text" aria-label="Edit line {number} text" onclick={(event) => beginTextEdit(row,event)} disabled={disabled}>{#if blank}<span class="transcript-editor__blank-label">Blank line</span>{:else if row.segment}{row.segment.text}{:else if row.caption.renderSegments}{#each row.caption.renderSegments as group (group.id)}<span class="transcript-editor__cue-phrase">{group.text}</span>{/each}{:else}{row.caption.text}{/if}</button>
                 {/if}
               </div>
             </div>
@@ -556,8 +591,8 @@
   .transcript-editor__cue-number { color: var(--color-panel-secondary); font-variant-numeric: tabular-nums; font-size: var(--caption-type-xs); padding-block-start: .1rem; }
   .transcript-editor__cue-select { flex-shrink: 0; background: transparent; border: 0; padding: 0; min-inline-size: 1.5rem; min-block-size: 2rem; text-align: start; cursor: pointer; }
   .transcript-editor__cue--pause { color: var(--color-panel-secondary); }
-  .transcript-editor__pause-select { flex: 1; min-inline-size: 0; background: transparent; border: 0; padding: 0; color: inherit; text-align: start; cursor: pointer; }
-  .transcript-editor__pause-label { font-size: var(--caption-type-m); line-height: 1.5; }
+  .transcript-editor__pause-select { background: transparent; border: 0; padding: 0; color: inherit; text-align: start; cursor: pointer; }
+  .transcript-editor__blank-label { color: var(--color-panel-secondary); }
   .transcript-editor__pause-delete { align-self: center; padding: var(--caption-space-xs) var(--caption-space-s); background: transparent; color: var(--color-panel-secondary); border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); font-size: var(--caption-type-xs); cursor: pointer; &:hover { color: var(--color-panel-text); background: var(--color-surface-raised); } &:disabled { opacity: .5; cursor: default; } }
   .transcript-editor__pause-description { margin: 0; font-size: var(--caption-type-s); color: var(--color-panel-secondary); }
   .transcript-editor__cue-body { flex: 1; min-inline-size: 0; }

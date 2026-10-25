@@ -6,14 +6,19 @@ import { captionWordOffset, replaceTranscriptLine, transcriptWords } from './lin
  * before the last `suffix` words. `transcript` anchors the complete stream;
  * otherwise offsets are local to captionId. Words outside stay fixed through
  * every typing step, undo and redo. */
-export interface TypingAnchor { captionId: string; start: number; suffix: number; before: string; after: string; transcript?: boolean; }
-const wordsKey = (words: CaptionWord[]) => JSON.stringify(words.map(word => [word.text, word.startTime, word.endTime, word.lineBreakBefore]));
+export interface TypingAnchor { captionId: string; start: number; suffix: number; before: string; after: string; transcript?: boolean;
+  /** An empty range (a pause row being typed into) puts its words into this time window. */
+  window?: { startTime: number; endTime: number }; }
+// The first following word's boundary belongs to the edited range: text typed
+// into a pause row adds a manual break before the next line.
+const wordsKey = (words: CaptionWord[], following = false) => JSON.stringify(words.map((word, index) => [word.text, word.startTime, word.endTime, following && !index ? null : word.lineBreakBefore]));
 
-export function typingAnchor(captions: CaptionItem[], captionId: string, start: number, end: number, transcript = false): TypingAnchor {
+export function typingAnchor(captions: CaptionItem[], captionId: string, start: number, end: number, transcript = false, window?: { startTime: number; endTime: number }): TypingAnchor {
   const caption = captions.find(item => item.id === captionId);
   const words = transcript ? transcriptWords(captions) : caption?.words ?? [];
-  if (!caption || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > words.length) throw new Error('Select the line again to edit it.');
-  return { captionId, start, suffix: words.length - end, before: wordsKey(words.slice(0, start)), after: wordsKey(words.slice(end)), ...(transcript ? { transcript: true } : {}) };
+  const empty = end === start && !!window && Number.isFinite(window.startTime) && window.endTime > window.startTime;
+  if (!caption || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start && !empty || end > words.length) throw new Error('Select the line again to edit it.');
+  return { captionId, start, suffix: words.length - end, before: wordsKey(words.slice(0, start)), after: wordsKey(words.slice(end), true), ...(transcript ? { transcript: true } : {}), ...(empty ? { window: { ...window! } } : {}) };
 }
 
 /** The anchored words in these captions, or null when anything outside them changed. */
@@ -22,7 +27,7 @@ export function typingRange(captions: CaptionItem[], anchor: TypingAnchor) {
   if (!caption) return null;
   const all = anchor.transcript ? transcriptWords(captions) : caption.words;
   const end = all.length - anchor.suffix;
-  if (end <= anchor.start || wordsKey(all.slice(0, anchor.start)) !== anchor.before || wordsKey(all.slice(end)) !== anchor.after) return null;
+  if (end < anchor.start || end === anchor.start && !anchor.window || wordsKey(all.slice(0, anchor.start)) !== anchor.before || wordsKey(all.slice(end), true) !== anchor.after) return null;
   const words = all.slice(anchor.start, end);
   return { caption, owner: caption, start: anchor.start, end, words, text: words.map(word => word.text).join(' '),
     transcriptStart: anchor.transcript ? anchor.start : captionWordOffset(captions, caption.id) + anchor.start };
@@ -38,8 +43,10 @@ export function applyTypingText(captions: CaptionItem[], anchor: TypingAnchor, d
   if (!range) throw new Error('This line changed while you were editing. Cancel and select it again.');
   const { caption, words } = range;
   const source: CaptionItem = { ...caption, words, text: range.text,
-    startTime: words[0].startTime, endTime: Math.max(...words.map(word => word.endTime)) };
+    ...(words.length ? { startTime: words[0].startTime, endTime: Math.max(...words.map(word => word.endTime)) } : anchor.window) };
   const updated = replaceText(source, draft);
+  // An empty draft in a pause row leaves the pause as it is.
+  if (!updated.words.length) return JSON.parse(JSON.stringify(captions)) as CaptionItem[];
   const result = replaceTranscriptLine(captions, { key: 'typing', caption, start: range.transcriptStart, end: range.transcriptStart + words.length }, updated);
   validateCaptions(result);
   return result;
@@ -81,7 +88,8 @@ export function createTypingController(options: TypingControllerOptions) {
     cancel();
     if (!state) return false;
     const text = typingText(state.draft);
-    if (!text || text === state.pushed || !options.push(state.draft)) return false;
+    // An empty draft is a step too: it leaves the line blank.
+    if (text === state.pushed || !options.push(state.draft)) return false;
     state.pushed = text;
     return true;
   }

@@ -2322,7 +2322,8 @@ var BetterCaptionsHost = (function () {
             if (!words || (count += words) > 50000) throw new Error('Invalid caption extension word count.');
             for (var w = 0; w < words; w++) {
                 var wordStart = offset, size = u();
-                if (!size || size > 4096) throw new Error('Invalid caption extension text size.');
+                // Empty text is an authored blank line.
+                if (size > 4096) throw new Error('Invalid caption extension text size.');
                 skip(size + 16); if (u() > 1) throw new Error('Invalid caption extension sentence flag.');
                 wordParts.push(text.substring(wordStart, offset));
                 if (version >= 8) {

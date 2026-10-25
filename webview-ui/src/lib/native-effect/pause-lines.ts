@@ -1,5 +1,5 @@
 import type { CaptionItem } from '../types.ts';
-import { transcriptLines, transcriptWords, withTranscriptLines } from '../transcript/lines.ts';
+import { isBlankLine, transcriptLines, transcriptWords, withTranscriptLines } from '../transcript/lines.ts';
 
 export interface PauseLineSettings {
   visibleLines: number;
@@ -26,11 +26,12 @@ export function derivePauseLines(captions: CaptionItem[], settings: PauseLineSet
     throw new Error('Invalid pause line settings.');
   }
   const words = transcriptWords(captions);
-  const lines = transcriptLines(captions).map(line => ({ start: line.start,
+  const lines = transcriptLines(captions).map(line => ({ start: line.start, blank: isBlankLine(words.slice(line.start, line.end)),
     startTime: words[line.start].startTime,
     endTime: Math.max(...words.slice(line.start, line.end).map(word => word.endTime)) }));
   if (!lines.length) return [];
-  const spoken = lines.filter(line => line.endTime > line.startTime);
+  // Blank lines are silence, not speech: they do not set the pace.
+  const spoken = lines.filter(line => line.endTime > line.startTime && !line.blank);
   const cadence = settings.blankLineSeconds > 0 ? settings.blankLineSeconds :
     spoken.length ? spoken.reduce((total, line) => total + (line.endTime - line.startTime), 0) / spoken.length : .6;
   const result: PauseLine[] = [];

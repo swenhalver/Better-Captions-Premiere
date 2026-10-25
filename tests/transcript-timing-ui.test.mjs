@@ -135,7 +135,7 @@ function transcriptController(captions = [cue()], fps = 24, options = {}) {
     export function setCaptions(value) { captions = value; }
     export function setSelectedId(value) { selectedId = value; }
     export function setDraft(value) { draftText = value; }
-    export { choosePause, deletePause };
+    export { choosePause, deletePause, beginPauseEdit };
     export function setQuery(value) { query = value; }
     export function setPauseSettings(value) { pauseSettings = value; }
     export function inspect() { return { rows: sentenceRows, allRows: transcriptRows, filteredRows, pauses: pauseRows, selectedPause, selectedLane, sentenceCount, captions, editingRowKey, editingError, editingCaret, caretSplitIndex, timingRowKey, timingError, draftStart, draftEnd, selectedWordOffset, selectedLine: selectedRow, error, draftText }; }
@@ -315,16 +315,26 @@ test('inline text commits once, preserves timed native links', () => {
   assert.equal(h.changes[0][0].clipNodeId, original.clipNodeId); assert.deepEqual(h.changes[0][0].position, original.position);
 });
 
-test('inline text Escape cancels, blank drafts cannot save, and stale reads cannot overwrite newer timing', () => {
+test('inline text Escape cancels, a blank draft leaves a timed blank line, and stale reads cannot overwrite newer timing', () => {
   const h = transcriptController(), row = h.inspect().rows[0];
   h.beginTextEdit(row); h.setDraft('unsaved words'); h.textKeydown(keyEvent('Escape'), row);
   assert.equal(h.changes.length, 0); assert.equal(h.inspect().editingRowKey, null);
   h.beginTextEdit(row); h.setDraft('   ');
-  assert.equal(h.saveInlineText(row), false); assert.equal(h.changes.length, 0);
-  assert.match(h.inspect().editingError, /cannot be empty/); assert.equal(h.inspect().editingRowKey, row.key);
-  h.cancelTextEdit(); h.beginTextEdit(row); h.setDraft('new words here');
-  const newer = clone(row.caption); newer.words[0].endTime -= 1 / 24; h.setCaptions([newer]);
-  assert.equal(h.saveInlineText(row), false); assert.equal(h.changes.length, 0);
+  assert.equal(h.saveInlineText(row), true); assert.equal(h.inspect().editingRowKey, null);
+  assert.deepEqual(h.changes[0][0].words.map(word => [word.text, word.startTime, word.endTime]), [['', 0, 90 / 24]]);
+  assert.equal(h.labels[0], 'Edit transcript');
+  assert.match(render(TranscriptPreview, { props: transcriptProps(h.changes[0]) }).body, /transcript-editor__blank-label[^>]*>Blank line</);
+  // The blank row stays addressable and takes new text in the same time.
+  const blank = h.inspect().rows[0];
+  h.beginTextEdit(blank); assert.equal(h.inspect().draftText, ''); h.setDraft('back again');
+  assert.equal(h.saveInlineText(blank), true);
+  const retyped = h.changes[1][0].words;
+  assert.deepEqual(retyped.map(word => word.text), ['back', 'again']);
+  assert.equal(retyped[0].startTime, 0); assert.equal(retyped.at(-1).endTime, 90 / 24);
+  const current = h.inspect().rows[0];
+  h.beginTextEdit(current); h.setDraft('new words here');
+  const newer = clone(h.inspect().captions[0]); delete newer.renderSegments; newer.words[0].endTime -= 1 / 24; h.setCaptions([newer]);
+  assert.equal(h.saveInlineText(current), false); assert.equal(h.changes.length, 2);
   assert.match(h.inspect().editingError, /changed while you were editing/);
 });
 
@@ -614,7 +624,8 @@ test('pending inline drafts keep native reconnect paused until saved or cancelle
   h.beginTextEdit(row);
   h.runEffect(0);
   assert.equal(states.at(-1),true);
-  h.setDraft('');
+  h.setDraft('other words');
+  const newer = clone(row.caption); newer.words[0].endTime -= 1 / 24; h.setCaptions([newer]);
   assert.equal(h.saveInlineText(row),false);
   h.runEffect(0);
   assert.equal(states.at(-1),true,'invalid blur keeps reconnect paused');
@@ -816,9 +827,9 @@ test('a native line editor hands typing to Premiere history steps and follows Un
   // Premiere Undo restored an earlier step: the open draft and caret follow it.
   show('four five', 4);
   assert.equal(h.inspect().draftText, 'four five'); assert.equal(h.inspect().editingCaret, 4);
-  // A blank draft cannot be saved and keeps its steps.
+  // A blank draft is valid typing: it would leave the line blank.
   h.setDraft('   ');
-  assert.equal(h.saveInlineText(h.inspect().rows[1]), false); assert.match(h.inspect().editingError, /cannot be empty/);
+  h.textKeydown(keyEvent('Meta'), h.inspect().rows[1]); assert.equal(h.inspect().editingError, '');
   assert.equal(calls.filter(call => call[0] === 'end').length, 0);
   // Leaving merges the steps; the component never commits the text itself.
   h.setDraft('four five six seven');
@@ -920,13 +931,14 @@ function pauseFixture() {
   return [first, next];
 }
 
-test('pause rows share transcript numbering, show muted noneditable labels and stay absent without native settings', () => {
+test('pause rows share transcript numbering, show muted labels that take typed text, and stay absent without native settings', () => {
   const captions = pauseFixture(), props = { ...transcriptProps(captions), pauseSettings };
   const html = render(TranscriptPreview, { props }).body;
   assert.match(html, /50 characters · 5 lines/);
   for (const number of [2,3,4]) {
     assert.match(html, new RegExp(`aria-label="Select pause line ${number}"`));
     assert.match(html, new RegExp(`aria-label="Delete pause line ${number}"`));
+    assert.match(html, new RegExp(`aria-label="Add text to pause line ${number}"[^>]*>Pause<`));
     assert.doesNotMatch(html, new RegExp(`aria-label="Edit line ${number} (?:text|start time|end time)"`));
   }
   assert.match(html, /aria-label="Edit line 5 text"/);
@@ -1001,6 +1013,56 @@ test('deleting a pause waits for native typing to finish before publishing its i
   finish(); await deletion;
   assert.equal(h.changes.length, 1); assert.deepEqual(h.labels, ['Delete pause line']);
   assert.equal(h.inspect().editingRowKey, null);
+});
+
+test('typing into a pause row adds a line in that slot; the other pause rows stay and Escape changes nothing', async () => {
+  const original = pauseFixture(), h = transcriptController(original, 24, { pauseSettings });
+  const pause = h.inspect().pauses[1];
+  await h.beginPauseEdit(pause);
+  const key = h.inspect().editingRowKey;
+  assert.match(key, /^typing-pause:3:1$/); assert.equal(h.inspect().draftText, '');
+  assert.deepEqual(clone(h.inspect().allRows.map(row => row.kind === 'pause' ? 'pause' : row.key === key ? 'typing' : 'text')), ['text', 'pause', 'typing', 'pause', 'text']);
+  assert.deepEqual(h.seeks.at(-1), pause.startTime);
+  h.textKeydown(keyEvent('Escape'), h.inspect().rows.find(row => row.key === key));
+  assert.equal(h.inspect().editingRowKey, null); assert.equal(h.changes.length, 0); assert.equal(h.inspect().pauses.length, 3);
+  await h.beginPauseEdit(h.inspect().pauses[1]);
+  // Leaving an empty pause editor changes nothing either.
+  assert.equal(h.saveInlineText(h.inspect().rows.find(row => row.key === h.inspect().editingRowKey)), true); assert.equal(h.changes.length, 0);
+  await h.beginPauseEdit(h.inspect().pauses[1]);
+  h.setDraft('A new thought');
+  assert.equal(h.saveInlineText(h.inspect().rows.find(row => row.key === h.inspect().editingRowKey)), true);
+  assert.equal(h.changes.length, 1); assert.deepEqual(h.labels, ['Edit transcript']);
+  const typed = lines.transcriptWords(h.changes[0]);
+  assert.deepEqual(typed.map(word => word.text), ['one', 'two', 'three', 'A', 'new', 'thought', 'one', 'two', 'three']);
+  assert.equal(typed[3].startTime, 4); assert.equal(typed[5].endTime, 5); assert.equal(typed[3].lineBreakBefore, 'break'); assert.equal(typed[6].lineBreakBefore, 'break');
+  assert.deepEqual(h.changes[0][0].words.slice(0, 3), original[0].words, 'speech before keeps its words and times');
+  assert.deepEqual(h.changes[0].at(-1).words.slice(-3).map(({ lineBreakBefore, ...word }) => word), original[1].words, 'speech after keeps its words and times');
+  // Visible lines (3) caps each pause on its own: the 3 s after the new line now shows three rows.
+  assert.deepEqual(clone(h.inspect().allRows.map(row => row.kind)), ['text', 'pause', 'text', 'pause', 'pause', 'pause', 'text']);
+  assert.deepEqual(clone(h.inspect().pauses.map(row => [row.startTime, row.endTime])), [[3, 4], [5, 6], [6, 7], [7, 8]]);
+  assert.equal(h.inspect().editingRowKey, null);
+});
+
+test('native typing into a pause row anchors an empty range that follows typing steps and Undo while open', async () => {
+  const calls = [], typing = { open: (anchor, captions, text, caret) => calls.push(['open', anchor, text, caret]), input() {}, flush() {}, hint() {}, end: async mode => { calls.push(['end', mode]); } };
+  const original = pauseFixture(), h = transcriptController(original, 24, { pauseSettings, typing });
+  const pause = h.inspect().pauses[2];
+  await h.beginPauseEdit(pause);
+  const [, anchor, text, caret] = calls[0], key = h.inspect().editingRowKey;
+  assert.equal(anchor.start, 3); assert.equal(anchor.suffix, 3); assert.deepEqual(anchor.window, { startTime: 5, endTime: 8 }); assert.equal(text, ''); assert.equal(caret, 0);
+  // A typing step inserts the words; the open row is exactly those words.
+  h.setCaptions(typingModule.applyTypingText(original, anchor, 'Fresh words here.'));
+  assert.equal(h.inspect().editingRowKey, key);
+  const row = h.inspect().rows.find(item => item.key === key);
+  assert.equal(lines.transcriptLineCaption(h.inspect().captions, row).text, 'Fresh words here.');
+  assert.deepEqual(clone(h.inspect().pauses.map(item => [item.startTime, item.endTime])), [[3, 4], [4, 5]]);
+  // Premiere Undo back past the step: the editor stays open on the empty pause slot.
+  h.setCaptions(clone(original));
+  assert.equal(h.inspect().editingRowKey, key);
+  assert.deepEqual(clone(h.inspect().allRows.map(item => item.kind === 'pause' ? 'pause' : item.key === key ? 'typing' : 'text')), ['text', 'pause', 'pause', 'typing', 'text']);
+  h.setDraft('Fresh words here.');
+  assert.equal(h.saveInlineText(h.inspect().rows.find(item => item.key === key)), true);
+  assert.deepEqual(calls.at(-1), ['end', 'commit']); assert.equal(h.changes.length, 0, 'typing steps hold the text; the component writes nothing itself');
 });
 
 test('the blur before a pause deletion click finishes its typing history merge before deletion publishes', async () => {

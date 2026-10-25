@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { derivePauseLines, removePauseLine } from '../webview-ui/src/lib/native-effect/pause-lines.ts';
 import { nativeCaptionPhrases } from '../webview-ui/src/lib/native-effect/phrases.ts';
-import { transcriptLines, transcriptWords, changeTranscriptLineBreak } from '../webview-ui/src/lib/transcript/lines.ts';
+import { transcriptLines, transcriptWords, changeTranscriptLineBreak, replaceTranscriptLine, transcriptLineCaption } from '../webview-ui/src/lib/transcript/lines.ts';
+import { replaceText } from '../webview-ui/src/lib/transcript/edit.ts';
 import { defaultNativeStyle } from '../webview-ui/src/lib/native-effect/contract.ts';
 import { encodeNativeDocument } from '../webview-ui/src/lib/native-effect/encode.ts';
 
@@ -110,7 +111,11 @@ int main(int argc,char** argv) {
 }`);
     execFileSync(process.env.CXX || 'c++', ['-std=c++17', source, '-o', executable]);
     const original = fixture();
-    for (const captions of [original, removePauseLine(original, 55), removePauseLine(removePauseLine(original, 55), 55)]) {
+    // A long blank line must not set the Auto cadence in either implementation.
+    const lines = transcriptLines(nativeCaptionPhrases(original, 56)), blanked = nativeCaptionPhrases(original, 56);
+    const line = lines[5], blankRow = replaceText(transcriptLineCaption(blanked, line), '');
+    blankRow.words[0].endTime = transcriptWords(blanked)[lines[6].start].startTime - .01; blankRow.words[0].endOfSentence = false;
+    for (const captions of [original, removePauseLine(original, 55), removePauseLine(removePauseLine(original, 55), 55), replaceTranscriptLine(blanked, line, blankRow)]) {
       for (const maxChars of [1, 30, 56, 500]) {
         const grouped = nativeCaptionPhrases(captions, maxChars), input = join(temp, 'input.bcap');
         writeFileSync(input, encodeNativeDocument(document(grouped)));

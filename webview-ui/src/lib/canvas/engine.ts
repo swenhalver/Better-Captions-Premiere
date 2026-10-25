@@ -20,9 +20,10 @@ export interface RenderLayout { width:number; height:number; rowHeight:number; r
 /** Native clip ranges remain authoritative; a displayed sentence can cross a cut. */
 export function captionAtRenderTime(caption:CaptionItem|null,time:number):CaptionItem|null {
   if(!caption||time<caption.startTime||time>=caption.endTime)return null;
-  if(!caption.renderSegments)return caption;
-  const segment=caption.renderSegments.find(group=>time>=group.startTime&&time<group.endTime);
-  return segment?{...caption,...segment}:null;
+  const shown=caption.renderSegments?caption.renderSegments.find(group=>time>=group.startTime&&time<group.endTime):caption;
+  // A blank line (empty words) is a timed row with nothing to draw.
+  if(!shown||shown.words.every(word=>!word.text))return null;
+  return shown===caption&&shown.words.every(word=>word.text)?caption:{...caption,...shown,words:shown.words.filter(word=>word.text)};
 }
 type WordState = 'upcoming'|'active'|'spoken';
 interface MeasuredWord { word:CaptionWord; text:string; width:number; outerWidth:number; extents:Record<WordState,number>; gapBefore:number; }

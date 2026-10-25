@@ -139,7 +139,9 @@ function boundarySamples() {
   const duration = words('a b c'); duration[0].endTime = 5; duration[1].startTime = 5; duration[1].endTime = 5.5; duration[2].startTime = 5.5; duration[2].endTime = 5.501;
   const longUnit = words('hold this'); longUnit[0].endTime = 7; longUnit[1].startTime = 7; longUnit[1].endTime = 7.3;
   const overlap = words('aa bb cc dd ee'); overlap[0].endTime = 5; overlap[1].endTime = .9;
-  return [{ input: joined, maxChars: 5 }, { input: pause, maxChars: 56 }, { input: duration, maxChars: 56 }, { input: longUnit, maxChars: 56 }, { input: overlap, maxChars: 8 }];
+  // Blank lines (empty words) stand alone beside joins, punctuation and each other.
+  const blank = words('aa x ,bb cc x x dd'); blank[1].text = blank[5].text = blank[6].text = ''; blank[1].lineBreakBefore = blank[2].lineBreakBefore = 'join';
+  return [{ input: blank, maxChars: 56 }, { input: joined, maxChars: 5 }, { input: pause, maxChars: 56 }, { input: duration, maxChars: 56 }, { input: longUnit, maxChars: 56 }, { input: overlap, maxChars: 8 }];
 }
 
 test('actual TS→BCAP→C++ line indices and codec roundtrips agree for all modes', t => {

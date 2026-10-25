@@ -200,7 +200,8 @@ void validate(const Document& d) {
  for(const auto& c:d.containers) {
   require(!c.id.empty()&&c.id.size()<=256,"invalid container id");text(c.id);ids.push_back(c.id);bytes+=c.id.size();
   total+=c.words.size();require(total<=kMaxWords,"too many words");double previous=-1;
-  for(const auto& w:c.words) {require(!w.text.empty()&&w.text.size()<=4096,"invalid word text");text(w.text);bytes+=w.text.size();
+  // Empty text is an authored blank line: a timed row with no visible word.
+  for(const auto& w:c.words) {require(w.text.size()<=4096&&(!w.text.empty()||w.end>w.start),"invalid word text");text(w.text);bytes+=w.text.size();
    require(static_cast<std::uint32_t>(w.lineBreakBefore)<=3,"invalid line break mode");
    require(w.pauseLinesRemoved<=8,"invalid removed pause line count");
    require(finite(w.start)&&finite(w.end)&&w.start>=0&&w.end>=w.start&&w.start>=previous,"invalid word timing");previous=w.start;}
@@ -274,7 +275,9 @@ std::vector<bool> lineStarts(const std::vector<const Word*>& words,std::size_t m
   bool hard=i==0,glue=false;
   if(i){const auto& previous=*words[i-1];
    const bool previousEnds=previous.endOfSentence||(!previous.text.empty()&&std::string(".!?").find(previous.text.back())!=std::string::npos);
-   if(w.lineBreakBefore==LineBreakBefore::Break||w.lineBreakBefore==LineBreakBefore::MergeEdge)hard=true;
+   // A blank line always stands alone, whatever its neighbours' markers.
+   if(w.text.empty()||previous.text.empty())hard=true;
+   else if(w.lineBreakBefore==LineBreakBefore::Break||w.lineBreakBefore==LineBreakBefore::MergeEdge)hard=true;
    else if(w.lineBreakBefore==LineBreakBefore::Join)glue=true;
    else if(previousEnds)hard=true;
    else if(punct)glue=true;
@@ -433,15 +436,20 @@ std::array<double,4> directionalPaintOutset(const Style& style,std::size_t posit
 // average line of silence, unless Blank line length specifies a cadence.
 // Whole rows only, capped at Visible lines in both modes before deletions.
 // The remainder extends the last remaining blank's duration.
-double averageLineSeconds(const std::vector<Phrase>& phrases,double fallback) {
+// A phrase made of an authored blank line: timed, with nothing to draw.
+bool blankPhrase(const Document& d,const Phrase& phrase){
+ return phrase.wordCount>0&&std::all_of(phrase.wordRefs.begin(),phrase.wordRefs.end(),[&](const WordRef& ref){return d.containers[ref.containerIndex].words[ref.wordIndex].text.empty();});
+}
+// Authored blank lines are silence, not speech: they do not set the pace.
+double averageLineSeconds(const Document& d,const std::vector<Phrase>& phrases,double fallback) {
  double total=0;std::size_t count=0;
- for(const auto& phrase:phrases)if(phrase.wordCount>0&&phrase.end>phrase.start){total+=phrase.end-phrase.start;++count;}
+ for(const auto& phrase:phrases)if(phrase.wordCount>0&&phrase.end>phrase.start&&!blankPhrase(d,phrase)){total+=phrase.end-phrase.start;++count;}
  return count?total/double(count):fallback;
 }
 std::vector<Phrase> withSilenceRows(const Document& d,const std::vector<Phrase>& phrases,double pause,const RollUpSettings& settings) {
  std::vector<Phrase> result;result.reserve(phrases.size());
  // A zero pause still needs a finite cadence for derived rows.
- const double cadence=settings.blankLineSeconds>0?settings.blankLineSeconds:averageLineSeconds(phrases,pause>0?pause:0.6);
+ const double cadence=settings.blankLineSeconds>0?settings.blankLineSeconds:averageLineSeconds(d,phrases,pause>0?pause:0.6);
  for(const auto& phrase:phrases){
   if(!result.empty()){
    const auto& previous=result.back();const double speechEnd=previous.end,gap=phrase.start-speechEnd;
@@ -451,7 +459,10 @@ std::vector<Phrase> withSilenceRows(const Document& d,const std::vector<Phrase>&
     const auto removed=d.containers[ref.containerIndex].words[ref.wordIndex].pauseLinesRemoved;
     const auto count=complete>removed?complete-removed:0;
     for(std::size_t index=0;index<count;++index){
-     const double start=speechEnd+index*cadence,end=index+1<count?speechEnd+(index+1)*cadence:phrase.start;
+     // Separate statements keep the compiler from fusing multiply and add,
+     // so derived times match the panel's (pause-lines.ts) to the last bit.
+     const double offset=double(index)*cadence,nextOffset=double(index+1)*cadence;
+     const double start=speechEnd+offset,end=index+1<count?speechEnd+nextOffset:phrase.start;
      result.push_back({phrase.containerId,phrase.firstWord,0,start,end,{}});
     }
    }
@@ -488,7 +499,8 @@ std::vector<ComposedRow> composeRows(const Document& d,
   rows.push_back(std::move(row));row=ComposedRow{};
  };
  for(std::size_t phraseIndex=begin;phraseIndex<end;++phraseIndex){const auto& phrase=phrases[phraseIndex];
-  if(!phrase.wordCount){
+  // Pause rows and authored blank lines reserve a row without drawing a word.
+  if(!phrase.wordCount||blankPhrase(d,phrase)){
    const auto& state=time<phrase.start?d.style.upcoming:time<phrase.end?d.style.current:d.style.spoken;
    const auto style=styler?styler(state,phraseIndex-begin):state;
    const auto metrics=measure(" ",style);

@@ -136,3 +136,17 @@ BCAP binary v12 (`POSITION_STYLES_VERSION` in `line-styles.ts`; `kPositionStyles
 Case, line height, word spacing and alignment remain global. Horizontal scrolling
 assigns positions by rows within the sliding page; paged rendering assigns them
 by rows within each page. Editing either wrap or positions preserves the other.
+
+## Blank lines (empty words)
+
+Without changing any BCAP version or byte layout, a word's text may be the empty
+string: an authored blank line. It needs a positive duration. Container IDs and
+font families stay non-empty. Every reader (C++ decoder, both bounded TypeScript
+readers and the CEP extension parser) accepts a zero-length word string only.
+A blank word always forms its own line in every wrap mode, whatever its
+neighbours' boundary markers or punctuation. It renders as a reserved empty row
+like a derived pause row, with no draw command, bubble or shadow, and it does not
+count as speech for the Auto blank-line cadence. Deleting every word of a line
+leaves one blank word over that line's time, keeping its boundary and
+removed-pause metadata. Text typed into a derived pause row becomes its own line
+in that slot's time, with manual breaks before it and before the next line.

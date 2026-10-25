@@ -70,8 +70,8 @@ export function decodeNativeTransportTimeOrigin(text: unknown): number {
   const u = () => { need(4); const n = view.getUint32(offset, true); offset += 4; return n; };
   const d = () => { need(8); const n = view.getFloat64(offset, true); offset += 8; if (!Number.isFinite(n)) throw new Error('Nonfinite native document value.'); return n; };
   const flag = () => { const n = u(); if (n > 1) throw new Error('Invalid native document flag.'); return Boolean(n); };
-  const string = (limit: number) => {
-    const n = u(); if (n === 0 || n > limit) throw new Error('Invalid native string length.'); need(n);
+  const string = (limit: number, empty = false) => {
+    const n = u(); if ((n === 0 && !empty) || n > limit) throw new Error('Invalid native string length.'); need(n);
     const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(offset, offset + n)); offset += n;
     if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(value)) throw new Error('Invalid native string.');
     return value;
@@ -84,7 +84,7 @@ export function decodeNativeTransportTimeOrigin(text: unknown): number {
     const identity = string(256); if (identities.has(identity)) throw new Error('Duplicate native identity.'); identities.add(identity);
     flag(); const words = u(); count += words; if (count > 100000) throw new Error('Too many native words.');
     let previous = -1;
-    for (let j = 0; j < words; j++) { string(4096); const start = d(), end = d(); flag(); if (version >= 8 && u() > (version >= 10 ? 3 : 2)) throw new Error('Invalid native word line boundary.'); if (version >= 9 && u() > 8) throw new Error('Invalid native word removed pause lines.'); if (start < 0 || end < start || start < previous) throw new Error('Invalid native timing.'); previous = start; }
+    for (let j = 0; j < words; j++) { string(4096, true); const start = d(), end = d(); flag(); if (version >= 8 && u() > (version >= 10 ? 3 : 2)) throw new Error('Invalid native word line boundary.'); if (version >= 9 && u() > 8) throw new Error('Invalid native word removed pause lines.'); if (start < 0 || end < start || start < previous) throw new Error('Invalid native timing.'); previous = start; }
   }
   const color = () => ({ r: d(), g: d(), b: d(), a: d() });
   const style = (): NativeWordStyle => ({ fontFamily: string(256), fontSize: d(), sizeScale: d(), opacity: d(), color: color(), bubble: flag(), bubbleColor: color(), padding: d(), radius: d(), outlineWidth: d(), outlineColor: color(), shadowBlur: d(), shadowX: d(), shadowY: d(), shadowColor: color() });

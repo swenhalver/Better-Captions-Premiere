@@ -1,5 +1,8 @@
 import type {CaptionItem,CaptionWord} from '../types';
 let nextSplitId=0;
+/** An empty word is a blank line: a timed row with no visible text. It always
+ * stands alone as its own line and keeps the time its deleted words had. */
+export const isBlankWord=(w:CaptionWord)=>w.text==='';
 /** Earliest allowed start: 0, or a native layer's (possibly negative) source zero. */
 const timeFloor=(c:CaptionItem)=>Number.isFinite(c.timelineFloor)?Math.min(0,c.timelineFloor!):0;
 export function validateCaptions(captions:CaptionItem[]){
@@ -11,11 +14,21 @@ export function validateCaptions(captions:CaptionItem[]){
     if(!Number.isFinite(c.startTime)||!Number.isFinite(c.endTime)||c.startTime<floor||c.endTime<=c.startTime)throw new Error(`Caption ${i+1}: end must be after start.`);
     if(i&&c.startTime<captions[i-1].endTime-.0001)throw new Error(`Caption ${i+1} overlaps the previous caption.`);
     if(!c.words.length)throw new Error(`Caption ${i+1} needs at least one word.`);
-    c.words.forEach((w,j)=>{if(!w.text.trim()||!Number.isFinite(w.startTime)||!Number.isFinite(w.endTime)||w.startTime<c.startTime-.0001||native&&w.startTime<floor||w.endTime>c.endTime+.0001||w.endTime<=w.startTime)throw new Error(`Caption ${i+1}, word ${j+1}: keep word timing inside the caption.`);if(j&&w.startTime<c.words[j-1].endTime-.0001)throw new Error(`Caption ${i+1}: word timings overlap.`);});
+    c.words.forEach((w,j)=>{if(w.text!==''&&!w.text.trim()||!Number.isFinite(w.startTime)||!Number.isFinite(w.endTime)||w.startTime<c.startTime-.0001||native&&w.startTime<floor||w.endTime>c.endTime+.0001||w.endTime<=w.startTime)throw new Error(`Caption ${i+1}, word ${j+1}: keep word timing inside the caption.`);if(j&&w.startTime<c.words[j-1].endTime-.0001)throw new Error(`Caption ${i+1}: word timings overlap.`);});
   });return true;
 }
 export function replaceText(c:CaptionItem,text:string):CaptionItem{
-  const tokens=text.trim().split(/\s+/).filter(Boolean);if(!tokens.length)throw new Error('A line cannot be empty.');
+  const tokens=text.trim().split(/\s+/).filter(Boolean);
+  if(!tokens.length){
+    // Deleting every word leaves a blank line over the same time, with the
+    // line's own boundary and pause metadata. An empty range stays empty.
+    if(!c.words.length||c.words.length===1&&isBlankWord(c.words[0]))return c;
+    const first=c.words[0];
+    const blank:CaptionWord={text:'',startTime:first.startTime,endTime:Math.max(...c.words.map(w=>w.endTime)),isActive:false,
+      ...(first.lineBreakBefore&&first.lineBreakBefore!=='join'?{lineBreakBefore:first.lineBreakBefore}:{}),
+      ...(first.pauseLinesRemoved!==undefined?{pauseLinesRemoved:first.pauseLinesRemoved}:{})};
+    return {...c,text:'',words:[blank]};
+  }
   const keepLine=(words:CaptionWord[]):CaptionWord[]=>{
     const removed=c.words[0]?.pauseLinesRemoved;
     // Pause deletion belongs to the boundary before this line, including when

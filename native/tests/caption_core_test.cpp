@@ -69,6 +69,41 @@ Document spoken(const std::string& text,LineWrap mode,double step=.3){
  while(at<=text.size()){auto next=text.find(' ',at);if(next==std::string::npos)next=text.size();c.words.push_back({text.substr(at,next-at),t,t+step*.9,false});t+=step;at=next+1;}
  d.containers.push_back(c);return d;
 }
+// An empty word is an authored blank line: a timed row that stands alone in
+// every wrap mode, draws nothing (no text, bubble or shadow), and is not speech.
+void blankLineChecks(){
+ auto blankDoc=[](const std::string& middle){
+  Document d;d.containers.push_back({"blank",false,{{"Before",0,1,false},{middle,1,2,false},{",after",2,3,false}}});
+  d.containers[0].words[1].lineBreakBefore=LineBreakBefore::Join;d.containers[0].words[2].lineBreakBefore=LineBreakBefore::Join;
+  for(auto* style:{&d.style.current,&d.style.upcoming,&d.style.spoken}){style->fontSize=10;style->bubble=true;style->bubbleColor={0,0,1,1};style->shadowBlur=4;}
+  return d;
+ };
+ const auto blank=blankDoc("");validate(blank);
+ // The same rows with a visible middle line, held apart by manual breaks.
+ auto visibleDoc=blankDoc("x");for(std::size_t i:{1,2})visibleDoc.containers[0].words[i].lineBreakBefore=LineBreakBefore::Break;
+ assert(decode(encode(blank)).containers[0].words[1].text.empty()&&encode(decode(encode(blank)))==encode(blank));
+ auto instant=blank;instant.containers[0].words[1].end=1;rejects([&]{validate(instant);});
+ for(auto mode:{LineWrap::Fill,LineWrap::Balance,LineWrap::Pretty}){auto d=blank;d.style.lineWrap=mode;
+  // Joins and leading punctuation never glue a word to a blank line.
+  const auto phrases=regroup(d,56);assert(phrases.size()==3&&phrases[1].wordCount==1&&phrases[1].start==1&&phrases[1].end==2);}
+ for(double time:{0.5,1.5,2.5}){
+  const auto page=layoutFrame(blank,time,{0,0,400,400},measure,56,.6,{},3),visible=layoutFrame(visibleDoc,time,{0,0,400,400},measure,56,.6,{},3);
+  assert(page.words.size()==2&&visible.words.size()==3);
+  for(const auto& run:page.words)assert(!run.text.empty());
+  // The blank row reserves the same slot a visible line would.
+  assert(page.words[1].baseline==visible.words[2].baseline&&page.words[0].baseline==visible.words[0].baseline);
+ }
+ for(int direction:{1,2,3,4}){RollUpSettings settings;settings.enabled=true;settings.visibleLines=3;settings.direction=direction;settings.boundaryEnabled=false;
+  for(double time:{0.5,1.5,2.5}){const auto frame=layoutFrame(blank,time,{0,0,400,400},measure,56,.6,{},1,settings);for(const auto& run:frame.words)assert(!run.text.empty()&&run.containerId=="blank"&&run.wordIndex!=1);}
+ }
+ // Blank lines do not set the derived pause cadence: lines of 1 s make a 2.5 s
+ // gap two pause rows. Counting the 8 s blank line as speech would give none.
+ Document paced;paced.containers.push_back({"paced",false,{{"A.",0,1,true},{"",1.5,9.5,false},{"B.",12,13,true}}});
+ for(auto* style:{&paced.style.current,&paced.style.upcoming,&paced.style.spoken}){style->fontSize=10;style->bubble=false;}
+ const auto row=layoutFrame(visibleDoc,2.5,{0,0,400,400},measure,56,.6,{},3);const double advance=row.words[1].baseline-row.words[0].baseline;
+ const auto pacedPage=layoutFrame(paced,12.5,{0,0,400,400},measure,56,.6,{},8);
+ assert(pacedPage.words.size()==2&&std::abs(pacedPage.words[1].baseline-pacedPage.words[0].baseline-4*advance)<1e-9);
+}
 void lineWrapChecks(){
  const std::string fox="The quick brown fox jumps over the lazy dog.";
  assert(wrapped(spoken(fox,LineWrap::Fill),20)=="The quick brown fox / jumps over the lazy / dog.");
@@ -1073,5 +1108,6 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  // Deterministic malformed-buffer stress: decode can reject or return a valid bounded document.
  std::uint32_t seed=17;for(unsigned trial=0;trial<1000;++trial){auto mutated=encoded;seed=1664525*seed+1013904223;auto index=seed%mutated.size();seed=1664525*seed+1013904223;mutated[index]^=static_cast<std::uint8_t>(seed>>24);try{validate(decode(mutated));}catch(const std::invalid_argument&){} }
  lineWrapChecks();
+ blankLineChecks();
  std::cout<<"caption_core: grouping, layout, styling, timing, codec and malformed-data checks passed\n";
 }

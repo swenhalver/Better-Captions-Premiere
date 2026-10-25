@@ -57,7 +57,7 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
   const u = () => { need(4); const value = data.getUint32(offset, true); offset += 4; return value; };
   const d = () => { need(8); const value = data.getFloat64(offset, true); offset += 8; if (!Number.isFinite(value)) throw new Error('Nonfinite native document value.'); return value; };
   const flag = () => { const value = u(); if (value > 1) throw new Error('Invalid native document flag.'); return value === 1; };
-  const string = (limit: number) => { const size = u(); if (!size || size > limit) throw new Error('Invalid native document string.'); need(size); const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(offset, offset + size)); offset += size; return value; };
+  const string = (limit: number, empty = false) => { const size = u(); if ((!size && !empty) || size > limit) throw new Error('Invalid native document string.'); need(size); const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(offset, offset + size)); offset += size; return value; };
   if (u() !== 0x50414342) throw new Error('Invalid native document magic.');
   const version = u(); if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10 && version !== 11 && version !== POSITION_STYLES_VERSION) throw new Error('Unsupported native binary version.');
   const count = u(); if (count > 10000) throw new Error('Too many native caption containers.');
@@ -67,7 +67,7 @@ export function decodeNativePanelDocument(text: unknown, sequenceId: string): Na
     if (!wordCount || (totalWords += wordCount) > 50000) throw new Error('This panel supports 1 to 50000 native words.');
     const words: NativeWord[] = [];
     for (let j = 0; j < wordCount; j++) {
-      const word: NativeWord = { text: string(4096), start: d(), end: d(), endOfSentence: flag() };
+      const word: NativeWord = { text: string(4096, true), start: d(), end: d(), endOfSentence: flag() };
       if (version >= 8) {
         const boundary = u();
         if (boundary > (version >= 10 ? 3 : 2)) throw new Error('Invalid native word line boundary.');
@@ -295,6 +295,20 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
     const wanted = edited.style[key], rendered = projectedBase[key];
     if (typeof wanted === 'number' && typeof rendered === 'number' ? Math.abs(wanted - rendered) > 1e-7 : wanted !== rendered) unsupported(`a base ${key} override hidden by the word-state styles`);
   }
+  // Unchanged source words keep their exact stored times, even when an edit
+  // shifts their index or moves them into another container. Adding and
+  // subtracting the floating placement offset could otherwise round them.
+  const storedWords = new Map<number, { old: CaptionItem['words'][number]; stored: NativeWord }>(), storedTimes = new Map<number, number>();
+  for (const original of before.captions) {
+    const native = binding.document.captions.find(item => item.id === original.id);
+    original.words.forEach((old, index) => {
+      const stored = native?.words[index];
+      if (!stored) return;
+      if (!storedWords.has(old.startTime)) storedWords.set(old.startTime, { old, stored });
+      if (!storedTimes.has(old.startTime)) storedTimes.set(old.startTime, stored.start);
+      if (!storedTimes.has(old.endTime)) storedTimes.set(old.endTime, stored.end);
+    });
+  }
   document.captions = edited.captions.map(caption => {
     const original = before.captions.find(item => item.id === caption.id);
     for (const field of ['speaker', 'position', 'clipNodeId', 'projectItemId', 'mediaPath', 'renderBounds', 'motionProfile'] as const) if (!same(caption[field], original?.[field])) unsupported(`caption ${field}`);
@@ -309,12 +323,11 @@ export function prepareNativePanelUpdate(binding: NativePanelBinding, edited: Se
     const validStart = Math.abs(caption.startTime - wordStart) <= 1e-7 || capturedEnvelope && caption.startTime === original.startTime;
     const validEnd = Math.abs(caption.endTime - wordEnd) <= 1e-7 || capturedEnvelope && caption.endTime === original.endTime;
     if (!orderedEnvelope || !containedWords || caption.text !== caption.words.map(word => word.text).join(' ') || !validStart || !validEnd) throw new Error('Native caption timing follows its word boundaries. Edit the timed words; the native document was preserved.');
-    const words = caption.words.map((word, index) => {
-      const old = original?.words[index], stored = originalNative?.words[index];
-      // Avoid adding/subtracting a floating placement offset to untouched source
-      // timestamps. A style edit must not rewrite transcript bytes by rounding.
+    const words = caption.words.map(word => {
+      const { old, stored } = storedWords.get(word.startTime) ?? {};
+      // A style edit must not rewrite transcript bytes by rounding.
       if (old && stored && word.text === old.text && word.startTime === old.startTime && word.endTime === old.endTime && word.endOfSentence === old.endOfSentence && word.lineBreakBefore === old.lineBreakBefore && (word.pauseLinesRemoved ?? 0) === (old.pauseLinesRemoved ?? 0)) return clone(stored);
-      return { text: word.text, start: old && stored && word.startTime === old.startTime ? stored.start : word.startTime - binding.timelineOffsetSeconds, end: old && stored && word.endTime === old.endTime ? stored.end : word.endTime - binding.timelineOffsetSeconds, endOfSentence: word.endOfSentence === true, ...(word.lineBreakBefore === undefined ? {} : { lineBreakBefore: word.lineBreakBefore }), ...(word.pauseLinesRemoved === undefined ? {} : { pauseLinesRemoved: word.pauseLinesRemoved }) };
+      return { text: word.text, start: storedTimes.get(word.startTime) ?? word.startTime - binding.timelineOffsetSeconds, end: storedTimes.get(word.endTime) ?? word.endTime - binding.timelineOffsetSeconds, endOfSentence: word.endOfSentence === true, ...(word.lineBreakBefore === undefined ? {} : { lineBreakBefore: word.lineBreakBefore }), ...(word.pauseLinesRemoved === undefined ? {} : { pauseLinesRemoved: word.pauseLinesRemoved }) };
     });
     return { id: caption.id, start: Math.min(...words.map(word => word.start)), end: Math.max(...words.map(word => word.end)), manualSplit: caption.manualSplit === true, words };
   });

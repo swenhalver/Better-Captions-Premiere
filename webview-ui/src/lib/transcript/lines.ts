@@ -1,5 +1,5 @@
 import type { CaptionItem, CaptionSegment, CaptionWord } from '../types';
-import { validateCaptions } from './edit.ts';
+import { isBlankWord, validateCaptions } from './edit.ts';
 
 export interface TranscriptLine {
   key: string;
@@ -8,7 +8,12 @@ export interface TranscriptLine {
   /** Word offsets in the complete transcript, independent of storage. */
   start: number;
   end: number;
+  /** An empty range (start === end), such as a pause row being typed into,
+   * has no words of its own; new words go into this time window. */
+  window?: { startTime: number; endTime: number };
 }
+/** A line made of one blank word: a timed row with no visible text. */
+export const isBlankLine = (words: CaptionWord[]) => words.length > 0 && words.every(isBlankWord);
 export const transcriptWords = (captions: CaptionItem[]) => captions.flatMap(caption => caption.words);
 export function captionWordOffset(captions: CaptionItem[], id: string): number {
   let offset = 0;
@@ -62,6 +67,10 @@ export function transcriptLines(captions: CaptionItem[]): TranscriptLine[] {
 
 export function transcriptLineCaption(captions: CaptionItem[], line: TranscriptLine): CaptionItem {
   const words = transcriptWords(captions).slice(line.start, line.end);
+  if (!words.length) {
+    if (!line.window) throw new Error('Select the line again.');
+    return { ...line.caption, id: line.caption.id, words: [], text: '', renderSegments: undefined, ...line.window };
+  }
   return { ...line.caption, ...lineSegment(words, line.segment?.id ?? line.caption.id), id: line.caption.id };
 }
 
@@ -79,20 +88,23 @@ export function transcriptLineLane(captions: CaptionItem[], line: TranscriptLine
  * Storage envelopes follow moved words; they impose no extra timing boundary. */
 export function replaceTranscriptWords(captions: CaptionItem[], start: number, end: number, replacement: CaptionWord[], timingEstimated?: boolean): CaptionItem[] {
   const all = transcriptWords(captions);
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > all.length || !replacement.length) throw new Error('Select the line again.');
+  // An empty range (start === end) inserts the replacement before word `start`.
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > all.length || !replacement.length) throw new Error('Select the line again.');
   // Validate actual speech first, so overlap errors do not depend on storage.
   const words = [...all.slice(0, start), ...replacement, ...all.slice(end)];
   validateCaptions([{ id: 'transcript', text: words.map(word => word.text).join(' '), words, timelineFloor: captions[0].timelineFloor,
     startTime: Math.min(captions[0].startTime, words[0].startTime), endTime: Math.max(captions.at(-1)!.endTime, words.at(-1)!.endTime) }]);
   const equalCount = replacement.length === end - start;
   let offset = 0;
-  const result = captions.flatMap(caption => {
+  const result = captions.flatMap((caption, index) => {
     const first = offset, last = first + caption.words.length;
     offset = last;
-    if (last <= start || first >= end) return [{ ...caption }];
+    // An insertion joins the container holding word `start`, or the last one at the end.
+    const holds = first <= start && (start < last || index === captions.length - 1);
+    if (start === end ? !holds : last <= start || first >= end) return [{ ...caption }];
     const prefix = caption.words.slice(0, Math.max(0, start - first));
     const suffix = caption.words.slice(Math.max(0, end - first));
-    const inserted = equalCount ? replacement.slice(Math.max(first, start) - start, Math.min(last, end) - start) : first <= start && start < last ? replacement : [];
+    const inserted = equalCount ? replacement.slice(Math.max(first, start) - start, Math.min(last, end) - start) : holds ? replacement : [];
     const words = [...prefix, ...inserted.map(word => ({ ...word })), ...suffix];
     if (!words.length) return [];
     return [{ ...caption, words, text: words.map(word => word.text).join(' '),
@@ -122,21 +134,37 @@ export function withTranscriptLines(captions: CaptionItem[], ranges: { start: nu
   });
 }
 
+/** Replace one line's words. Text typed into an empty range (a pause row)
+ * becomes its own line: a manual break before it and before the next line. */
 export function replaceTranscriptLine(captions: CaptionItem[], line: TranscriptLine, updated: CaptionItem): CaptionItem[] {
-  const rows = transcriptLines(captions), delta = updated.words.length - (line.end - line.start);
-  const result = replaceTranscriptWords(captions, line.start, line.end, updated.words, updated.timingEstimated);
+  const rows = transcriptLines(captions), count = updated.words.length, delta = count - (line.end - line.start);
+  const inserting = line.start === line.end;
+  let result = replaceTranscriptWords(captions, line.start, line.end,
+    inserting ? updated.words.map((word, index) => index ? word : { ...word, lineBreakBefore: 'break' as const }) : updated.words, updated.timingEstimated);
+  if (inserting) {
+    let offset = 0;
+    const following = line.start + count;
+    result = result.map(caption => {
+      const first = offset; offset += caption.words.length;
+      if (following < first || following >= offset) return caption;
+      const words = caption.words.map((word, index) => first + index === following && !word.lineBreakBefore ? { ...word, lineBreakBefore: 'break' as const } : word);
+      return { ...caption, words };
+    });
+  }
   const ranges: { start: number; end: number; key: string }[] = [];
   let inserted = false;
+  const insert = (key: string) => { if (!inserted && count) ranges.push({ key: line.segment?.id ?? key, start: line.start, end: line.start + count }); inserted = true; };
   for (const row of rows) {
     const key = row.segment?.id ?? row.key;
     if (row.end <= line.start) ranges.push({ key, start: row.start, end: row.end });
-    else if (row.start >= line.end) ranges.push({ key, start: row.start + delta, end: row.end + delta });
+    else if (row.start >= line.end) { if (inserting) insert(line.key); ranges.push({ key, start: row.start + delta, end: row.end + delta }); }
     else {
       if (row.start < line.start) ranges.push({ key: key + ':before', start: row.start, end: line.start });
-      if (!inserted) { ranges.push({ key: line.segment?.id ?? key, start: line.start, end: line.end + delta }); inserted = true; }
+      insert(key);
       if (row.end > line.end) ranges.push({ key: key + ':after', start: line.end + delta, end: row.end + delta });
     }
   }
+  insert(line.key);
   return withTranscriptLines(result, ranges);
 }
 
@@ -159,6 +187,8 @@ export function changeTranscriptLineBreak(captions: CaptionItem[], line: Transcr
   if (line.start < 0 || line.end <= line.start || line.end > transcriptWords(captions).length) throw new Error('Select the line again.');
   const next = rows.find(row => row.end > line.end);
   if (splitAt === undefined && !next) throw new Error('There is no next line to merge.');
+  const all = transcriptWords(captions);
+  if (splitAt === undefined && (isBlankLine(all.slice(line.start, line.end)) || isBlankLine(all.slice(next!.start, next!.end)))) throw new Error('A blank line stands alone. Type text into it before merging.');
   if (splitAt !== undefined && (!Number.isInteger(splitAt) || splitAt <= line.start || splitAt >= line.end)) throw new Error('Select an interior word to split the line.');
   const end = splitAt === undefined ? next!.end : line.end;
   const words = transcriptWords(captions).map((word, index) => ({ ...word,

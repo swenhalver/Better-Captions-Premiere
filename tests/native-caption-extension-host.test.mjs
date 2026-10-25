@@ -185,6 +185,15 @@ test('v8 extension preserves every automatic, break and join boundary while acce
   }
 });
 
+test('extension preserves an authored blank line (an empty word) in the old document', () => {
+  const h = fixture({ prepareDocument(document) {
+    document.captions[0].words = [word('Before', 1, 1.4), word('', 1.4, 1.8), word('after.', 1.8, 2)];
+  } });
+  const result = h.extend(h.read());
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(decodeNativePanelDocument(result.connection.documentText, 'seq-a').captions[0].words.map(item => [item.text, item.start, item.end]), [['Before', 1, 1.4], ['', 1.4, 1.8], ['after.', 1.8, 2]]);
+});
+
 test('invalid or missing v8 word boundaries refuse before any setter, including matching old and new carriers', () => {
   for (const mutate of [
     (bytes, offset) => { bytes.writeUInt32LE(4, offset); return bytes; },

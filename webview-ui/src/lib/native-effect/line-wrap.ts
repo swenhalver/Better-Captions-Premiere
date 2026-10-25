@@ -32,7 +32,9 @@ export function lineStarts(words: readonly WrapWord[], maxChars: number, mode: L
     let hard = index === 0, glue = false;
     if (index) {
       const previous = words[index - 1];
-      if (word.lineBreakBefore === 'break' || word.lineBreakBefore === 'edge') hard = true;
+      // A blank line (empty text) always stands alone, whatever the markers.
+      if (!word.text || !previous.text) hard = true;
+      else if (word.lineBreakBefore === 'break' || word.lineBreakBefore === 'edge') hard = true;
       else if (word.lineBreakBefore === 'join') glue = true;
       else if (previous.endOfSentence || /[.!?]$/.test(previous.text)) hard = true;
       else if (punctuation) glue = true;

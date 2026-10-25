@@ -27,7 +27,10 @@ test('a typing anchor replaces only its words, keeps surviving word timing and d
   assert.equal(typingRange(longer, anchor).text, 'We type right here now.');
   assert.deepEqual(longer[0].words.slice(0, 2), captions[0].words.slice(0, 2));
   assert.deepEqual(longer[0].words.at(-1), captions[0].words.at(-1));
-  assert.throws(() => applyTypingText(captions, anchor, '   '), /empty/);
+  // Clearing the draft leaves a blank line over the anchored words' time.
+  const blank = applyTypingText(captions, anchor, '   ');
+  assert.deepEqual(typingRange(blank, anchor).words.map(item => [item.text, item.startTime, item.endTime]), [['', captions[0].words[2].startTime, captions[0].words[5].endTime]]);
+  assert.equal(typingRange(applyTypingText(blank, anchor, 'Back again'), anchor).text, 'Back again');
   const outside = structuredClone(captions); outside[0].words[0].text = 'Hi';
   assert.equal(typingRange(outside, anchor), null, 'a change outside the anchored words closes the editor');
   assert.throws(() => applyTypingText(outside, anchor, 'We type'), /changed while you were editing/);

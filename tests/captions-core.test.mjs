@@ -248,5 +248,10 @@ test('validation rejects overlapping manual caption and word timing edits',()=>{
   const c=caption([word('one',0,.3),word('two',.5,.8)]);
   assert.throws(()=>validateCaptions([{...c,words:[c.words[0],{...c.words[1],startTime:.2}]}]),/overlap/);
   assert.throws(()=>validateCaptions([c,{...c,id:'another',startTime:.2}]),/overlap/);
-  assert.throws(()=>replaceText(c,' '),/empty/);
+  // Deleting every word leaves one blank word over the line's time and boundary metadata.
+  const marked={...c,words:[{...c.words[0],lineBreakBefore:'break',pauseLinesRemoved:2},c.words[1]]};
+  assert.deepEqual(replaceText(marked,' ').words,[{text:'',startTime:0,endTime:.8,isActive:false,lineBreakBefore:'break',pauseLinesRemoved:2}]);
+  assert.equal(validateCaptions([replaceText(c,'')]),true);
+  assert.throws(()=>validateCaptions([{...c,words:[{...c.words[0],text:' '}]}]),/keep word timing/);
+  assert.throws(()=>validateCaptions([{...c,words:[{...c.words[0],text:'',endTime:0}]}]),/keep word timing/);
 });
