@@ -536,7 +536,7 @@
                   <textarea class="transcript-editor__cue-input" aria-label="Edit line {number} text" aria-invalid={!!editingError} aria-describedby={editingError ? 'caption-inline-error' : undefined} rows="1" bind:value={draftText} bind:this={textEditor} spellcheck="true" use:focusTextEditor onselect={trackTextCaret} onclick={trackTextCaret} onkeyup={(event) => { if (event.key === 'Meta' || event.key === 'Control') typing?.hint(); trackTextCaret(event); }} oninput={(event) => { editingError = ''; trackTextCaret(event); resizeTextEditor(event.currentTarget); typing?.input(event.currentTarget.value, event.currentTarget.selectionStart ?? 0); }} onkeydown={(event) => textKeydown(event,row)} onfocus={() => textEditorFocused = true} onblur={() => { textEditorFocused = false; saveInlineText(row); }}></textarea>
                   {#if editingError}<p class="transcript-editor__text-error" id="caption-inline-error" role="alert">{editingError}</p>{:else if draftText !== rowCaption(row).text}<span class="transcript-editor__text-pending" role="status">Unsaved</span>{/if}
                 {:else}
-                  <button class="transcript-editor__cue-text" aria-label="Edit line {number} text" onclick={(event) => beginTextEdit(row,event)} disabled={disabled}>{#if blank}<span class="transcript-editor__blank-label">Blank line</span>{:else if row.segment}{row.segment.text}{:else if row.caption.renderSegments}{#each row.caption.renderSegments as group (group.id)}<span class="transcript-editor__cue-phrase">{group.text}</span>{/each}{:else}{row.caption.text}{/if}</button>
+                  <button class="transcript-editor__cue-text" aria-label="Edit line {number} text" onclick={(event) => beginTextEdit(row,event)} disabled={disabled}>{#if blank}<span aria-hidden="true">&nbsp;</span>{:else if row.segment}{row.segment.text}{:else if row.caption.renderSegments}{#each row.caption.renderSegments as group (group.id)}<span class="transcript-editor__cue-phrase">{group.text}</span>{/each}{:else}{row.caption.text}{/if}</button>
                 {/if}
               </div>
             </div>
@@ -592,7 +592,6 @@
   .transcript-editor__cue-select { flex-shrink: 0; background: transparent; border: 0; padding: 0; min-inline-size: 1.5rem; min-block-size: 2rem; text-align: start; cursor: pointer; }
   .transcript-editor__cue--pause { color: var(--color-panel-secondary); }
   .transcript-editor__pause-select { background: transparent; border: 0; padding: 0; color: inherit; text-align: start; cursor: pointer; }
-  .transcript-editor__blank-label { color: var(--color-panel-secondary); }
   .transcript-editor__pause-delete { align-self: center; padding: var(--caption-space-xs) var(--caption-space-s); background: transparent; color: var(--color-panel-secondary); border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); font-size: var(--caption-type-xs); cursor: pointer; &:hover { color: var(--color-panel-text); background: var(--color-surface-raised); } &:disabled { opacity: .5; cursor: default; } }
   .transcript-editor__pause-description { margin: 0; font-size: var(--caption-type-s); color: var(--color-panel-secondary); }
   .transcript-editor__cue-body { flex: 1; min-inline-size: 0; }
