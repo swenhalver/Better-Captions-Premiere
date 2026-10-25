@@ -113,6 +113,12 @@
   let exportButton: ExportButton | undefined = $state();
   let transcriptionBackup = $state<SessionState | null>(null);
   const loaded = new Set<string>();
+  // A sequence whose refresh has not confirmed its caption layers yet, e.g. its
+  // read raced a playhead move (scrubbing). The reconnect poll repeats the
+  // refresh quietly and nothing writes until it completes. A saved session it
+  // already restored is kept, so edits made meanwhile are not reloaded over.
+  let discoveryPending = '';
+  const restoredStored = new Map<string, unknown>();
   let statusSequenceId: string | null = null;
   const plain = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
   const message = (problem: unknown) => problem instanceof Error ? problem.message : String(problem);
@@ -467,7 +473,7 @@
     const generation = reconnectGeneration;
     const info = await api.getActiveSequenceInfo();
     if (generation !== reconnectGeneration) return;
-    if (!info || !sequenceInfo || connectionKey(info) !== connectionKey(sequenceInfo)) { await refreshSequence(info); return; }
+    if (!info || !sequenceInfo || connectionKey(info) !== connectionKey(sequenceInfo) || discoveryPending === connectionKey(info)) { await refreshSequence(info); return; }
     const current = sessionManager.current;
     const before = current ? outputSignature(current) : '';
     let snapshot = await readConnections(info, false);
@@ -495,24 +501,29 @@
       const info = capturedInfo === undefined ? await api.getActiveSequenceInfo() : capturedInfo;
       if (generation !== reconnectGeneration) return;
       const contextChanged = !info || !sequenceInfo || connectionKey(info) !== connectionKey(sequenceInfo);
-      if (sequenceInfo && info && sequenceInfo.projectPath !== info.projectPath) { loaded.clear(); legacySessions.clear(); legacyBaselines.clear(); transcriptionBackup = null; }
+      if (sequenceInfo && info && sequenceInfo.projectPath !== info.projectPath) { loaded.clear(); restoredStored.clear(); legacySessions.clear(); legacyBaselines.clear(); transcriptionBackup = null; }
       sequenceInfo = info;
       if (contextChanged) {
         nativeBinding = null; connectionRevision = ''; connectionStatus = '';
         nativeSelection = null; areaControlRevision = ''; selectionHint = null; selectedId = null;
         ++selectionRevision; motionWatcher?.reset();
       }
-      if (!info) { sessionManager.deactivateSequence(); selectedId = null; return; }
+      if (!info) { discoveryPending = ''; sessionManager.deactivateSequence(); selectedId = null; return; }
       sessionManager.activateSequence(info);
       const key = connectionKey(info);
+      discoveryPending = key;
       if (!loaded.has(key)) {
-        const stored = await api.loadSession(info.id);
-        if (generation !== reconnectGeneration) return;
-        if (stored && sameSequenceId(stored.sequenceId, info.id)) {
-          if (stored.captions?.length) validateCaptions(stored.captions);
-          sessionManager.restore({ ...stored, sequenceId: info.id, projectPath: info.projectPath } as SessionState);
-          sessionManager.activateSequence(info);
-          saveStatus = "Saved caption session loaded";
+        let stored = restoredStored.get(key) as Awaited<ReturnType<typeof api.loadSession>> | undefined;
+        if (stored === undefined) {
+          stored = await api.loadSession(info.id);
+          if (generation !== reconnectGeneration) return;
+          if (stored && sameSequenceId(stored.sequenceId, info.id)) {
+            if (stored.captions?.length) validateCaptions(stored.captions);
+            sessionManager.restore({ ...stored, sequenceId: info.id, projectPath: info.projectPath } as SessionState);
+            sessionManager.activateSequence(info);
+            saveStatus = "Saved caption session loaded";
+          }
+          restoredStored.set(key, stored ?? null);
         }
         const connections = await readConnections(info);
         if (generation !== reconnectGeneration) return;
@@ -532,14 +543,18 @@
         if (restored?.captions.length && restored.captions.every(caption => caption.clipNodeId && caption.projectItemId && caption.mediaPath)) {
           appliedSignatures[outputKey(restored)] = outputSignature(restored);
         }
-        loaded.add(key);
+        loaded.add(key); restoredStored.delete(key);
       } else {
         const connections = await readConnections(info);
         if (generation !== reconnectGeneration) return;
         if (connections) { acceptConnections(connections, info); lastDocumentRead = Date.now(); }
       }
       selectFirst();
-    } catch (problem) { error = message(problem); }
+      discoveryPending = '';
+    } catch (problem) {
+      // A read that raced a playhead move leaves discovery pending for the poll.
+      if (!staleNativeRead(problem)) { discoveryPending = ''; error = message(problem); }
+    }
     finally { isRefreshing = false; liveOutput?.notify(); }
     return getState();
   }
@@ -833,6 +848,7 @@
   function selectionPauseReason(): string | null {
     const session = sessionManager.current;
     if (api.isDemo) return "demo";
+    if (session && discoveryPending === outputKey(session)) return "discovering";
     if (session?.nativeClipId) return "native-effect";
     if (!hostPanelVisible) return "host-hidden";
     if (document.hidden) return "document-hidden";
@@ -1116,7 +1132,7 @@
         const signature = outputSignature(session);
         return { sequenceId: outputKey(session), signature,
           needed: appliedSignatures[outputKey(session)] !== signature,
-          ready: nativeAvailable && hostPanelVisible && documentVisible && !timelineBusy && !nativeGeometryInteracting && !characterLimitGesture && !isRefreshing && !isSyncing && !session.isLoading && !typingMerging && !!(nativeBinding || nativeOutputKind(session) === "new-native" || exportButton) };
+          ready: discoveryPending !== outputKey(session) && nativeAvailable && hostPanelVisible && documentVisible && !timelineBusy && !nativeGeometryInteracting && !characterLimitGesture && !isRefreshing && !isSyncing && !session.isLoading && !typingMerging && !!(nativeBinding || nativeOutputKind(session) === "new-native" || exportButton) };
       },
       async apply(context) {
         await flushSave();
