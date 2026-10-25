@@ -15,12 +15,21 @@ interface Options {
   now?: () => number;
 }
 const identity = (context: LiveOutputContext) => JSON.stringify([context.sequenceId, context.signature]);
-const nativeReadMethods = new Set(['readCaptionConnections', 'loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation']);
+const nativeReadMethods = new Set(['readCaptionConnections', 'loadStylePresets', 'getActiveSequenceInfo', 'fetchTranscriptJSON', 'loadSession', 'getFonts', 'getFontCatalog', 'readTimeline', 'readCaptionMotion', 'readCaptionGeometry', 'readCaptionSelection', 'readCaptionArea', 'readCaptionConsolidation', 'readNativeCaptionControls']);
 export function retryableNativeRead(problem: unknown): boolean {
   const error = problem as { code?: string; method?: string; recoverable?: boolean } | null;
   return error?.recoverable === true && ['BC_NATIVE_PENDING', 'BC_NATIVE_WAITING', 'BC_NATIVE_QUEUE_EXPIRED', 'BC_NATIVE_BUSY', 'BC_RENDERER_UNAVAILABLE'].includes(error.code ?? '') &&
     (error.code !== 'BC_NATIVE_PENDING' || nativeReadMethods.has(error.method ?? ''));
 }
+/** A read discarded because it sampled across a playhead move (scrubbing,
+ * playback). Nothing failed: keep the last confirmed values and take the next
+ * scheduled read. Writes never carry this classification. */
+export function staleNativeRead(problem: unknown): boolean {
+  const error = problem as { code?: string; method?: string; recoverable?: boolean } | null;
+  return error?.code === 'BC_NATIVE_STALE' && error.recoverable === true && ['readCaptionConnections', 'readNativeCaptionControls'].includes(error.method ?? '');
+}
+/** Expected, self-clearing read failures: the next scheduled read recovers. */
+export function transientNativeRead(problem: unknown): boolean { return staleNativeRead(problem) || retryableNativeRead(problem); }
 /** Coalesce edits before rendering, serialize output, and never replay an uncertain write. */
 export function createLiveOutput(options: Options) {
   const now = options.now ?? Date.now;

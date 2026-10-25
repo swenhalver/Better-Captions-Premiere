@@ -138,6 +138,8 @@ catch(e){var line=Number(e&&e.line);return '{"version":1,"ok":false,"error":'+qu
           const explanation = data.rolledBack === false ? ' Some changes could not be restored. Use Premiere Undo and review the recovery job: ' + data.recoveryJob : '';
           const error = Object.assign(new Error(data.error + explanation), { details: data });
           if(data.code==='BC_OUTPUT_UNCONFIRMED'&&data.recoverable===false&&typeof data.outputApplied==='boolean')Object.assign(error,{code:data.code,recoverable:false,outputApplied:data.outputApplied});
+          // A read that sampled across a playhead move: discard it and read again later.
+          if(data.code==='BC_NATIVE_STALE'&&data.recoverable===true)Object.assign(error,{code:data.code,method,recoverable:true,operationPending:false});
           reject(error);
         } else resolve(data);
       });

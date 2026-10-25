@@ -1,4 +1,5 @@
 import type { NativeCaptionSnapshot, NativeCaptionControls, NativeCaptionControlEdit, NativeCaptionKeyframeSeek, NativeBoundaryControlKey } from '../../cep-api.ts';
+import { transientNativeRead } from '../live-output.ts';
 export type GeometryParameter = NativeBoundaryControlKey|'position'|'width'|'height'|'groups'|'rollUp'|'rollUpLines'|'rollUpCurrentLine'|'rollUpBlankLineSeconds'|'rollUpDuration'|'rollUpFade'|'rollUpFadePosition'|'rollUpFadeThickness'|'rollUpFadeAmount'|'rollUpFadeCurve'|'rollUpDirection'|'rollUpSpeed'|'rollUpWait'|'rollUpTransition'|'alignment';
 export interface GeometryContext { key:string; sequenceId:string; snapshot:NativeCaptionSnapshot; visible:boolean; disabled:boolean; }
 interface Options {
@@ -8,26 +9,31 @@ interface Options {
  state:(value:NativeCaptionControls|null)=>void; error:(message:string)=>void; now?:()=>number; interacting?:(active:boolean)=>void;
 }
 /** One host call at a time. Scrubbing keeps only the latest intent, bound to
- * the original clip/document/clock; stale replies never enter a new session. */
+ * the original clip/document/clock; stale replies never enter a new session.
+ * A read discarded mid-scrub keeps the last confirmed values on screen but
+ * marks their clock stale: no edit or keyframe step uses it, and the next
+ * scheduled read (playhead debounce or poll) fetches a fresh one. */
 export function createNativeGeometryController(options:Options){
- let alive=true,generation=0,key='',active=false,dragging=false,blocked=false;
+ let alive=true,generation=0,key='',active=false,dragging=false,blocked=false,stale=false;
  const now=options.now??Date.now;let receiptAt=-Infinity,lastInteraction=false;
  let activeKind:'read'|'edit'|'seek'|null=null;
  let pendingSeek:{parameter:GeometryParameter;direction:'previous'|'next';context:GeometryContext;generation:number;identity:string;receipt:NativeCaptionControls;resolve:(value:NativeCaptionControls|null)=>void}|null=null;
  let state:NativeCaptionControls|null=null,pending:{parameter:GeometryParameter;operation:'set'|'reset';value?:number|[number,number];axes?:Partial<Record<0|1,number>>}|null=null;
  const enabled=(c:GeometryContext)=>alive&&c.visible&&!c.disabled;
  const current=(c:GeometryContext,g:number)=>alive&&generation===g&&options.current().key===c.key;
- function publish(next:NativeCaptionControls|null){state=next;receiptAt=next?now():-Infinity;if(alive)options.state(next);}
+ function publish(next:NativeCaptionControls|null){state=next;stale=false;receiptAt=next?now():-Infinity;if(alive)options.state(next);}
  function cancelSeek(){const queued=pendingSeek;pendingSeek=null;queued?.resolve(null);}
  function notifyInteraction(){const next=alive&&(dragging||!!pending||activeKind==='edit'||activeKind==='seek');if(next!==lastInteraction){lastInteraction=next;options.interacting?.(next);}}
  function drain(){if(pending){cancelSeek();void flush();}else if(pendingSeek)void flushSeek();notifyInteraction();}
  function sync(){const c=options.current();if(c.key!==key){key=c.key;generation++;pending=null;cancelSeek();blocked=false;publish(null);}return c;}
- async function read(){const c=sync(),g=generation;if(!enabled(c)){pending=null;cancelSeek();if(!c.visible)dragging=false;notifyInteraction();return;}if(active||dragging||pending)return;active=true;activeKind='read';
+ async function read(){const c=sync(),g=generation;if(!enabled(c)){pending=null;cancelSeek();if(!c.visible)dragging=false;notifyInteraction();return;}if(active||(dragging||pending)&&!stale)return;active=true;activeKind='read';
   // Uncertain writes block further writes, not observation. A fresh read adopts
   // Premiere's actual state without replaying the failed or discarded edits.
   try{const next=await options.read(c.snapshot,c.sequenceId);if(current(c,g)&&enabled(options.current())){if(next.clipNodeId!==c.snapshot.locator.clipNodeId)throw new Error('The native caption clip changed.');publish(next);blocked=false;options.error('');}}
-  catch(e){cancelSeek();if(current(c,g)){pending=null;receiptAt=-Infinity;options.error(e instanceof Error?e.message:String(e));}}finally{active=false;activeKind=null;drain();}}
- async function flush(){const c=sync(),g=generation;if(active||!pending||!enabled(c)||blocked)return;
+  catch(e){if(current(c,g)&&transientNativeRead(e)){stale=true;receiptAt=-Infinity;}
+   else{cancelSeek();if(current(c,g)){pending=null;receiptAt=-Infinity;options.error(e instanceof Error?e.message:String(e));}}}
+  finally{active=false;activeKind=null;drain();}}
+ async function flush(){const c=sync(),g=generation;if(active||!pending||!enabled(c)||blocked||stale)return;
   const intent=pending;pending=null;if(!state){options.error('Wait for Position & size to finish loading.');notifyInteraction();return;}
   const receipt=state;if(!receipt.insideClip){options.error('Move the Premiere playhead inside this caption clip.');notifyInteraction();return;}
   const next={parameter:intent.parameter,operation:intent.operation,...(intent.value===undefined?{}:{value:intent.value})};
@@ -40,7 +46,7 @@ export function createNativeGeometryController(options:Options){
  function enqueue(intent:NonNullable<typeof pending>){const c=sync();if(blocked||!enabled(c))return;cancelSeek();
   // Typed edits after a scrub also need a fresh clock. Pointer gestures take
   // one fresh read at their start, then stream confirmed/coalesced edits.
-  if(!active&&!dragging&&now()-receiptAt>250)void read();pending=intent;notifyInteraction();void flush();}
+  if(!active&&(!dragging||stale)&&now()-receiptAt>250)void read();pending=intent;notifyInteraction();void flush();}
  function queue(parameter:GeometryParameter,value?:number|[number,number]){enqueue({parameter,operation:value===undefined?'reset':'set',...(value===undefined?{}:{value:Array.isArray(value)?[...value] as [number,number]:value})});}
  function queuePositionAxis(axis:0|1,value:number){sync();if(!Number.isFinite(value))return;
   if(pending?.parameter==='position'&&Array.isArray(pending.value)){const point=[...pending.value] as [number,number];point[axis]=value;queue('position',point);return;}
@@ -50,7 +56,7 @@ export function createNativeGeometryController(options:Options){
   if(active||!pendingSeek)return;
   const intent=pendingSeek;pendingSeek=null;
   const c=sync(),g=generation,receipt=state;
-  if(!enabled(c)||pending||dragging||blocked||!receipt||!options.seek||!current(intent.context,intent.generation)||intent.identity!==JSON.stringify([c.sequenceId,c.snapshot])||receipt.revision!==intent.receipt.revision||receipt.timelineTicks!==intent.receipt.timelineTicks){
+  if(!enabled(c)||pending||dragging||blocked||stale||!receipt||!options.seek||!current(intent.context,intent.generation)||intent.identity!==JSON.stringify([c.sequenceId,c.snapshot])||receipt.revision!==intent.receipt.revision||receipt.timelineTicks!==intent.receipt.timelineTicks){
    if(enabled(c)&&current(intent.context,intent.generation))options.error('The playhead or caption controls changed. Click the keyframe arrow again at the current position.');
    intent.resolve(null);return;
   }
@@ -62,7 +68,8 @@ export function createNativeGeometryController(options:Options){
   const c=sync(),g=generation,receipt=state;
   if(!enabled(c)||pending||dragging||blocked||!receipt||!options.seek||active&&activeKind!=='read')return Promise.resolve(null);
   cancelSeek();
-  return new Promise(resolve=>{pendingSeek={parameter,direction,context:c,generation:g,identity:JSON.stringify([c.sequenceId,c.snapshot]),receipt,resolve};if(!active)void flushSeek();});
+  // A stale clock takes one fresh read first; the step runs after it if nothing moved.
+  return new Promise(resolve=>{pendingSeek={parameter,direction,context:c,generation:g,identity:JSON.stringify([c.sequenceId,c.snapshot]),receipt,resolve};if(!active)void(stale?read():flushSeek());});
  }
  return {read,queue,queuePositionAxis,seek,setDragging(value:boolean){if(value&&!dragging)void read();dragging=value;notifyInteraction();},dispose(){alive=false;generation++;pending=null;cancelSeek();if(lastInteraction){lastInteraction=false;options.interacting?.(false);}},get active(){return active;}};
 }

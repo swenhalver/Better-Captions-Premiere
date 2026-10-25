@@ -4,7 +4,7 @@
   import { setSequenceCallbacks, setTimelinePlayheadCallback } from "./webview-api";
   import { initWebview } from "./webview-setup";
   import type { NativeTransportAvailability } from "./webview-setup";
-  import { createLiveOutput, retryableNativeRead, type LiveOutputStatus } from "./lib/live-output";
+  import { createLiveOutput, retryableNativeRead, staleNativeRead, type LiveOutputStatus } from "./lib/live-output";
   import { startCaptionReconnect } from "./lib/reconnect";
   import { connectionKey, reconnectLegacyCaptions, chooseNativeCaptionConnection, sameSequenceId, type CaptionConnections } from "./lib/clip-connections";
   import { rehydrateNativePanel, prepareNativePanelUpdate, confirmNativePanelUpdate, deriveNativePanelPhrases, nativeLineFitCharacterCapacity, nativeDocumentWriteSnapshot } from "./lib/native-effect/panel";
@@ -476,9 +476,10 @@
     const previousRevision = connectionRevision;
     const needsDocument = acceptConnections(snapshot, info);
     if (needsDocument || nativeBinding && (connectionsRevision(snapshot) !== previousRevision || Date.now() - lastDocumentRead >= 30000)) {
-      snapshot = await readConnections(info, true);
-      // An abandoned document read must not consume the revision change, or the
-      // panel would miss a Premiere Undo/Redo until its periodic full read.
+      // An abandoned or failed document read must not consume the revision change,
+      // or the panel would miss a Premiere Undo/Redo until its periodic full read.
+      try { snapshot = await readConnections(info, true); }
+      catch (problem) { connectionRevision = previousRevision; throw problem; }
       if (generation !== reconnectGeneration || !connectionReady(true) || (current && sessionManager.current === current && outputSignature(current) !== before)) { connectionRevision = previousRevision; return; }
       if (snapshot) { acceptConnections(snapshot, info); lastDocumentRead = Date.now(); }
     }
@@ -1141,6 +1142,7 @@
       ready: () => connectionReady(true),
       inspect: inspectConnections,
       onError(problem) { connectionStatus = retryableNativeRead(problem) ? 'Waiting for Premiere. Reconnection will resume automatically.' : message(problem); },
+      transient: staleNativeRead,
     });
     const availabilityAPI = api as typeof api & { onTransportAvailability?: (listener: (state: NativeTransportAvailability) => void) => () => void };
     const stopAvailability = availabilityAPI.onTransportAvailability?.(state => {

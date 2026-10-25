@@ -4,6 +4,8 @@ export function startCaptionReconnect(options: {
   ready: () => boolean;
   inspect: () => Promise<void>;
   onError: (error: unknown) => void;
+  /** Expected read races (a scrub moved the playhead mid-read): no error, no backoff; the next poll reads again. */
+  transient?: (error: unknown) => boolean;
   interval?: number;
   /** A shorter interval while it returns a number, e.g. while the line editor follows Premiere Undo. */
   fast?: () => number | null;
@@ -22,7 +24,7 @@ export function startCaptionReconnect(options: {
     if (!options.ready()) { schedule(period()); return; }
     inFlight = true; requested = false;
     try { await options.inspect(); failures = 0; }
-    catch (error) { failures++; if (!stopped) options.onError(error); }
+    catch (error) { if (options.transient?.(error)) { /* Keep the last accepted connection. */ } else { failures++; if (!stopped) options.onError(error); } }
     finally {
       inFlight = false;
       if (!stopped) schedule(requested ? 0 : Math.min(15000, period() * Math.max(1, failures)));

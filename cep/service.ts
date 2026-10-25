@@ -203,7 +203,8 @@ export function startBackendService(options: ServiceOptions = {}) {
         } catch (failure) {
           const nativeFailure=failure as {code?:string;recoverable?:boolean;outputApplied?:boolean};
           const metadata=nativeFailure?.code==='BC_OUTPUT_UNCONFIRMED'&&nativeFailure.recoverable===false&&typeof nativeFailure.outputApplied==='boolean'
-            ? {code:'BC_OUTPUT_UNCONFIRMED',recoverable:false,outputApplied:nativeFailure.outputApplied}:{};
+            ? {code:'BC_OUTPUT_UNCONFIRMED',recoverable:false,outputApplied:nativeFailure.outputApplied}
+            : nativeFailure?.code==='BC_NATIVE_STALE'&&nativeFailure.recoverable===true&&READ_ACTIONS.has(request?.action??'')?{code:'BC_NATIVE_STALE',recoverable:true}:{};
           atomic(output, { version: 1, id, sequenceId: request?.sequenceId ?? null, projectPath: request?.projectPath ?? null, error: failure instanceof Error ? failure.message : String(failure),...metadata });
         } finally { currentRequest = null; try { fs.unlinkSync(claimed); } catch {} }
       }

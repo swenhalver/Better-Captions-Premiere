@@ -90,6 +90,12 @@ var BetterCaptionsHost = (function () {
         var result = value(0); whitespace(); if (cursor !== text.length) fail(); return result;
     }
     function reply(data) { return stringify(data); }
+    // A read that sampled across a playhead move is discarded, not a failure.
+    // Read endpoints report it as recoverable BC_NATIVE_STALE so the panel keeps
+    // its last confirmed values and takes the next scheduled read. Writes keep
+    // reporting it as a plain error.
+    function nativeReadMoved(message) { var error = new Error(message); error.code = 'BC_NATIVE_STALE'; return error; }
+    function readFailure(e) { return e && e.code === 'BC_NATIVE_STALE' ? { error: e.toString(), code: 'BC_NATIVE_STALE', recoverable: true, operationPending: false } : { error: e.toString() }; }
     function canonicalSequenceId(value) {
         var text = String(value);
         if (text.charAt(0) === '{' && text.charAt(text.length - 1) === '}') text = text.slice(1, -1);
@@ -1525,7 +1531,7 @@ var BetterCaptionsHost = (function () {
         if (typeof fontSize !== 'number' || !isFinite(fontSize) || fontSize < 1 || fontSize > 512) throw new Error('Invalid native caption font size.');
         result.lineFitFontScale = fontSize / 64;
         result.lineFitStates = nativeLineFitStates(table, sampleGrouping);
-        if (nativeControlTicks(String(sequence(sequenceId, projectPath).getPlayerPosition().ticks)) !== sampleTimeline) throw new Error('The playhead moved while reading caption line fit. Read it again.');
+        if (nativeControlTicks(String(sequence(sequenceId, projectPath).getPlayerPosition().ticks)) !== sampleTimeline) throw nativeReadMoved('The playhead moved while reading caption line fit. Read it again.');
         var connectionRevision = { locator: locator, timing: timing, components: names, documentIndex: documentIndex, selected: selected, lineFitWidth: result.lineFitWidth, lineFitFontScale: result.lineFitFontScale, lineFitStates: result.lineFitStates };
         // Premiere Undo/Redo of a transcript or style edit only changes the document text. Fingerprint it on
         // every poll so the panel re-reads and follows that change within one poll instead of its 30 s refresh.
@@ -1823,6 +1829,7 @@ var BetterCaptionsHost = (function () {
                             if (textBudget > 25165824) throw new Error('Native caption documents exceed the aggregate discovery budget.');
                             nativeEntries.push(discovered);
                         } catch (nativeError) {
+                            if (nativeError && nativeError.code === 'BC_NATIVE_STALE') throw nativeError;
                             if (warnings.length < 64) warnings.push('Native caption at video track ' + (t + 1) + ', clip ' + (c + 1) + ' could not be verified.');
                         }
                     }
@@ -1834,7 +1841,7 @@ var BetterCaptionsHost = (function () {
             var response = reply({ ok: true, version: 1, readOnly: true, projectPath: String(app.project.path), sequenceId: p.sequenceId, nativeSequenceId: String(s.sequenceID), playhead: seconds, playheadTicks: ticks, selectedClipNodeIds: selected, "native": nativeEntries, legacy: legacy, warnings: warnings, undoIndex: nativeUndoIndex() });
             if (response.length > 29360128) throw new Error('Caption connection response exceeds the bounded transport size.');
             return response;
-        } catch (e) { return reply({ error: e.toString() }); }
+        } catch (e) { return reply(readFailure(e)); }
     }
     // Geometry lives on the owned native effect, independently of BCDOC.
     // Premiere ComponentParam keys are clip-source times, matching Motion's
@@ -1995,12 +2002,12 @@ var BetterCaptionsHost = (function () {
         for (var bp = 0; bp < nativeBoundaryNames.length; bp++) if (descriptors[nativeBoundaryNames[bp]]) receipt[nativeBoundaryNames[bp]] = descriptors[nativeBoundaryNames[bp]];
         receipt.revision = stringify({ documentRevision: snapshot.revision, timelineTicks: at, controls: descriptors });
         var sampledSequence = nativeControlSequence(p);
-        if (nativeControlTicks(String(sampledSequence.getPlayerPosition().ticks)) !== at) throw new Error('The playhead moved while reading native caption controls. Read them again.');
+        if (nativeControlTicks(String(sampledSequence.getPlayerPosition().ticks)) !== at) throw nativeReadMoved('The playhead moved while reading native caption controls. Read them again.');
         return { receipt: receipt, params: params, indices: indices, propertyTable: table, track: track, clip: clip, record: before.record };
     }
     function readNativeCaptionControls(file) {
         try { return reply(nativeControlContext(readPayload(file)).receipt); }
-        catch (e) { return reply({ error: e.toString() }); }
+        catch (e) { return reply(readFailure(e)); }
     }
     function nativeControlCurves(receipt) {
         var result = {}, names = ['position', 'width', 'height', 'groups', 'alignment'].concat(nativeRollUpNames, nativeBoundaryNames);

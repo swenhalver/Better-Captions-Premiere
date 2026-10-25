@@ -163,6 +163,7 @@ function createHostAPI(options = {}) {
           if (typeof response.error === 'string') {
             const failure = new Error(response.error);
             if (response.code === 'BC_OUTPUT_UNCONFIRMED' && response.recoverable === false && typeof response.outputApplied === 'boolean') Object.assign(failure, {code:response.code,method:active?.method,recoverable:false,operationPending:false,outputApplied:response.outputApplied});
+            if (response.code === 'BC_NATIVE_STALE' && response.recoverable === true && SERVICE_READS.has(action)) Object.assign(failure, {code:response.code,method:active?.method,recoverable:true,operationPending:false});
             throw failure;
           }
           if (!SERVICE_READS.has(action)) await sequenceContext(context.id);
