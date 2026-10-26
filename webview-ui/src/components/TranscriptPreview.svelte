@@ -550,9 +550,13 @@
   // saving (its text may have just changed) and by its exact words after
   // writing, so a regroup or Undo meanwhile deletes nothing else. Like Add
   // line, typing in another line starts only once Delete line is confirmed.
-  async function deleteLine() {
-    if (disabled || !selectedRow || selectedPause || deletingLine || selectedRow.end <= selectedRow.start) return;
-    const sequence = sequenceId, layer = nativeLayerKey, span = rowCaption(selectedRow);
+  // A row's own trash button passes that row; another selected line or pause
+  // then stays selected.
+  async function deleteLine(target?: SentenceRow) {
+    const row = target ?? (selectedPause ? undefined : selectedRow);
+    if (disabled || !row || deletingLine || row.end <= row.start) return;
+    const elsewhere = !!target && (!!selectedPause || selectedRow?.key !== target.key);
+    const sequence = sequenceId, layer = nativeLayerKey, span = rowCaption(row);
     const identity = (row: SentenceRow) => JSON.stringify(transcriptWords(captions).slice(row.start, row.end).map(word => [word.text, word.startTime, word.endTime]));
     deletingLine = true;
     try {
@@ -564,10 +568,27 @@
       if (disabled) return;
       const current = sentenceRows.find(row => row.end > row.start && identity(row) === words);
       if (!current || sequenceId !== sequence || nativeLayerKey !== layer) throw new Error('This line changed. Select it again.');
+      const kept = elsewhere && !selectedPause && selectedRow && selectedRow.end > selectedRow.start ? identity(selectedRow) : null;
+      // A selected pause's key holds its next word's index, which the delete
+      // can shift; it is found again by that word's time and its slot.
+      const keptPause = elsewhere && selectedPause ? { time: transcriptWords(captions)[selectedPause.nextWordIndex]?.startTime, slot: selectedPause.index } : null;
       const next = deleteTranscriptLine(captions, current, pauseLineSettings ? source => derivePauseLines(source, pauseLineSettings!) : undefined);
       if (!commit(next, 'Line deleted.', 'Delete line')) return;
       if (typing) awaitLineAdded(typing.settle());
       await tick();
+      if (elsewhere) {
+        if (keptPause) {
+          const nextWordIndex = transcriptWords(captions).findIndex(word => word.startTime === keptPause.time);
+          selectedPauseKey = pauseRows.find(row => row.nextWordIndex === nextWordIndex && row.index === keptPause.slot)?.key ?? null;
+          return;
+        }
+        const still = kept ? sentenceRows.find(row => row.end > row.start && identity(row) === kept) : undefined;
+        if (!still) return;
+        selectedRowKey = still.key;
+        onSelect(still.caption.id);
+        onSelectWord(still.start - captionWordOffset(captions, still.caption.id));
+        return;
+      }
       // The next line takes its place, or else the line before it.
       const neighbour = sentenceRows.find(row => row.end > row.start && row.start >= current.start) ?? sentenceRows.filter(row => row.end > row.start).at(-1);
       selectedPauseKey = null;
@@ -681,7 +702,7 @@
                   <button class="transcript-editor__pause-select" aria-label="Seek to pause line {number}" onclick={() => choosePause(pause)}><span class="transcript-editor__cue-time">{formatTime(pause.startTime)}<span aria-hidden="true">—</span>{formatTime(pause.endTime)}</span></button>
                   <button class="transcript-editor__cue-text" aria-label="Add text to pause line {number}" title="Type text into this pause" disabled={disabled} onclick={() => beginPauseEdit(pause)}>Pause</button>
                 </div>
-                <button type="button" class="transcript-editor__pause-delete" aria-label="Delete pause line {number}" title="Delete pause line" disabled={disabled} onclick={() => deletePause(pause)}>Delete</button>
+                <button type="button" class="transcript-editor__cue-delete" aria-label="Delete pause line {number}" title="Delete pause line (Undo brings it back)" onpointerdown={(event) => event.preventDefault()} disabled={disabled} onclick={() => deletePause(pause)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
               </div>
             {:else}
             {@const row = entry.line}
@@ -706,6 +727,7 @@
                   <button class="transcript-editor__cue-text" aria-label="Edit line {number} text" onclick={(event) => beginTextEdit(row,event)} disabled={disabled}>{#if blank}<span aria-hidden="true">&nbsp;</span>{:else if row.segment}{row.segment.text}{:else if row.caption.renderSegments}{#each row.caption.renderSegments as group (group.id)}<span class="transcript-editor__cue-phrase">{group.text}</span>{/each}{:else}{row.caption.text}{/if}</button>
                 {/if}
               </div>
+              <button type="button" class="transcript-editor__cue-delete" aria-label="Delete line {number}" title="Delete line (Undo brings it back)" onpointerdown={(event) => event.preventDefault()} disabled={disabled || deletingLine || row.end <= row.start} onclick={() => deleteLine(row)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
             </div>
             {/if}
           {:else}<p class="transcript-editor__empty">No lines match “{query}”. Clear the search to see all lines.</p>{/each}
@@ -718,8 +740,7 @@
           <WordTimeline caption={selected} fps={frameRate} {currentTime} selectedWord={Math.max(0, selectedWord-selectedWordOffset)} onSelectWord={(index) => onSelectWord(index+selectedWordOffset)} onSeek={onSeek} onChange={(caption) => updateCaption(caption,"Word timing saved.")}
             wordOffset={selectedWordOffset} focusStart={selectedLane?.focusStart} focusEnd={selectedLane?.focusEnd} onSplitBefore={splitCaption} {caretSplitIndex} splitDisabled={disabled}
             onMergeNext={mergeNext} mergeDisabled={disabled || !hasNextLine} mergeTitle="Merge with the next line"
-            onAddLine={addLine} addLineDisabled={disabled} addLineProblems={newLineProblems}
-            onDeleteLine={deleteLine} deleteLineDisabled={disabled || deletingLine} />
+            onAddLine={addLine} addLineDisabled={disabled} addLineProblems={newLineProblems} />
           {#if error}<p class="caption-message caption-message--error" role="alert">{error}</p>{/if}
           {#if notice}<p class="caption-message" role="status">{notice}</p>{/if}
           {#if selected.timingEstimated}<p class="transcript-editor__estimated">Word timings are estimated. Review them in the word lane.</p>{/if}
@@ -762,7 +783,7 @@
   .transcript-editor__cue-select { flex-shrink: 0; background: transparent; border: 0; padding: 0; min-inline-size: 1.5rem; min-block-size: 2rem; text-align: start; cursor: pointer; }
   .transcript-editor__cue--pause { color: var(--color-panel-secondary); }
   .transcript-editor__pause-select { background: transparent; border: 0; padding: 0; color: inherit; text-align: start; cursor: pointer; }
-  .transcript-editor__pause-delete { align-self: center; padding: var(--caption-space-xs) var(--caption-space-s); background: transparent; color: var(--color-panel-secondary); border: 1px solid var(--color-panel-border); border-radius: var(--caption-radius); font-size: var(--caption-type-xs); cursor: pointer; &:hover { color: var(--color-panel-text); background: var(--color-surface-raised); } &:disabled { opacity: .5; cursor: default; } }
+  .transcript-editor__cue-delete { flex-shrink: 0; align-self: center; display: grid; place-items: center; inline-size: 2rem; block-size: 2rem; padding: .25rem; background: transparent; color: var(--color-panel-secondary); border: 1px solid transparent; border-radius: var(--caption-radius); cursor: pointer; & svg { inline-size: 1.15rem; block-size: 1.15rem; } &:hover:enabled { color: var(--color-panel-text); border-color: var(--color-panel-border); background: var(--color-surface-raised); } &:disabled { opacity: .45; cursor: default; } }
   .transcript-editor__pause-description { margin: 0; font-size: var(--caption-type-s); color: var(--color-panel-secondary); }
   .transcript-editor__cue-body { flex: 1; min-inline-size: 0; }
   .transcript-editor__cue-time { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; font-variant-numeric: tabular-nums; color: var(--color-panel-secondary); font-size: var(--caption-type-xs); margin-block-end: .3rem; }

@@ -8,12 +8,12 @@
     /** Adds a line above ('before') or below ('after'); a problem string explains why that side has no room. */
     onAddLine?: (side: 'before' | 'after') => void; addLineDisabled?: boolean; addLineProblems?: { before: string; after: string } | null;
     /** Removes the selected line and its words (clearing its text leaves a blank line instead). */
-    onDeleteLine?: () => void; deleteLineDisabled?: boolean;
+   
     /** Words outside this range belong to the neighbouring lines and are shown for retiming across the line ending. */
     focusStart?: number; focusEnd?: number;
   }
   let { caption, fps, currentTime, selectedWord = 0, onSelectWord = () => {}, onChange, onSeek,
-    wordOffset = 0, onSplitBefore, splitDisabled = false, splitTitle, caretSplitIndex = null, onMergeNext, mergeDisabled = false, mergeTitle, onAddLine, addLineDisabled = false, addLineProblems = null, onDeleteLine, deleteLineDisabled = false, focusStart = 0, focusEnd = Infinity }: Props = $props();
+    wordOffset = 0, onSplitBefore, splitDisabled = false, splitTitle, caretSplitIndex = null, onMergeNext, mergeDisabled = false, mergeTitle, onAddLine, addLineDisabled = false, addLineProblems = null, focusStart = 0, focusEnd = Infinity }: Props = $props();
   let zoom = $state<number | 'fit'>('fit'), problem = $state(''), draft = $state<CaptionItem | null>(null);
   let lane: HTMLDivElement;
   let cleanupDrag: (() => void) | undefined;
@@ -149,7 +149,6 @@
     {#if onAddLine && addLineProblems}{#each addLines as add (add.side)}{@const problem = addLineProblems[add.side]}
       <button class="word-timing__action" aria-label={add.label} title={problem || `${add.label} (Enter at the ${add.side === 'before' ? 'start' : 'end'} of the text)`} onpointerdown={(event) => event.preventDefault()} disabled={addLineDisabled || !!problem} onclick={() => onAddLine(add.side)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d={add.icon}/></svg></button>
     {/each}{/if}
-    {#if onDeleteLine}<button class="word-timing__action" aria-label="Delete line" title="Delete line and its words (Undo brings it back)" onpointerdown={(event) => event.preventDefault()} disabled={deleteLineDisabled} onclick={() => onDeleteLine()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>{/if}
     <label>Zoom <select aria-label="Word timeline zoom" bind:value={zoom}><option value="fit">Fit content</option><option value={1}>100%</option><option value={1.5}>150%</option><option value={2}>200%</option><option value={3}>300%</option><option value={4}>400%</option></select></label>
   </div></div>
   <div class="word-timing__scroll" role="region" aria-label="Word timeline; scroll horizontally" use:wheelZoom>

@@ -1394,13 +1394,15 @@ test('the last remaining line can be deleted, leaving an empty transcript for on
   assert.match(empty, /No lines left/); assert.match(empty, /Undo in Premiere brings them back/);
   assert.match(render(TranscriptPreview, { props: transcriptProps([]) }).body, /Ready for your first words/);
 });
-test('the selected words toolbar offers Delete line for text and blank lines, and disabled editing refuses it', async () => {
-  const button = html => html.match(/<button[^>]*aria-label="Delete line"[^>]*>/)?.[0];
+test('every text and blank line row has its own Delete line button, the words toolbar has none, and disabled editing refuses it', async () => {
+  const button = (html, number) => html.match(new RegExp(`<button[^>]*aria-label="Delete line ${number}"[^>]*>`))?.[0];
   const captions = threeLines();
-  assert.doesNotMatch(button(render(TranscriptPreview, { props: transcriptProps(captions) }).body), /disabled/);
+  const html = render(TranscriptPreview, { props: transcriptProps(captions) }).body;
+  for (const number of [1,2,3]) assert.doesNotMatch(button(html, number), /disabled/);
+  assert.doesNotMatch(html, /aria-label="Delete line"/);
   const blank = clone(captions); blank[1].text = ''; blank[1].words = [{ text: '', startTime: 4, endTime: 5, lineBreakBefore: 'break' }];
-  assert.ok(button(render(TranscriptPreview, { props: { ...transcriptProps(blank), selectedId: 'middle' } }).body));
-  assert.match(button(render(TranscriptPreview, { props: { ...transcriptProps(captions), disabled: true } }).body), /disabled/);
+  assert.ok(button(render(TranscriptPreview, { props: transcriptProps(blank) }).body, 2));
+  assert.match(button(render(TranscriptPreview, { props: { ...transcriptProps(captions), disabled: true } }).body, 1), /disabled/);
   const h = transcriptController(captions, 24, { disabled: true });
   await h.deleteLine(); assert.equal(h.changes.length, 0);
 });
