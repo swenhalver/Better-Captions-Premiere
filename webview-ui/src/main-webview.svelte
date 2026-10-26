@@ -950,11 +950,63 @@
     try { await exportButton.apply({ captionIds: [context.captionId], automatic: true }); await flushSave(); }
     finally { automaticReflow = false; automaticOutput = false; }
   }
+  // One bounded, read-only sample for the existing agent get_state transport.
+  // No observers, retained DOM nodes, focus/selection changes or scroll writes.
+  function uiViewportSnapshot() {
+    const list = document.querySelector<HTMLElement>('.transcript-editor__list');
+    const outer = document.querySelector<HTMLElement>('.caption-app__content');
+    const editor = list?.querySelector<HTMLTextAreaElement>('.transcript-editor__cue-input') ?? null;
+    const editedRow = editor?.closest<HTMLElement>('[data-row-key]') ?? null;
+    const selectedRow = list?.querySelector<HTMLElement>('.transcript-editor__cue--selected') ?? null;
+    const active = document.activeElement;
+    const listRect = list?.getBoundingClientRect();
+    const bounded = (value: string | null | undefined) => value == null ? null : value.slice(0, 160);
+    function scrollBox(node: HTMLElement | null) {
+      if (!node) return null;
+      const rect = node.getBoundingClientRect();
+      return {
+        scrollTop: node.scrollTop, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight,
+        maxScrollTop: Math.max(0, node.scrollHeight - node.clientHeight),
+        top: rect.top, height: rect.height, width: rect.width,
+        overflowAnchor: getComputedStyle(node).getPropertyValue('overflow-anchor'),
+      };
+    }
+    function rowBox(node: Element | null) {
+      if (!node || !list || !listRect) return null;
+      const rect = node.getBoundingClientRect();
+      const topInListViewport = rect.top - listRect.top - list.clientTop;
+      return {
+        key: bounded(node.getAttribute('data-row-key')), captionId: bounded(node.getAttribute('data-caption-id')),
+        top: rect.top, topInListViewport, topInListContent: topInListViewport + list.scrollTop, height: rect.height,
+      };
+    }
+    function inputState(node: Element | null) {
+      if (!node) return null;
+      const input = node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement ? node : null;
+      return {
+        tag: node.tagName, type: input?.type ?? null, ariaLabel: bounded(node.getAttribute('aria-label')),
+        rowKey: bounded(node.closest('[data-row-key]')?.getAttribute('data-row-key')),
+        selectionStart: input?.selectionStart ?? null, selectionEnd: input?.selectionEnd ?? null,
+        selectionDirection: input?.selectionDirection ?? null, valueLength: input?.value.length ?? null,
+      };
+    }
+    const pending = editedRow?.querySelector<HTMLElement>('.transcript-editor__text-pending') ?? null;
+    return {
+      sampledAt: Date.now(), activeTab, documentHasFocus: document.hasFocus(),
+      userAgent: bounded(navigator.userAgent), overflowAnchorSupported: typeof CSS !== 'undefined' && CSS.supports('overflow-anchor', 'none'),
+      list: scrollBox(list), outer: scrollBox(outer),
+      selectedRow: rowBox(selectedRow), editedRow: rowBox(editedRow),
+      previousEditedRow: rowBox(editedRow?.previousElementSibling ?? null),
+      activeElement: inputState(active), editor: editor ? { ...inputState(editor), focused: active === editor, height: editor.getBoundingClientRect().height } : null,
+      pending: pending ? { text: bounded(pending.textContent), height: pending.getBoundingClientRect().height, visibility: getComputedStyle(pending).visibility } : null,
+    };
+  }
   function runtimeState() {
     const session = sessionManager.current, caption = session?.captions.find(item => item.id === selectedId);
     return {
       reflow: { phase: reflowStatus.phase, message: reflowStatus.message.slice(0, 1000), pauseReason: motionPauseReason(), watcher: motionWatcher?.diagnostics() ?? null },
       visibility: { hostPanelVisible, documentHidden: document.hidden, documentVisibilityState: document.visibilityState },
+      uiViewport: uiViewportSnapshot(),
       fonts: { count: fonts.length, loading: fontsLoading, error: fontsError },
       selectedId, nativeSelection: nativeSelection ? { ...nativeSelection } : null,
       liveOutput: { ...liveStatus, ...liveOutput?.diagnostics(), nativeAvailable },

@@ -1220,3 +1220,20 @@ test('choosing, adding or splitting to another line still brings it into view', 
   assert.equal(h.inspect().selectedLine.start, h.inspect().rows.at(-1).start, 'Add line selects the new last line');
   assert.equal(list.scrollTop, (h.inspect().allRows.length) * 40 - 120, 'The new line scrolls into view');
 });
+
+test('the open line editor keeps the row height while Unsaved comes and goes and when it closes', () => {
+  const markup = sources.TranscriptPreview.split('</script>')[1], css = markup.split('<style>')[1];
+  // Unsaved lives on the timestamp line, which every text row has, never under the text.
+  const time = markup.match(/<div class="transcript-editor__cue-time">([\s\S]*?)<\/div>/)[1];
+  assert.match(time, /\{#if editingRowKey === row\.key\}<span class="transcript-editor__text-pending" role="status">\{[^}]*'Unsaved' : ''\}<\/span>\{\/if\}/);
+  const underEditor = markup.match(/<\/textarea>([\s\S]*?)\{:else\}/)[1];
+  assert.doesNotMatch(underEditor, /text-pending|Unsaved/, 'Nothing transient sits under the text while it is being typed');
+  assert.match(underEditor.trim(), /^\{#if editingError\}<p [^>]*>\{editingError\}<\/p>\{\/if\}$/);
+  assert.match(css, /\.transcript-editor__text-pending \{[^}]*white-space: nowrap/);
+  // The editor and the text it replaces lay out alike, so opening or closing it keeps the row height.
+  const rule = name => css.match(new RegExp(`\\.transcript-editor__${name} \\{([^}]*)`))[1];
+  for (const property of ['font-size', 'line-height', 'overflow-wrap']) {
+    const value = text => text.match(new RegExp(`(?:^|;)\\s*${property}: ([^;]+)`))?.[1];
+    assert.equal(value(rule('cue-input')), value(rule('cue-text')), property);
+  }
+});
