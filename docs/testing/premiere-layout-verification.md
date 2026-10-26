@@ -39,8 +39,11 @@ was intact, and the S-Space release code does not resize windows.
 
    Require exit 0 and `pass: true`. Inspect the screenshot as well: S-Captions
    around 31%, Program around 46%, right column around 22%, top row around half
-   height, Styling toolbar on one row and controls in two columns. These bounds
-   follow the checked-in full-window reference. A user-requested new layout
+   height and controls in two columns when space permits. Responsive wrapping
+   at narrower display widths is accepted (Swen, 2026-10-26: "wrapping is fine").
+   Preserve saved pane proportions rather than widening panes or changing
+   display settings to force a single row. These bounds follow the checked-in
+   full-window reference. A user-requested new layout
    takes precedence; do not overwrite their change to make this checker pass.
 3. Perform the actual feature tests, preserving the project and audio. After
    a real sibling-panel/focus round trip, return to S-Captions and check a new
