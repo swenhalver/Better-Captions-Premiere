@@ -64,9 +64,9 @@ After each change to the plugin, reinstall it into Premiere without being asked.
    bash native/adobe/build-macos.sh && bash native/adobe/install-user-macos.sh
    ```
 
-## Commit every change
+## Commit and push every change
 
-Commit every change without being asked (Swen, 2026-10-23: "you're supposed to be committing every change"). Once a build is installed, commit it on the current branch. Commit it even if its live test is still pending, because the next change shouldn't pile onto uncommitted work. The commit includes the code, tests and its `docs/release-<version>.md`, with a message naming the version and what changed. Never push unless Swen asks. When several agents share the checkout, the agent that owns the install makes the commit. Agents working in their own worktree commit on their own branch, and the install owner merges.
+Commit every change without being asked (Swen, 2026-10-23: "you're supposed to be committing every change"). Once a build is installed, commit it on the current branch. Commit it even if its live test is still pending, because the next change shouldn't pile onto uncommitted work. The commit includes the code, tests and its `docs/release-<version>.md`, with a message naming the version and what changed. Always push completed commits to the current branch's remote without asking (Swen, 2026-10-26: "also always push"). When several agents share the checkout, the agent that owns the install makes the commit and coordinates the push. Agents working in their own worktree commit on their own branch, and the install owner merges and pushes.
 
 ## Codex does the testing
 
