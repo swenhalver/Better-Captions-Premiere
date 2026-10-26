@@ -88,8 +88,9 @@ export function transcriptLineLane(captions: CaptionItem[], line: TranscriptLine
  * Storage envelopes follow moved words; they impose no extra timing boundary. */
 export function replaceTranscriptWords(captions: CaptionItem[], start: number, end: number, replacement: CaptionWord[], timingEstimated?: boolean): CaptionItem[] {
   const all = transcriptWords(captions);
-  // An empty range (start === end) inserts the replacement before word `start`.
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > all.length || !replacement.length) throw new Error('Select the line again.');
+  // An empty range (start === end) inserts the replacement before word `start`;
+  // an empty replacement removes the range, dropping containers left empty.
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > all.length || !replacement.length && (start === end || end - start === all.length)) throw new Error('Select the line again.');
   // Validate actual speech first, so overlap errors do not depend on storage.
   const words = [...all.slice(0, start), ...replacement, ...all.slice(end)];
   validateCaptions([{ id: 'transcript', text: words.map(word => word.text).join(' '), words, timelineFloor: captions[0].timelineFloor,
@@ -171,6 +172,48 @@ export function replaceTranscriptLine(captions: CaptionItem[], line: TranscriptL
   }
   insert(line.key);
   return withTranscriptLines(result, ranges);
+}
+
+/** Delete one displayed line: its words, or a blank line's empty word, across
+ * any storage containers. Nothing is retimed; the time it took becomes silence.
+ * Between two remaining lines, the next line starts with a manual break (unless
+ * either side is blank), so the line before can never regroup into it.
+ * The two gaps around the line become one, counted by the next line's
+ * pauseLinesRemoved. Given `pauseRows` (the current pause settings), it hides
+ * as many rows as keep the merged gap from showing more pause rows than both
+ * gaps showed together, so the deleted line never comes back as pause rows.
+ * The merged gap is still one gap under the Visible lines cap: if the two gaps
+ * together showed more rows than that cap, it shows fewer, and those rows go.
+ * Below the cap the hidden count is at least the two gaps' earlier removals
+ * together (floor((a+d+b)/c) >= floor(a/c)+floor(b/c)), so explicit pause
+ * deletions are kept. Without settings, the merged gap keeps the sum of both removals.
+ * Every other word keeps its text, times and markers. The only line leaves []. */
+export function deleteTranscriptLine(captions: CaptionItem[], line: { start: number; end: number }, pauseRows?: (captions: CaptionItem[]) => { nextWordIndex: number }[]): CaptionItem[] {
+  const rows = transcriptLines(captions), all = transcriptWords(captions);
+  const index = rows.findIndex(row => row.start === line.start && row.end === line.end);
+  if (index < 0 || line.end <= line.start) throw new Error('Select the line again.');
+  if (line.end - line.start === all.length) return [];
+  const count = line.end - line.start, next = rows[index + 1];
+  const ranges = rows.filter(row => row !== rows[index]).map(row => ({ key: row.segment?.id ?? row.key,
+    start: row.start >= line.end ? row.start - count : row.start, end: row.start >= line.end ? row.end - count : row.end }));
+  let result = withTranscriptLines(replaceTranscriptWords(captions, line.start, line.end, []), ranges);
+  if (!index || !next) return result;
+  const following = all[line.end], update = (change: (word: CaptionWord) => CaptionWord) => {
+    let offset = 0;
+    result = withTranscriptLines(result.map(caption => { const first = offset; offset += caption.words.length;
+      return line.start < first || line.start >= offset ? caption : { ...caption, words: caption.words.map((word, at) => first + at === line.start ? change(word) : word) }; }), ranges);
+  };
+  if (following.lineBreakBefore !== 'break' && following.text && all[line.start - 1].text) update(word => ({ ...word, lineBreakBefore: 'break' }));
+  if (!pauseRows) {
+    const removed = Math.min(8, (all[line.start].pauseLinesRemoved ?? 0) + (following.pauseLinesRemoved ?? 0));
+    if (removed !== (following.pauseLinesRemoved ?? 0)) update(word => ({ ...word, pauseLinesRemoved: removed }));
+    return result;
+  }
+  const shown = pauseRows(captions).filter(pause => pause.nextWordIndex === line.start || pause.nextWordIndex === line.end).length;
+  update(word => { const { pauseLinesRemoved: _removed, ...rest } = word; return rest; });
+  const hidden = pauseRows(result).filter(pause => pause.nextWordIndex === line.start).length - shown;
+  if (hidden > 0) update(word => ({ ...word, pauseLinesRemoved: hidden }));
+  return result;
 }
 
 /** Where a new line goes at a boundary: right after the line above ('after'),

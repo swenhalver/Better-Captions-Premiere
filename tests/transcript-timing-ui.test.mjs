@@ -131,7 +131,7 @@ function transcriptController(captions = [cue()], fps = 24, options = {}) {
   const changes = [], selections = [], seeks = [], labels = [];
   h = controller('TranscriptPreview', { ...transcriptProps(captions), ...options, frameRate: fps,
     onUpdate: (value, label) => { changes.push(clone(value)); labels.push(label); h.setCaptions(value); }, onSelect: value => { selections.push(value); h.setSelectedId(value); }, onSeek: value => seeks.push(value) }, `
-    export { addLine, wordBoundaryAtCaret, trackTextCaret, changeCharacterLimit, beginTextEdit, saveInlineText, cancelTextEdit, textKeydown, textCaretOffset, focusTextEditor, beginTimingEdit, inputCaptionTime, saveInlineTiming, cancelTimingEdit, timingBlur, timingKeydown, timingRange, updateCaption, splitCaption, mergeNext, choose };
+    export { addLine, deleteLine, wordBoundaryAtCaret, trackTextCaret, changeCharacterLimit, beginTextEdit, saveInlineText, cancelTextEdit, textKeydown, textCaretOffset, focusTextEditor, beginTimingEdit, inputCaptionTime, saveInlineTiming, cancelTimingEdit, timingBlur, timingKeydown, timingRange, updateCaption, splitCaption, mergeNext, choose };
     export function setCaptions(value) { captions = value; }
     export function setSelectedId(value) { selectedId = value; }
     export function setDraft(value) { draftText = value; }
@@ -142,7 +142,7 @@ function transcriptController(captions = [cue()], fps = 24, options = {}) {
     export function setPauseSettings(value) { pauseSettings = value; }
     export function setSequenceId(value) { sequenceId = value; }
     export function setNativeLayerKey(value) { nativeLayerKey = value; }
-    export function inspect() { return { newLineOptions, rows: sentenceRows, allRows: transcriptRows, filteredRows, pauses: pauseRows, selectedPause, selectedLane, sentenceCount, captions, editingRowKey, editingError, editingCaret, caretSplitIndex, timingRowKey, timingError, draftStart, draftEnd, selectedWordOffset, selectedLine: selectedRow, error, draftText }; }
+    export function inspect() { return { newLineOptions, rows: sentenceRows, allRows: transcriptRows, filteredRows, pauses: pauseRows, selectedPause, selectedLane, sentenceCount, captions, editingRowKey, editingError, editingCaret, caretSplitIndex, timingRowKey, timingError, draftStart, draftEnd, selectedWordOffset, selectedLine: selectedRow, error, notice, draftText }; }
   `);
   return { ...h, changes, selections, seeks, labels };
 }
@@ -1318,5 +1318,167 @@ test('the open line editor keeps the row height while Unsaved comes and goes and
   for (const property of ['font-size', 'line-height', 'overflow-wrap']) {
     const value = text => text.match(new RegExp(`(?:^|;)\\s*${property}: ([^;]+)`))?.[1];
     assert.equal(value(rule('cue-input')), value(rule('cue-text')), property);
+  }
+});
+
+// Delete line removes the selected line and its words as one "Delete line"
+// step, after open editors and pending edits are written as steps of their own.
+function threeLines() {
+  const [first, last] = pauseFixture(), middle = unlinked(cue());
+  middle.id = 'middle'; middle.text = 'four five'; middle.startTime = 4; middle.endTime = 5;
+  middle.words = [{ text: 'four', startTime: 4, endTime: 4.5, lineBreakBefore: 'break' }, { text: 'five', startTime: 4.5, endTime: 5 }];
+  return [first, middle, last];
+}
+const rowTexts = h => h.inspect().rows.map(row => lines.transcriptLineCaption(h.inspect().captions, row).text);
+test('Delete line publishes one Delete line edit, keeps the gap’s pause rows and selects the next line without seeking', async () => {
+  const settings = { blankLineSeconds: 1, visibleLines: 8 }, original = threeLines(), h = transcriptController(original, 24, { pauseSettings: settings });
+  assert.equal(h.inspect().pauses.length, 1 + 3);
+  h.choose(h.inspect().rows[1]);
+  const seeks = h.seeks.length;
+  await h.deleteLine();
+  assert.equal(h.changes.length, 1); assert.deepEqual(h.labels, ['Delete line']);
+  assert.deepEqual(rowTexts(h), ['one two three', 'one two three']);
+  assert.equal(h.inspect().pauses.length, 4, 'the deleted line’s second is not a new pause row');
+  assert.deepEqual(h.changes[0].map(caption => caption.id), ['cue', 'next'], 'the emptied container goes');
+  assert.deepEqual(h.changes[0][0].words, original[0].words); assert.deepEqual(h.changes[0][1].words.slice(1), original[2].words.slice(1));
+  assert.equal(h.inspect().selectedLine.key, h.inspect().rows[1].key); assert.equal(h.selections.at(-1), 'next');
+  assert.equal(h.seeks.length, seeks, 'the playhead stays');
+  assert.equal(h.inspect().notice, 'Line deleted.');
+});
+test('Delete line on a blank line removes the row instead of leaving it blank', async () => {
+  const h = transcriptController(threeLines(), 24);
+  h.choose(h.inspect().rows[1]);
+  h.beginTextEdit(h.inspect().rows[1]); h.setDraft('');
+  assert.equal(h.saveInlineText(h.inspect().rows[1]), true);
+  assert.deepEqual(rowTexts(h), ['one two three', '', 'one two three'], 'clearing text keeps a timed blank line');
+  h.choose(h.inspect().rows[1]);
+  await h.deleteLine();
+  assert.deepEqual(h.labels, ['Edit transcript', 'Delete line']);
+  assert.deepEqual(rowTexts(h), ['one two three', 'one two three']);
+  assert.ok(lines.transcriptWords(h.inspect().captions).every(word => word.text));
+});
+test('Delete line finishes native typing first, then deletes the line as typed once Premiere confirmed it', async () => {
+  let finish;
+  const calls = [], typing = { open() {}, input() {}, flush() {}, hint() {}, settle: async () => { calls.push('settle'); return true; },
+    end: mode => { calls.push(mode); return new Promise(resolve => { finish = resolve; }); } };
+  const h = transcriptController(threeLines(), 24, { typing });
+  h.choose(h.inspect().rows[1]); h.beginTextEdit(h.inspect().rows[1]);
+  const deletion = h.deleteLine();
+  assert.deepEqual(calls, ['commit']); assert.equal(h.changes.length, 0, 'nothing is deleted while typing is merged');
+  // Premiere confirms the typed text (as its own step) while the deletion waits.
+  const typed = lines.replaceTranscriptLine(h.inspect().captions, h.inspect().rows[1], edit.replaceText(lines.transcriptLineCaption(h.inspect().captions, h.inspect().rows[1]), 'four six'));
+  h.setCaptions(typed); finish(); await deletion;
+  assert.deepEqual(calls, ['commit', 'settle', 'settle'], 'pending edits, then Delete line itself, are confirmed as steps of their own');
+  assert.deepEqual(h.labels, ['Delete line']);
+  assert.deepEqual(rowTexts(h), ['one two three', 'one two three']);
+  assert.equal(h.inspect().editingRowKey, null);
+});
+test('a line changed by Premiere while pending edits are written is not deleted, nor is any other line', async () => {
+  let h;
+  const typing = { open() {}, input() {}, flush() {}, hint() {}, end: async () => {},
+    // A Premiere Undo arrives while settling: the line comes back retimed.
+    settle: async () => { const captions = clone(h.inspect().captions); captions[1].words[1].endTime = 4.9; h.setCaptions(captions); return true; } };
+  h = transcriptController(threeLines(), 24, { typing });
+  h.choose(h.inspect().rows[1]);
+  await h.deleteLine();
+  assert.equal(h.changes.length, 0); assert.match(h.inspect().error, /This line changed/);
+  assert.equal(h.inspect().rows.length, 3);
+});
+test('the last remaining line can be deleted, leaving an empty transcript for one Delete line step', async () => {
+  const h = transcriptController([unlinked(cue())], 24);
+  h.choose(h.inspect().rows[0]);
+  await h.deleteLine();
+  assert.deepEqual(h.changes, [[]]); assert.deepEqual(h.labels, ['Delete line']);
+  assert.equal(h.inspect().selectedLine, undefined); assert.equal(h.inspect().error, '');
+  const empty = render(TranscriptPreview, { props: { ...transcriptProps([]), nativeLayerKey: 'layer' } }).body;
+  assert.match(empty, /No lines left/); assert.match(empty, /Undo in Premiere brings them back/);
+  assert.match(render(TranscriptPreview, { props: transcriptProps([]) }).body, /Ready for your first words/);
+});
+test('the selected words toolbar offers Delete line for text and blank lines, and disabled editing refuses it', async () => {
+  const button = html => html.match(/<button[^>]*aria-label="Delete line"[^>]*>/)?.[0];
+  const captions = threeLines();
+  assert.doesNotMatch(button(render(TranscriptPreview, { props: transcriptProps(captions) }).body), /disabled/);
+  const blank = clone(captions); blank[1].text = ''; blank[1].words = [{ text: '', startTime: 4, endTime: 5, lineBreakBefore: 'break' }];
+  assert.ok(button(render(TranscriptPreview, { props: { ...transcriptProps(blank), selectedId: 'middle' } }).body));
+  assert.match(button(render(TranscriptPreview, { props: { ...transcriptProps(captions), disabled: true } }).body), /disabled/);
+  const h = transcriptController(captions, 24, { disabled: true });
+  await h.deleteLine(); assert.equal(h.changes.length, 0);
+});
+
+// On a native layer, Delete line is confirmed as its own Undo step before
+// anything else: edits before it must be confirmed first, and typing in another
+// line starts only once Premiere confirms the deletion.
+function deleteLineFixture(first = true) {
+  const calls = [], holds = [];
+  const typing = { open: (anchor, captions, text) => calls.push(['open', anchor.start, text]), input: draft => calls.push(['input', draft]),
+    flush() {}, hint() {}, end: async mode => { calls.push(['end', mode]); },
+    // Pending edits before the deletion settle as `first`; the Delete line write is held.
+    settle: () => { calls.push(['settle']); return calls.filter(call => call[0] === 'settle').length % 2 ? Promise.resolve(first) : new Promise(resolve => holds.push(resolve)); } };
+  const h = transcriptController(threeLines(), 24, { typing });
+  h.choose(h.inspect().rows[1]);
+  return { h, calls, holds, settled: () => new Promise(resolve => setImmediate(resolve)) };
+}
+test('Delete line deletes nothing when Premiere does not confirm the edits before it', async () => {
+  const { h, calls } = deleteLineFixture(false);
+  h.beginTextEdit(h.inspect().rows[1]);
+  await h.deleteLine();
+  assert.deepEqual(calls.map(call => call[0]), ['open', 'end', 'settle'], 'the typed text is committed by Premiere as before');
+  assert.equal(h.changes.length, 0, 'no Delete line edit');
+  assert.match(h.inspect().error, /nothing was deleted\. Try Delete line again/);
+  assert.deepEqual(rowTexts(h), ['one two three', 'four five', 'one two three']);
+  assert.equal(h.inspect().selectedLine.key, h.inspect().rows[1].key, 'the line stays selected');
+});
+test('typing in the next line right after Delete line waits for Premiere to confirm the deletion, then becomes its own typing steps', async () => {
+  const { h, calls, holds, settled } = deleteLineFixture();
+  await h.deleteLine();
+  assert.deepEqual(h.labels, ['Delete line']);
+  assert.deepEqual(calls, [['settle'], ['settle']], 'the deletion is written at once');
+  const next = h.inspect().rows[1];
+  h.beginTextEdit(next); h.setDraft('typed early');
+  assert.equal(calls.some(call => call[0] === 'open'), false, 'no typing step can join the unconfirmed Delete line write');
+  holds[0](true); await settled();
+  assert.deepEqual(calls.slice(2), [['open', next.start, 'one two three'], ['input', 'typed early']], 'what was typed meanwhile becomes the first typing step');
+  assert.equal(h.saveInlineText(h.inspect().rows.find(row => row.key === h.inspect().editingRowKey)), true);
+  assert.deepEqual(calls.at(-1), ['end', 'commit'], 'closing merges the typing into Edit text');
+  assert.deepEqual(h.labels, ['Delete line'], 'the panel publishes nothing else itself');
+});
+test('if Premiere cannot confirm Delete line, text typed in the next line is saved as a separate ordinary edit', async () => {
+  const { h, calls, holds, settled } = deleteLineFixture();
+  await h.deleteLine();
+  h.beginTextEdit(h.inspect().rows[1]); h.setDraft('plain save');
+  holds[0](false); await settled();
+  assert.equal(calls.some(call => call[0] === 'open'), false);
+  assert.equal(h.saveInlineText(h.inspect().rows[1]), true);
+  assert.deepEqual(h.labels, ['Delete line', 'Edit transcript']);
+  assert.deepEqual(rowTexts(h), ['one two three', 'plain save']);
+});
+test('Add line, Merge and another Delete line wait for Delete line to be confirmed', async () => {
+  const { h, holds, settled } = deleteLineFixture();
+  await h.deleteLine();
+  h.choose(h.inspect().rows[0]);
+  h.mergeNext();
+  assert.deepEqual(h.labels, ['Delete line'], 'Merge waits');
+  holds[0](true); await settled();
+  assert.equal(h.changes.length, 2, 'merged after the confirmation, as an edit of its own');
+  assert.deepEqual(rowTexts(h), ['one two three one two three']);
+  const again = deleteLineFixture();
+  await again.h.deleteLine();
+  again.h.choose(again.h.inspect().rows[0]);
+  const adding = again.h.addLine('after'), deleting = again.h.deleteLine();
+  await again.settled();
+  assert.equal(again.h.changes.length, 1, 'Add line and Delete line wait');
+  again.holds[0](true); await adding;
+  assert.deepEqual(again.h.labels, ['Delete line', 'Add line']);
+  again.holds[1](true); await deleting;
+  assert.deepEqual(again.h.labels, ['Delete line', 'Add line', 'Delete line']);
+});
+test('switching sequence or layer while earlier edits are confirmed deletes nothing', async () => {
+  for (const change of [h => h.setSequenceId('other-sequence'), h => h.setNativeLayerKey('other-layer')]) {
+    let h;
+    const typing = { open() {}, input() {}, flush() {}, hint() {}, end: async () => {}, settle: async () => { change(h); return true; } };
+    h = transcriptController(threeLines(), 24, { typing, nativeLayerKey: 'layer' });
+    h.choose(h.inspect().rows[1]);
+    await h.deleteLine();
+    assert.equal(h.changes.length, 0); assert.equal(h.inspect().rows.length, 3);
   }
 });

@@ -189,10 +189,13 @@
     end: (mode, reason) => finishTyping(mode, reason),
     // Writes pending line edits now, through the serialized live output, so a
     // structural edit is confirmed as its own history step before typing starts.
+    // True only if the same sequence and layer are still current, with no typing
+    // merge running and every edit written.
     async settle() {
-      const session = sessionManager.current;
-      if (!session || !liveOutput || !await liveOutput.settle()) return false;
-      return sessionManager.current === session && appliedSignatures[outputKey(session)] === outputSignature(session);
+      const session = sessionManager.current, key = session && outputKey(session), clip = session?.nativeClipId;
+      if (!session || !key || !liveOutput || !await liveOutput.settle()) return false;
+      return sessionManager.current === session && outputKey(session) === key && session.nativeClipId === clip && !typingMerging &&
+        (!clip || nativeBinding?.snapshot.locator.clipNodeId === clip) && appliedSignatures[key] === outputSignature(session);
     },
   };
   async function finishTyping(mode: 'commit' | 'cancel' | 'abandon', reason?: string) {
@@ -1187,7 +1190,8 @@
     liveOutput = createLiveOutput({
       current() {
         const session = sessionManager.current;
-        if (api.isDemo || !session?.hasTranscript || !session.captions.length || !sessionLoaded(session)) return null;
+        // A connected native layer stays writable with no lines left (Delete line on the last one).
+        if (api.isDemo || !session || !sessionLoaded(session) || !(session.nativeClipId && nativeBinding) && (!session.hasTranscript || !session.captions.length)) return null;
         const signature = outputSignature(session);
         return { sequenceId: outputKey(session), signature,
           needed: appliedSignatures[outputKey(session)] !== signature,

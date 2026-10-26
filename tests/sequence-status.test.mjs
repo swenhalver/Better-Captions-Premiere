@@ -82,3 +82,10 @@ test('sequence count includes derived pause lines and saved deletions',()=>{
  state.captions[1].words[0].pauseLinesRemoved=2;
  assert.match(view({session:state,pauseSettings:{blankLineSeconds:1,visibleLines:3}}),/>3 lines</);
 });
+
+test('a connected native layer with every line deleted stays a compact connected row, not a fresh transcription', () => {
+  const html = view({ session: session({ nativeClipId: 'native-layer' }) });
+  assert.match(html, /sequence-status--ready/);
+  assert.match(html, /0 lines</);
+  assert.doesNotMatch(html, /Transcribe in Premiere|No transcript/);
+});

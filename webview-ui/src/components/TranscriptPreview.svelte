@@ -6,7 +6,7 @@
   import type { CaptionItem, LineWrap } from "../lib/types";
   import { formatTime, validateCharacterLimit } from "../lib/transcript/parser";
   import { replaceText, retime, validateCaptions } from "../lib/transcript/edit";
-  import { captionWordOffset, changeTranscriptLineBreak, insertTranscriptLine, isBlankLine, lineSegment, newLineRoom, replaceTranscriptLine, replaceTranscriptWords, transcriptLineCaption, transcriptLineLane, transcriptLines, transcriptWords, withTranscriptLines, type NewLineBorrow, type NewLineSide, type TranscriptLine } from "../lib/transcript/lines";
+  import { captionWordOffset, changeTranscriptLineBreak, deleteTranscriptLine, insertTranscriptLine, isBlankLine, lineSegment, newLineRoom, replaceTranscriptLine, replaceTranscriptWords, transcriptLineCaption, transcriptLineLane, transcriptLines, transcriptWords, withTranscriptLines, type NewLineBorrow, type NewLineSide, type TranscriptLine } from "../lib/transcript/lines";
   import type { WordEdge } from '../lib/transcript/timing';
   import { applyTypingText, typingAnchor, typingRange, typingText, type TypingAnchor } from '../lib/transcript/typing';
   import { derivePauseLines, pauseCadence, removePauseLine, type PauseLine, type PauseLineSettings } from '../lib/native-effect/pause-lines';
@@ -54,10 +54,11 @@
   // Blur runs before a pause button's click. Retain its history merge so that
   // a subsequent deletion waits even after the editor has already closed.
   let typingFinished: Promise<void> | null = null;
-  // Premiere confirming the last Add line as its own Undo step (true) or not
-  // (false). Until then an open editor keeps what is typed without typing
-  // steps, and saving its text or adding another line waits here.
-  let lineAdded: Promise<boolean> | null = null, afterLineAddedRunning = false, addingLine = false, destroyed = false;
+  // Premiere confirming the last Add line or Delete line as its own Undo step
+  // (true) or not (false). Until then an open editor keeps what is typed
+  // without typing steps, and saving its text or another structural edit
+  // (Add, Delete, Split, Merge, a pause) waits here.
+  let lineAdded: Promise<boolean> | null = null, afterLineAddedRunning = false, addingLine = false, deletingLine = $state(false), destroyed = false;
   function awaitLineAdded(pending: Promise<boolean>) {
     lineAdded = pending;
     void pending.then(() => { if (lineAdded === pending) lineAdded = null; });
@@ -542,6 +543,42 @@
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
     finally { addingLine = false; }
   }
+  // One "Delete line" step removes the selected line and its words; clearing
+  // its text instead leaves a timed blank line. Open editors are saved and
+  // pending edits written as their own Undo steps first; if Premiere does not
+  // confirm them, nothing is deleted. The line is found again by its time after
+  // saving (its text may have just changed) and by its exact words after
+  // writing, so a regroup or Undo meanwhile deletes nothing else. Like Add
+  // line, typing in another line starts only once Delete line is confirmed.
+  async function deleteLine() {
+    if (disabled || !selectedRow || selectedPause || deletingLine || selectedRow.end <= selectedRow.start) return;
+    const sequence = sequenceId, layer = nativeLayerKey, span = rowCaption(selectedRow);
+    const identity = (row: SentenceRow) => JSON.stringify(transcriptWords(captions).slice(row.start, row.end).map(word => [word.text, word.startTime, word.endTime]));
+    deletingLine = true;
+    try {
+      if (!await finishPauseEditing()) return;
+      const saved = sentenceRows.find(row => row.end > row.start && rowCaption(row).startTime >= span.startTime && rowCaption(row).startTime < span.endTime);
+      if (!saved) throw new Error('This line changed. Select it again.');
+      const words = identity(saved);
+      if (typing && !await typing.settle()) throw new Error('Premiere has not confirmed your last edit yet, so nothing was deleted. Try Delete line again.');
+      if (disabled) return;
+      const current = sentenceRows.find(row => row.end > row.start && identity(row) === words);
+      if (!current || sequenceId !== sequence || nativeLayerKey !== layer) throw new Error('This line changed. Select it again.');
+      const next = deleteTranscriptLine(captions, current, pauseLineSettings ? source => derivePauseLines(source, pauseLineSettings!) : undefined);
+      if (!commit(next, 'Line deleted.', 'Delete line')) return;
+      if (typing) awaitLineAdded(typing.settle());
+      await tick();
+      // The next line takes its place, or else the line before it.
+      const neighbour = sentenceRows.find(row => row.end > row.start && row.start >= current.start) ?? sentenceRows.filter(row => row.end > row.start).at(-1);
+      selectedPauseKey = null;
+      selectedRowKey = neighbour?.key ?? null;
+      if (!neighbour) return;
+      onSelect(neighbour.caption.id);
+      onSelectWord(neighbour.start - captionWordOffset(captions, neighbour.caption.id));
+      void tick().then(() => listEl?.querySelector<HTMLButtonElement>('.transcript-editor__cue--selected .transcript-editor__cue-text')?.focus({ preventScroll: true }));
+    } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
+    finally { deletingLine = false; }
+  }
   const lineWraps: { value: LineWrap; label: string; title: string }[] = [
     { value: 'fill', label: 'Fill', title: 'Fill: as many words on each line as fit' },
     { value: 'balance', label: 'Balance', title: 'Balance: the same number of lines as Fill, with lengths as even as possible' },
@@ -681,13 +718,15 @@
           <WordTimeline caption={selected} fps={frameRate} {currentTime} selectedWord={Math.max(0, selectedWord-selectedWordOffset)} onSelectWord={(index) => onSelectWord(index+selectedWordOffset)} onSeek={onSeek} onChange={(caption) => updateCaption(caption,"Word timing saved.")}
             wordOffset={selectedWordOffset} focusStart={selectedLane?.focusStart} focusEnd={selectedLane?.focusEnd} onSplitBefore={splitCaption} {caretSplitIndex} splitDisabled={disabled}
             onMergeNext={mergeNext} mergeDisabled={disabled || !hasNextLine} mergeTitle="Merge with the next line"
-            onAddLine={addLine} addLineDisabled={disabled} addLineProblems={newLineProblems} />
+            onAddLine={addLine} addLineDisabled={disabled} addLineProblems={newLineProblems}
+            onDeleteLine={deleteLine} deleteLineDisabled={disabled || deletingLine} />
           {#if error}<p class="caption-message caption-message--error" role="alert">{error}</p>{/if}
           {#if notice}<p class="caption-message" role="status">{notice}</p>{/if}
           {#if selected.timingEstimated}<p class="transcript-editor__estimated">Word timings are estimated. Review them in the word lane.</p>{/if}
         </div>
       {/if}
     </div>
+  {:else if nativeLayerKey}<div class="transcript-editor__empty"><h3>No lines left</h3><p>Every line of this caption layer was deleted. Undo in Premiere brings them back.</p></div>
   {:else}<div class="transcript-editor__empty"><h3>Ready for your first words</h3><p>Use Transcribe in Premiere to load timed speech. Then select a line to edit its text and timing.</p></div>{/if}
 </section>
 <style>

@@ -6,7 +6,8 @@
   interface Props { pauseSettings?:PauseLineSettings|null; session: SessionState | null; onRefresh: () => void; onTranscribe: () => void; onExtend?: () => void; isDemo?: boolean; isBusy?: boolean; saveStatus?: string; }
   let { pauseSettings=null, session, onRefresh, onTranscribe, onExtend, isDemo = false, isBusy = false, saveStatus = "" }: Props = $props();
   let linked = $derived(session?.captions.some((caption) => caption.clipNodeId) ?? false);
-  let ready = $derived(!!session && (session.hasTranscript || session.captions.length > 0));
+  // A native layer whose lines were all deleted is still connected, not untranscribed.
+  let ready = $derived(!!session && (session.hasTranscript || session.captions.length > 0 || !!session.nativeClipId));
   let sequenceName = $derived(isDemo ? "A little more human · Sample sequence" : session?.sequenceName ?? "No active sequence");
   let transcribeDisabled = $derived(isDemo || isBusy || !session || linked);
   let transcribeTitle = $derived(isDemo ? "Available in the installed Premiere panel" : linked ? "Edit the linked transcript below" : "Use Premiere’s built-in Speech to Text");

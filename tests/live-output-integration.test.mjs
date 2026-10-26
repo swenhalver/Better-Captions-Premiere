@@ -9,6 +9,8 @@ import * as nativePanel from '../webview-ui/src/lib/native-effect/panel.ts';
 import { defaultNativeStyle, NATIVE_EFFECT_MATCH_NAME } from '../webview-ui/src/lib/native-effect/contract.ts';
 import * as nativeEncode from '../webview-ui/src/lib/native-effect/encode.ts';
 import { connectionKey } from '../webview-ui/src/lib/clip-connections.ts';
+import { deleteTranscriptLine, transcriptLines, transcriptWords } from '../webview-ui/src/lib/transcript/lines.ts';
+import { typingAnchor } from '../webview-ui/src/lib/transcript/typing.ts';
 const { encodeNativeTransportText } = nativeEncode;
 
 const require = createRequire(new URL('../webview-ui/package.json', import.meta.url));
@@ -125,7 +127,7 @@ function fixture(t, options = {}) {
     return { sequenceId: info.id, sequenceName: info.name, transcriptJson: null, captions, style: clone(types.DEFAULT_STYLE), animation: clone(types.DEFAULT_ANIMATION), hasTranscript: true, isLoading: false, currentTime: .25, duration: info.duration, frameRate: info.frameRate, frameWidth: info.frameWidth, frameHeight: info.frameHeight };
   }
   main = execute(script(resolve(sourceRoot, 'main-webview.svelte')) + `
-    export { refreshSequence, transcribe, restoreTranscription, updateStyle, changeCharacterLimit, updateCaptions, outputSignature, selectionPauseReason, motionPauseReason, motionContext, ensureLegacyBaseline, getState, recordApplied, recordMonitorApplied, flushSave, setTimelineBusy, inspectConnections, setCharacterLimitGesture };
+    export { refreshSequence, transcribe, restoreTranscription, updateStyle, changeCharacterLimit, updateCaptions, outputSignature, selectionPauseReason, motionPauseReason, motionContext, ensureLegacyBaseline, getState, recordApplied, recordMonitorApplied, flushSave, setTimelineBusy, inspectConnections, setCharacterLimitGesture, transcriptTyping };
     export function setExport(value) { exportButton = value; }
     export function setPhase(value) { outputPhase = value; }
     export function selectForTest(id) { selectedId = id; const s=sessionManager.current,c=s?.captions.find(c=>c.id===id); nativeSelection=c?.clipNodeId?{sequenceId:s.sequenceId,captionId:id,clipNodeId:c.clipNodeId}:null; }
@@ -577,4 +579,151 @@ test('one Characters per line gesture makes one native write holding the origina
     assert.deepEqual(written.words.map(word => [word.text, word.start, word.end]), native.document.captions[0].words.map(word => [word.text, word.start, word.end]));
     await h.advance(5000); assert.equal(writes.length, 1); assert.equal(h.context().needed, false);
   }
+});
+
+test('deleting the last line writes one empty native document as Delete line, and Premiere Undo and Redo bring it back and empty it again', async t => {
+  let native; const writes = [], h = fixture(t, { stored: null,
+    connections: async (_id, _links, options) => {
+      const { documentText, revision, ...summary } = native.entry;
+      return connectionSnapshot(h.info, [], { nativeSequenceId: native.entry.locator.sequenceId, selectedClipNodeIds: ['native-layer'], native: [options.includeDocuments ? clone(native.entry) : summary] });
+    },
+    writeNative: async (snapshot, documentText, sequenceId, label) => {
+      writes.push({ snapshot: clone(snapshot), documentText, label });
+      native.entry.documentText = documentText; native.entry.revision = native.revision();
+      return { ok: true, readbackVerified: true, documentText, revision: native.entry.revision };
+    },
+  });
+  h.info.id = 'f18a14ea-2be5-4393-a113-c1b43bfcab1e'; native = nativeConnection(h.info);
+  native.document.timeOriginSeconds = 2; native.entry.documentText = encodeNativeTransportText(native.document); native.entry.revision = native.revision();
+  const original = native.entry.documentText, decode = text => nativePanel.decodeNativePanelDocument(text, h.info.id);
+  await h.start();
+  const lines = clone(h.manager.current.captions);
+  assert.deepEqual(lines[0].words.map(word => [word.text, word.startTime]), [['Native', 2], ['words', 2.4]]);
+  h.main.updateCaptions([], true, 'Delete line'); h.sync(); await h.advance(1000); await h.settle();
+  assert.equal(writes.length, 1, JSON.stringify(h.main.getState().runtime)); assert.equal(writes[0].label, 'Delete line', 'one named Premiere history step');
+  const empty = decode(writes[0].documentText);
+  assert.deepEqual(empty.captions, []); assert.equal(empty.timeOriginSeconds, 2); assert.deepEqual(empty.style, decode(original).style);
+  assert.deepEqual(h.manager.current.captions, []); assert.equal(h.manager.current.nativeClipId, 'native-layer');
+  assert.equal(h.context().needed, false, 'the empty document is confirmed');
+  await h.advance(5000); assert.equal(writes.length, 1);
+  // Premiere Undo puts the original document back; the panel follows it without writing.
+  native.entry.documentText = original; native.entry.revision = native.revision(); native.entry.connectionRevision = 'native-connection-undo';
+  await h.main.inspectConnections(); h.sync();
+  assert.deepEqual(clone(h.manager.current.captions).map(caption => caption.words.map(word => [word.text, word.startTime, word.endTime])), lines.map(caption => caption.words.map(word => [word.text, word.startTime, word.endTime])));
+  assert.equal(h.context().needed, false);
+  // Redo empties the layer again.
+  native.entry.documentText = writes[0].documentText; native.entry.revision = native.revision(); native.entry.connectionRevision = 'native-connection-redo';
+  await h.main.inspectConnections(); h.sync();
+  assert.deepEqual(h.manager.current.captions, []); assert.equal(h.manager.current.nativeClipId, 'native-layer');
+  await h.advance(5000); assert.equal(writes.length, 1, 'Undo and Redo never write'); assert.equal(h.context().needed, false);
+  assert.equal(h.calls.saves.length, 0); assert.equal(h.calls.apply.length, 0);
+});
+
+test('deleting a line that spans native containers writes the surviving words byte-exact, with only the next line’s boundary added', async t => {
+  let native; const writes = [], h = fixture(t, { stored: null,
+    connections: async (_id, _links, options) => {
+      const { documentText, revision, ...summary } = native.entry;
+      return connectionSnapshot(h.info, [], { nativeSequenceId: native.entry.locator.sequenceId, selectedClipNodeIds: ['native-layer'], native: [options.includeDocuments ? clone(native.entry) : summary] });
+    },
+    writeNative: async (snapshot, documentText, sequenceId, label) => {
+      writes.push({ documentText, label });
+      native.entry.documentText = documentText; native.entry.revision = native.revision();
+      return { ok: true, readbackVerified: true, documentText, revision: native.entry.revision };
+    },
+  });
+  h.info.id = 'f18a14ea-2be5-4393-a113-c1b43bfcab1e'; native = nativeConnection(h.info);
+  // A fractional origin: adding and subtracting it would round unchanged times.
+  native.document.timeOriginSeconds = .1;
+  native.document.captions = [
+    { id: 'first', start: .3, end: 1.9, manualSplit: false, words: [{ text: 'Alpha', start: .3, end: .7, endOfSentence: false }, { text: 'beta.', start: .7, end: 1.1, endOfSentence: true }, { text: 'Gamma', start: 1.3, end: 1.9, endOfSentence: false }] },
+    { id: 'second', start: 1.9, end: 3.7, manualSplit: false, words: [{ text: 'delta.', start: 1.9, end: 2.3, endOfSentence: true }, { text: 'Epsilon', start: 2.9, end: 3.3, endOfSentence: false, pauseLinesRemoved: 1 }, { text: 'zeta.', start: 3.3, end: 3.7, endOfSentence: true }] },
+  ];
+  native.entry.documentText = encodeNativeTransportText(native.document); native.entry.revision = native.revision();
+  await h.start();
+  const captions = clone(h.manager.current.captions), all = transcriptWords(captions);
+  const middle = transcriptLines(captions).find(line => all[line.start].text === 'Gamma');
+  assert.equal(middle.end - middle.start, 2, 'the middle line spans both containers');
+  h.main.updateCaptions(deleteTranscriptLine(captions, middle), true, 'Delete line'); h.sync(); await h.advance(1000); await h.settle();
+  assert.equal(writes.length, 1); assert.equal(writes[0].label, 'Delete line');
+  const written = nativePanel.decodeNativePanelDocument(writes[0].documentText, h.info.id);
+  const [first, second] = native.document.captions;
+  assert.equal(written.timeOriginSeconds, .1);
+  assert.deepEqual(written.captions.map(caption => caption.id), ['first', 'second']);
+  assert.deepEqual(written.captions[0].words, first.words.slice(0, 2));
+  // Without pause settings the deleted line's own removals (none) are summed in.
+  assert.deepEqual(written.captions[1].words, [{ ...second.words[1], lineBreakBefore: 'break' }, second.words[2]]);
+});
+
+// Delete line, then typing in the next line: the panel's settle bridge reports
+// the Delete line write confirmed only for the current layer with nothing else
+// pending, so typing steps start after it and merge into their own Edit text step.
+function threeLineLayer(t) {
+  let native; const writes = [], h = fixture(t, { stored: null,
+    connections: async (_id, _links, options) => {
+      const { documentText, revision, ...summary } = native.entry;
+      return connectionSnapshot(h.info, [], { nativeSequenceId: native.entry.locator.sequenceId, selectedClipNodeIds: ['native-layer'], native: [options.includeDocuments ? clone(native.entry) : summary] });
+    },
+    writeNative: (snapshot, documentText, sequenceId, label) => {
+      const write = { documentText, label, ...deferred() };
+      writes.push(write);
+      return write.promise.then(() => {
+        native.entry.documentText = documentText; native.entry.revision = native.revision(); write.revision = native.entry.revision;
+        return { ok: true, readbackVerified: true, documentText, revision: native.entry.revision };
+      });
+    },
+  });
+  h.info.id = 'f18a14ea-2be5-4393-a113-c1b43bfcab1e'; native = nativeConnection(h.info);
+  native.document.captions = [
+    { id: 'first', start: 0, end: .7, manualSplit: true, words: [{ text: 'Alpha', start: 0, end: .3, endOfSentence: false }, { text: 'beta.', start: .4, end: .7, endOfSentence: true }] },
+    { id: 'second', start: 1, end: 1.7, manualSplit: true, words: [{ text: 'Gamma', start: 1, end: 1.3, endOfSentence: false }, { text: 'delta.', start: 1.4, end: 1.7, endOfSentence: true }] },
+    { id: 'third', start: 2, end: 2.7, manualSplit: true, words: [{ text: 'Epsilon', start: 2, end: 2.3, endOfSentence: false }, { text: 'zeta.', start: 2.4, end: 2.7, endOfSentence: true }] },
+  ];
+  native.entry.documentText = encodeNativeTransportText(native.document); native.entry.revision = native.revision();
+  const deleteMiddle = () => {
+    const captions = clone(h.manager.current.captions), all = transcriptWords(captions);
+    h.main.updateCaptions(deleteTranscriptLine(captions, transcriptLines(captions).find(line => all[line.start].text === 'Gamma')), true, 'Delete line');
+  };
+  return { h, writes, native: () => native, deleteMiddle };
+}
+test('Delete line settles as its own native step before typing in the next line starts, which then merges into Edit text', async t => {
+  const { h, writes, native, deleteMiddle } = threeLineLayer(t);
+  await h.start();
+  deleteMiddle();
+  let confirmed = null; void h.main.transcriptTyping.settle().then(value => { confirmed = value; });
+  await h.advance(0);
+  assert.deepEqual(writes.map(write => write.label), ['Delete line'], 'settling writes at once, without the quiet time');
+  await h.advance(5000); assert.equal(confirmed, null, 'not settled before Premiere confirms the write');
+  writes[0].resolve(); await h.advance(0);
+  assert.equal(confirmed, true);
+  // Now the next line opens for typing; its steps are separate writes.
+  const captions = clone(h.manager.current.captions), next = transcriptLines(captions).find(line => transcriptWords(captions)[line.start].text === 'Epsilon');
+  assert.ok(next, 'the line after the deleted one');
+  h.api.collapseNativeTyping = async () => { native().entry.documentText = writes[0].documentText; native().entry.revision = writes[0].revision; return { collapsed: true, undone: 1, revision: writes[0].revision }; };
+  h.main.transcriptTyping.open(typingAnchor(captions, next.caption.id, next.start, next.end, true), captions, 'Epsilon zeta.', 13, () => {});
+  h.main.transcriptTyping.input('Epsilon zeta now.', 17);
+  await h.advance(750); await h.advance(400);
+  assert.deepEqual(writes.map(write => write.label), ['Delete line', 'Typing']);
+  writes[1].resolve(); await h.advance(0);
+  const ending = h.main.transcriptTyping.end('commit'); await h.advance(0);
+  assert.deepEqual(writes.map(write => write.label), ['Delete line', 'Typing', 'Edit text']);
+  writes[2].resolve(); await ending; await h.advance(0);
+  const written = nativePanel.decodeNativePanelDocument(writes[2].documentText, h.info.id);
+  assert.deepEqual(written.captions.flatMap(caption => caption.words.map(word => word.text)), ['Alpha', 'beta.', 'Epsilon', 'zeta', 'now.']);
+  await h.advance(5000); assert.equal(writes.length, 3);
+});
+test('the settle bridge reports false when a newer edit replaces the one being written, and the newer edit is still written', async t => {
+  const { h, writes, deleteMiddle } = threeLineLayer(t);
+  await h.start();
+  deleteMiddle();
+  let confirmed = null; void h.main.transcriptTyping.settle().then(value => { confirmed = value; });
+  await h.advance(0);
+  assert.deepEqual(writes.map(write => write.label), ['Delete line']);
+  // Another edit arrives while Premiere writes Delete line.
+  const captions = clone(h.manager.current.captions); captions[0].words[0].endTime = .35;
+  h.main.updateCaptions(captions, true, 'Line timing');
+  writes[0].resolve(); await h.advance(0);
+  assert.equal(confirmed, false, 'the current edit is not written yet');
+  await h.advance(400); assert.deepEqual(writes.map(write => write.label), ['Delete line', 'Line timing']);
+  writes[1].resolve(); await h.advance(0);
+  assert.equal(await h.main.transcriptTyping.settle(), true, 'nothing pending: settled');
 });
