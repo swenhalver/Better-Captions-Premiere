@@ -180,9 +180,10 @@ int main(int argc,char** argv){try{
  check(greenCurrent>20,"Compiled Fade did not keep the currently spoken word legible");
  const auto savedFixture=fixture;
  fixture=better_captions::Document{};fixture.containers.push_back({"blank-length",false,{{"First.",0,1,true},{"Second.",1,2,true},{"Third.",2,3,true},{"After.",5.49,6.49,true}}});
- // Mid-run after Third ends at 3s: Auto (two blank rows) and 2s (one) are
- // still scrolling different row counts; both settle on After well before 4s.
- in.current_time=310;values[RollUpLines].u.fs_d.value=3;values[LineTransition].u.fs_d.value=1;
+ // Mid-run before After: Auto (two blank rows) and 2s (one) time their runs
+ // back from 5.49s and both settle on After at 5.39s, so at 5.2s they are
+ // still scrolling different row counts.
+ in.current_time=520;values[RollUpLines].u.fs_d.value=3;values[LineTransition].u.fs_d.value=1;
  const auto autoBlankPixels=typographyFrame();values[RollUpBlankLineSeconds].u.fs_d.value=0;
  check(!differs(autoBlankPixels,typographyFrame()),"explicit Auto must render byte-identical pixels to the default");
  values[RollUpBlankLineSeconds].u.fs_d.value=2;

@@ -514,9 +514,11 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
  // Transition duration and Speed. A run eases in like an ordinary scroll,
  // cruises at that scroll's peak speed (1.5 rows per duration) and eases out
  // like it; blank rows never hold it. The text line in the current slot holds
- // until it ends, and the next text line stops there and holds. Blank count,
- // blank lengths and speech starts never change the rate, and word times and
- // highlighting are left alone.
+ // until it ends, and the next text line stops there and holds. Each run is
+ // timed back from the next line's first word, settling 0.1 s before it, but
+ // never departs before the current line ends. Blank count, blank lengths and
+ // speech starts never change the rate, and word times and highlighting are
+ // left alone.
  {
   auto baselineOf=[](const Frame& frame,std::size_t wordIndex,WordState* state=nullptr){
    for(const auto& word:frame.words)if(word.wordIndex==wordIndex){if(state)*state=word.state;return word.baseline;}
@@ -524,7 +526,7 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
   };
   RollUpSettings glide;glide.enabled=true;glide.boundaryEnabled=false;
   auto glideFrame=[&](const Document& document,double time,const RollUpSettings& settings){return layoutFrame(document,time,{0,0,400,1000},measure,56,.6,{},1,settings);};
-  const double advance=10*fillingSilence.style.lineHeight;
+  const double advance=10*fillingSilence.style.lineHeight,lead=.1;
   auto smooth=[](double x){x=std::clamp(x,0.,1.);return x*x*(3-2*x);};
   // Moves in one direction, with no hold and no jump, between two times.
   auto glides=[&](const Document& document,const RollUpSettings& settings,std::size_t wordIndex,double from,double to,double maxStep,double every=.01){
@@ -557,45 +559,55 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
    const double sign=direction==1?-1:1;
    auto settings=glide;settings.direction=direction;settings.speed=speed;settings.visibleLines=8;settings.currentLine=direction==1?8:1;
    const double pace=settings.scrollDuration/speed,cruise=1.5/pace;
+   // A case's run departs when "Before." ends at 1 s, or later so that it
+   // settles lead before "After." begins.
+   auto departureOf=[&](const Case& item){
+    return std::max(1.,item.document.containers[0].words.back().start-lead-pace*(1+2*double(item.blanks)/3));
+   };
    for(const auto& item:cases){
     auto caseSettings=settings;caseSettings.blankLineSeconds=item.blankLineSeconds;
     const auto& document=item.document;const auto bytes=encode(document);
     const auto rows=item.blanks+1,after=document.containers[0].words.size()-1;
-    // Every run starts at the end of "Before." and adds 2/3 of a scroll per
-    // blank row, whatever the blanks' lengths or the gap to "After.".
-    const double arrival=1+pace*(1+2*double(item.blanks)/3);
-    // An occupied current line holds until it ends.
-    for(double time:{.5,.8,1.})assert(scrolled(document,caseSettings,time)==0);
+    // Every run takes one scroll plus 2/3 of one per blank row, whatever the
+    // blanks' lengths or the gap to "After.".
+    const double departure=departureOf(item),arrival=departure+pace*(1+2*double(item.blanks)/3);
+    const auto& words=document.containers[0].words;const double afterStart=words.back().start,afterEnd=words.back().end;
+    // Never in place before lead ahead of the first word; exactly then when
+    // the gap has room, otherwise as soon as "Before." has ended.
+    assert(arrival>=afterStart-lead-1e-12);
+    if(departure>1)assert(std::abs(arrival-(afterStart-lead))<1e-12);else assert(arrival>=afterStart-lead);
+    // An occupied current line holds until it ends, then through the pause
+    // until the run is due, without creeping toward the blank.
+    for(double time:{.5,.8,1.,(1+departure)/2,departure})assert(scrolled(document,caseSettings,time)==0);
     // Never faster than an ordinary scroll's peak, never stopping on a blank.
     double previous=0;
-    for(double time=1+pace/40;time<arrival-1e-9;time+=pace/40){const double now=scrolled(document,caseSettings,time);assert(now>previous&&now-previous<=cruise*pace/40+1e-9);previous=now;}
+    for(double time=departure+pace/40;time<arrival-1e-9;time+=pace/40){const double now=scrolled(document,caseSettings,time);assert(now>previous&&now-previous<=cruise*pace/40+1e-9);previous=now;}
     assert(std::abs(scrolled(document,caseSettings,arrival)-double(rows))<1e-9);
     // "After." stops in the current slot and holds until it ends; its words
     // highlight on their own times, whether it arrived early or late.
     const double slot=baselineOf(glideFrame(document,.5,caseSettings),0);
-    const auto& words=document.containers[0].words;const double afterStart=words.back().start,afterEnd=words.back().end;
     for(double time:{arrival,arrival+.05,std::max(arrival,afterEnd-.01)})assert(std::abs(baselineOf(glideFrame(document,time,caseSettings),after)-slot)<1e-9);
     WordState state;
     if(afterStart<arrival-pace/10){const double time=(afterStart+arrival)/2;const double moving=baselineOf(glideFrame(document,time,caseSettings),after,&state);assert(state==WordState::Current&&std::abs(moving-slot)>1e-6);}
     baselineOf(glideFrame(document,std::max(afterStart,arrival)-1e-3,caseSettings),after,&state);assert(state==(afterStart<arrival-1e-3?WordState::Current:WordState::Upcoming));
     // Ordinary parity: with no blanks the move is exactly the ordinary scroll.
-    if(!item.blanks)for(double elapsed=0;elapsed<=pace*1.2;elapsed+=pace/20)assert(std::abs(scrolled(document,caseSettings,1+elapsed)-smooth(elapsed/pace))<1e-9);
+    if(!item.blanks)for(double elapsed=0;elapsed<=pace*1.2;elapsed+=pace/20)assert(std::abs(scrolled(document,caseSettings,departure+elapsed)-smooth(elapsed/pace))<1e-9);
     // Cruise at exactly the ordinary peak between the half-row ease-in and ease-out.
-    if(item.blanks)for(double x=0;x<=pace*2*double(item.blanks)/3+1e-12;x+=pace/16)assert(std::abs(scrolled(document,caseSettings,1+pace/2+x)-(.5+cruise*x))<1e-9);
+    if(item.blanks)for(double x=0;x<=pace*2*double(item.blanks)/3+1e-12;x+=pace/16)assert(std::abs(scrolled(document,caseSettings,departure+pace/2+x)-(.5+cruise*x))<1e-9);
     // Like for like: compared with every case of fewer or equal blanks, the
     // first and last rows of travel follow the same curve in time, both from
     // the start and back from the arrival, out to the shorter run's cruise.
     for(const auto& other:cases){
      if(other.blanks>item.blanks)continue;
      auto otherSettings=settings;otherSettings.blankLineSeconds=other.blankLineSeconds;
-     const double otherArrival=1+pace*(1+2*double(other.blanks)/3),reach=pace/2+pace*2*double(other.blanks)/3;
+     const double otherDeparture=departureOf(other),otherArrival=otherDeparture+pace*(1+2*double(other.blanks)/3),reach=pace/2+pace*2*double(other.blanks)/3;
      for(double tau=0;tau<=reach+1e-12;tau+=pace/24){
-      assert(std::abs(scrolled(document,caseSettings,1+tau)-scrolled(other.document,otherSettings,1+tau))<1e-9);
+      assert(std::abs(scrolled(document,caseSettings,departure+tau)-scrolled(other.document,otherSettings,otherDeparture+tau))<1e-9);
       assert(std::abs((double(rows)-scrolled(document,caseSettings,arrival-tau))-(double(other.blanks+1)-scrolled(other.document,otherSettings,otherArrival-tau)))<1e-9);
      }
     }
     // Seeking in any order renders the same frame, and leaves the document alone.
-    const double middle=(1+arrival)/2;const auto mid=glideFrame(document,middle,caseSettings);
+    const double middle=(departure+arrival)/2;const auto mid=glideFrame(document,middle,caseSettings);
     glideFrame(document,arrival+.3,caseSettings);glideFrame(document,.2,caseSettings);
     sameRenderedFrame(mid,glideFrame(document,middle,caseSettings));assert(encode(document)==bytes);
    }
@@ -605,12 +617,14 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
    assert(lateArrival>1.05);WordState state;
    const double lateMoving=baselineOf(glideFrame(late,1.05+(lateArrival-1.05)/2,settings),2,&state);
    assert(state==WordState::Current&&std::abs(lateMoving-baselineOf(glideFrame(late,.5,settings),0))>1e-6);
-   // Capped gaps: Visible lines 3 allows three blank rows, so a ten-second
-   // pause glides as far as three blanks do, then "After." waits for speech.
+   // Capped gaps: Visible lines 3 allows three blank rows, so a seven-second
+   // pause glides as far as three blanks do, departing late enough that
+   // "After." settles lead before its speech, and "Before." holds until then.
    {
     auto capped=settings;capped.visibleLines=3;capped.currentLine=direction==1?3:1;capped.blankLineSeconds=1;
-    const auto& document=cases.back().document;const double arrival=1+pace*3,slot=baselineOf(glideFrame(document,.5,capped),0);
-    for(double time:{arrival,arrival+1,7.99})assert(std::abs(baselineOf(glideFrame(document,time,capped),1)-slot)<1e-9);
+    const auto& document=cases.back().document;const double arrival=8-lead,departure=arrival-pace*3,slot=baselineOf(glideFrame(document,.5,capped),0);
+    for(double time:{1.,4.,departure})assert(baselineOf(glideFrame(document,time,capped),0)==slot);
+    for(double time:{arrival,arrival+.05,8.99})assert(std::abs(baselineOf(glideFrame(document,time,capped),1)-slot)<1e-9);
     const double moving=baselineOf(glideFrame(document,arrival-pace/4,capped),1);assert(!std::isfinite(moving)||std::abs(moving-slot)>1e-6);
    }
    // A brief line that ends while the next scroll would still be arriving
@@ -636,6 +650,18 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
     for(double x=0;x<=pace*8/3;x+=pace/16)assert(std::abs(scrolled(briefs,settings,.9+pace/2+x)-(.5+cruise*x))<1e-9);
     assert(std::abs(baselineOf(glideFrame(briefs,arrival,settings),5)-baselineOf(glideFrame(briefs,.5,settings),0))<1e-9);
    }
+   // A brief line the run reaches after it ended still stops the run when a
+   // long pause follows: carrying on would bring "After." in early. It holds
+   // in the slot, then the next run settles lead before "After." at 3 s.
+   {
+    Document pause;pause.style=fillingSilence.style;
+    pause.containers.push_back({"brief-pause",false,{{"Before.",0,.9,true},{"Brief.",.9,.93,true},{"",.93,3,true},{"After.",3,4,true}}});
+    const double slot=baselineOf(glideFrame(pause,.5,settings),0),departure=3-lead-pace*5/3;
+    for(double time:{.9+pace,1.5,departure})assert(std::abs(baselineOf(glideFrame(pause,time,settings),1)-slot)<1e-9);
+    WordState state;baselineOf(glideFrame(pause,1.5,settings),1,&state);assert(state==WordState::Spoken);
+    assert(std::abs(baselineOf(glideFrame(pause,3-lead,settings),3,&state)-slot)<1e-9&&state==WordState::Upcoming);
+    assert(std::abs(baselineOf(glideFrame(pause,3-lead-pace/4,settings),3)-slot)>1e-6);
+   }
    // Current line away from the entry edge: the first line glides in through
    // two virtual blank slots on the same two-row curve as a line after one
    // blank (whose run also starts from rest and covers two rows).
@@ -648,14 +674,105 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
      assert(std::abs(sign*(baselineOf(glideFrame(document,elapsed,opening),0)-settled)/advance+2-scrolled(oneBlank,settings,1+elapsed))<1e-9);
    }
   }
-  // Transition duration 0 steps at the exact trigger, through every blank.
+  // Transition duration 0 steps through every blank at once, lead before the
+  // next first word, or the moment "Before." ends when that comes later.
   for(int direction:{1,2}){
    auto instant=glide;instant.direction=direction;instant.scrollDuration=0;instant.visibleLines=3;instant.currentLine=direction==1?3:1;
-   for(const auto* document:{&cases[1].document,&cases[5].document}){
+   for(const auto* document:{&cases[0].document,&cases[1].document,&cases[5].document}){
     const auto after=document->containers[0].words.size()-1;const double slot=baselineOf(glideFrame(*document,.5,instant),0);
-    assert(baselineOf(glideFrame(*document,.999,instant),0)==slot);
-    assert(std::abs(baselineOf(glideFrame(*document,1,instant),after)-slot)<1e-9);
+    const double due=std::max(1.,document->containers[0].words.back().start-lead);
+    assert(baselineOf(glideFrame(*document,due-1e-3,instant),0)==slot);
+    assert(std::abs(baselineOf(glideFrame(*document,due,instant),after)-slot)<1e-9);
    }
+  }
+  // A synthetic one-pause cue with the reported settings: four visible lines,
+  // current line 2, 0.18 s at 0.7x and Pause line length 0.5. "...way." ends
+  // at 15.73 s, one pause row runs to "And we'll get this" at 16.875 s, then
+  // "out of your way." follows at 17.561667 s with no gap. The two-row run
+  // used to leave at 15.73 and settle at 16.16. Now "...way." holds in the
+  // current slot until 16.347, and "And we'll get this" settles at 16.775,
+  // 0.1 s before its first word. With no gap, "out of your way." leaves only
+  // once the line before it ends and arrives one scroll (0.257 s) into its
+  // own speech. The saved source document is checked after this.
+  for(int direction:{1,2}){
+   Document cue;cue.style=fillingSilence.style;
+   // As in the transcript: line breaks before "and" and "out", and one of
+   // the gap's two derived pause rows removed.
+   const auto join=LineBreakBefore::Join,brk=LineBreakBefore::Break;const double out=17.561667;
+   cue.containers.push_back({"cue",false,{{"Out",14.9,15.3,false},{"of",15.3,15.5,false,join},{"way.",15.5,15.73,true,join},
+    {"and",16.875,17.001667,false,brk,1},{"we'll",17.001667,17.201667,false,join},{"get",17.201667,17.401667,false,join},{"this",17.401667,out,false,join},
+    {"out",out,17.721667,false,brk},{"of",17.721667,17.841667,false,join},{"your",17.841667,17.961667,false,join},{"way.",17.961667,18.321667,true,join}}});
+   const auto bytes=encode(cue);
+   auto settings=glide;settings.direction=direction;settings.visibleLines=4;settings.currentLine=2;settings.scrollDuration=.18;settings.speed=.7;settings.blankLineSeconds=.5;
+   const double pace=.18/.7,arrival=16.875-lead,departure=arrival-pace*5/3;
+   const double slot=baselineOf(glideFrame(cue,15.6,settings),0);
+   // Held in place through the pause, without creeping toward the blank.
+   for(double time:{15.73,16.,16.2,departure})assert(baselineOf(glideFrame(cue,time,settings),0)==slot);
+   assert(baselineOf(glideFrame(cue,departure+pace/8,settings),0)!=slot);
+   // Moving, then settled lead before the first word, still upcoming.
+   WordState state;
+   assert(std::abs(baselineOf(glideFrame(cue,arrival-pace/4,settings),3)-slot)>1e-6);
+   for(double time:{arrival,16.8,16.875,17.4,out})assert(std::abs(baselineOf(glideFrame(cue,time,settings),3,&state)-slot)<1e-9);
+   baselineOf(glideFrame(cue,arrival,settings),3,&state);assert(state==WordState::Upcoming);
+   baselineOf(glideFrame(cue,16.875,settings),3,&state);assert(state==WordState::Current);
+   // No gap: an ordinary scroll from the moment "this" ends, so the shared
+   // rate holds and "out" highlights on its own time meanwhile.
+   assert(std::abs(baselineOf(glideFrame(cue,out+pace,settings),7)-slot)<1e-9);
+   assert(baselineOf(glideFrame(cue,out,settings),3)==slot);
+   const double moving=baselineOf(glideFrame(cue,out+pace/2,settings),7,&state);assert(std::abs(moving-slot)>1e-6&&state==WordState::Current);
+   // Seeking in any order renders the same frames and leaves the document alone.
+   const auto mid=glideFrame(cue,(departure+arrival)/2,settings);
+   glideFrame(cue,18,settings);glideFrame(cue,15,settings);glideFrame(cue,arrival,settings);
+   sameRenderedFrame(mid,glideFrame(cue,(departure+arrival)/2,settings));assert(encode(cue)==bytes);
+  }
+  // The reported cue as saved (artifacts/cue-arrival/native-document-decoded.json,
+  // words 0-18 of its fourth caption), same settings. "All right, that's $160"
+  // ends at 15.226667 s, followed by two authored blank rows (to 15.726667 and
+  // to 16.875), then "and we'll get this" and, with no gap, "out of your way.".
+  // The three-row run takes pace*7/3 = 0.6 s. It used to leave at 15.226667
+  // and settle at 15.826667, 1.05 s early. Now "...$160" holds in the current
+  // slot until 16.175, the run glides through both blanks without stopping,
+  // and "and we'll get this" settles at 16.775, 0.1 s before its first word.
+  for(int direction:{1,2}){
+   Document cue;cue.style=fillingSilence.style;
+   const auto join=LineBreakBefore::Join,brk=LineBreakBefore::Break;
+   const double out=17.561666666666667;
+   cue.containers.push_back({"caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0",true,{
+    {"and",12.083333333333334,12.208333333333334,false,brk},{"booked",12.226666666666667,12.506666666666666,false},{"a",12.506666666666666,12.666666666666666,false},{"pickup.",12.666666666666666,13.106666666666666,true},
+    {"",13.106666666666666,13.586666666666666,false,brk},
+    {"All",13.586666666666666,13.826666666666666,false,brk},{"right,",13.866666666666665,14.066666666666666,false},{"that's",14.066666666666666,14.306666666666667,false},{"$160",14.306666666666667,15.226666666666667,false},
+    {"",15.226666666666667,15.726666666666667,false,brk},{"",15.726666666666667,16.875,false,brk},
+    {"and",16.875,17.00166666666667,false,brk,1},{"we'll",17.00166666666667,17.201666666666668,false,join},{"get",17.201666666666668,17.401666666666667,false,join},{"this",17.401666666666667,out,false,join},
+    {"out",out,17.721666666666668,false,brk},{"of",17.721666666666668,17.84166666666667,false,join},{"your",17.84166666666667,17.961666666666666,false,join},{"way.",17.961666666666666,18.32166666666667,true,join}}});
+   const auto bytes=encode(cue);
+   auto settings=glide;settings.direction=direction;settings.visibleLines=4;settings.currentLine=2;settings.scrollDuration=.18;settings.speed=.7;settings.blankLineSeconds=.5;
+   const std::size_t all=5,target=11,next=15;
+   const double pace=.18/.7,arrival=16.875-lead,departure=arrival-pace*7/3,ended=15.226666666666667;
+   assert(std::abs(pace*7/3-.6)<1e-12&&std::abs(departure-16.175)<1e-12);
+   const double slot=baselineOf(glideFrame(cue,15,settings),all);
+   // Held in place from the end of "$160" through both blanks, no creeping.
+   for(double time:{ended,15.5,15.8,16.,departure})assert(baselineOf(glideFrame(cue,time,settings),all)==slot);
+   assert(baselineOf(glideFrame(cue,departure+pace/8,settings),all)!=slot);
+   // One continuous move: the target line never stops on either blank.
+   const double sign=direction==1?-1:1;double previous=std::numeric_limits<double>::quiet_NaN();
+   for(double time=departure+.01;time<arrival-1e-9;time+=.01){
+    const double at=baselineOf(glideFrame(cue,time,settings),target);
+    if(std::isfinite(at)&&std::isfinite(previous))assert((at-previous)*sign>0);
+    previous=at;
+   }
+   // Settled lead before its first word, still upcoming, then held while spoken.
+   WordState state;
+   assert(std::abs(baselineOf(glideFrame(cue,arrival-pace/4,settings),target)-slot)>1e-6);
+   for(double time:{arrival,16.8,16.875,17.4,out})assert(std::abs(baselineOf(glideFrame(cue,time,settings),target)-slot)<1e-9);
+   baselineOf(glideFrame(cue,arrival,settings),target,&state);assert(state==WordState::Upcoming);
+   baselineOf(glideFrame(cue,16.875,settings),target,&state);assert(state==WordState::Current);
+   // No gap: "out of your way." takes one ordinary scroll from the end of "this".
+   assert(std::abs(baselineOf(glideFrame(cue,out+pace,settings),next)-slot)<1e-9);
+   const double moving=baselineOf(glideFrame(cue,out+pace/2,settings),next,&state);assert(std::abs(moving-slot)>1e-6&&state==WordState::Current);
+   // Seeking in any order renders the same frames and leaves the document alone.
+   const auto mid=glideFrame(cue,(departure+arrival)/2,settings);
+   glideFrame(cue,18,settings);glideFrame(cue,13,settings);glideFrame(cue,arrival,settings);
+   sameRenderedFrame(mid,glideFrame(cue,(departure+arrival)/2,settings));assert(encode(cue)==bytes);
   }
   for(int direction:{1,2}){
    auto capped=glide;capped.direction=direction;capped.visibleLines=3;capped.currentLine=direction==1?3:1;
@@ -668,18 +785,26 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
    const double settled=baselineOf(glideFrame(fillingSilence,5.01,capped),3);
    const double moving=baselineOf(glideFrame(fillingSilence,4.5,continuous),3);assert(!std::isfinite(moving)||moving!=settled);
    // Leading and trailing authored blanks, back to back, glide without stops.
+   // The leading run waits so "Middle." settles lead before it is spoken; the
+   // trailing run leaves as soon as it ends.
    Document edges;edges.style=fillingSilence.style;
    edges.containers.push_back({"edges",false,{{"",0,.5,true},{"",.5,1,true},{"Middle.",1,2,true},{"",2,3,true},{"",3,4,true}}});
    const double pace=glide.scrollDuration;
    WordState state;const double home=baselineOf(glideFrame(edges,1.5,capped),2,&state);assert(std::isfinite(home)&&state==WordState::Current);
-   for(double time:{pace*5/3,1.,2.})assert(baselineOf(glideFrame(edges,time,capped),2)==home);
+   for(double time:{1-lead,1.,2.})assert(baselineOf(glideFrame(edges,time,capped),2)==home);
+   const double waiting=baselineOf(glideFrame(edges,1-lead-pace*5/3,capped),2);
+   // Out of the window or in it, "Middle." stays put until the run is due.
+   for(double time:{0.,.3}){const double at=baselineOf(glideFrame(edges,time,capped),2);assert(std::isnan(waiting)?std::isnan(at):at==waiting);}
+   glides(edges,capped,2,1-lead-pace*2/3,1-lead-.01,.2*advance);
    glides(edges,capped,2,2.01,2+pace*5/3-.01,.2*advance);
    const double gone=baselineOf(glideFrame(edges,2+pace*5/3,capped),2);
    for(double time:{3.,3.99})assert(baselineOf(glideFrame(edges,time,capped),2)==gone);
    // Line position styles follow the physical slots as rows glide past.
    auto styled=fillingSilence;auto& top=styled.style.positions[0];top.fields=PositionMarginBottom;top.value=styled.style.current;top.value.marginBottom=4;
    auto tall=glide;tall.direction=direction;tall.visibleLines=8;tall.currentLine=direction==1?8:1;
-   glides(styled,tall,2,1.01,1+pace*5-.01,.3*advance);
+   // Six derived blanks: the seven-row run settles lead before "After." at 5 s.
+   for(double time:{1.,3.,5-lead-pace*5})assert(baselineOf(glideFrame(styled,time,tall),2)==baselineOf(glideFrame(styled,.9,tall),2));
+   glides(styled,tall,2,5-lead-pace*5+.01,5-lead-.01,.3*advance);
   }
  }
  // Cap BEFORE subtracting deletions in both paged and scrolling modes.
@@ -1147,8 +1272,9 @@ auto p=regroup(d,56);assert(p.size()==2&&p[0].wordCount==3&&p[1].firstWord==3);
   const auto current=layoutFrame(gap,.5,{0,0,400,100},measure,56,.6,{},1,settings);
   assert(current.words.size()==2&&current.words[0].state==WordState::Current&&current.words[1].state==WordState::Upcoming);
   assert(std::abs(current.words[1].baseline-current.words[0].baseline)==20);
-  // Plain scroll glides through the blank, so see it as it passes the slot.
-  const double passing=transition==1?1+settings.scrollDuration*5/6:1.3;
+  // Plain scroll glides through the blank, settling 0.1 s before "After.",
+  // so see it as it passes the slot halfway through that two-row run.
+  const double passing=transition==1?4-.1-settings.scrollDuration/settings.speed*5/6:1.3;
   settings.currentLine=2;const auto blankCurrent=layoutFrame(gap,passing,{0,0,400,100},measure,56,.6,{},1,settings);
   assert(blankCurrent.words.size()==2&&blankCurrent.words[0].state==WordState::Spoken&&blankCurrent.words[1].state==WordState::Upcoming);
   assert(std::abs(std::abs(blankCurrent.words[1].baseline-blankCurrent.words[0].baseline)-20)<1e-9);

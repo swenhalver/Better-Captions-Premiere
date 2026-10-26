@@ -629,29 +629,36 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    // eases out like it, so one row is exactly an ordinary scroll and every
    // further row adds the same 2/3 of one. Blank rows (authored, derived or
    // the opening's virtual ones) never hold the run, so it glides through
-   // them and stops on the next text line. A text line that ended before the
-   // run would carry it past joins the run too; one still speaking holds it.
-   // Runs never overlap, so brief lines queue instead of adding speed, and
-   // nothing speeds up to meet a speech start: a line may arrive after its
-   // first word, whose highlighting keeps its own time.
+   // them and stops on the next text line.
+   // Each run is timed back from the line it stops on: it settles arrivalLead
+   // before that line's first word, so a pause holds the line in the current
+   // slot rather than the next one. It never departs before the line it
+   // leaves has ended (or the stream starts), nor before the previous run has
+   // settled. When those come later, it departs then at the same rate and the
+   // line arrives after its first word, whose highlighting keeps its own time.
+   // A run that arrives at a line already ended carries on past it, unless
+   // that would bring the next line in early. Trailing blanks go at once.
+   constexpr double arrivalLead=.1;
    struct Run{double start,count;};std::vector<Run> runs;
-   auto runEnd=[&](const Run& run){return run.start+pace*(1+2*(run.count-1)/3);};
-   auto step=[&](double trigger,bool held){
-    if(!runs.empty()){auto& run=runs.back();const double end=runEnd(run);
+   auto runLength=[&](double count){return pace*(1+2*(count-1)/3);};
+   double departure=rows.front().start,count=opening?double(lead-1):0;
+   for(std::size_t index=0;index<blocks;++index){
+    if(index>0)++count;
+    const auto& row=rows[index];const bool text=!row.words.empty();
+    if(!text&&index+1<blocks)continue;
+    if(count>0){
+     const double arrival=text?row.start-arrivalLead:-std::numeric_limits<double>::infinity();
+     auto* previous=runs.empty()?nullptr:&runs.back();
+     const double settled=previous?previous->start+runLength(previous->count):departure;
      // The run would pass the row it now stops on pace/6 before its end.
-     if(!held||trigger<=end-pace/6){++run.count;return;}
-     trigger=std::max(trigger,end);
+     if(previous&&departure<=settled-pace/6&&previous->start+runLength(previous->count+count)>=arrival)previous->count+=count;
+     else runs.push_back({std::max({departure,settled,arrival-runLength(count)}),count});
     }
-    runs.push_back({trigger,1});
-   };
-   if(opening){runs.push_back({rows.front().start,double(lead-1)});}
-   for(std::size_t block=1;block<blocks;++block){
-    const auto& leaving=rows[block-1];const bool blank=leaving.words.empty();
-    step(blank&&runs.empty()?leaving.start:leaving.end,!blank);
+    departure=row.end;count=0;
    }
    for(const auto& run:runs){
     const double elapsed=time-run.start,cruise=pace*2*(run.count-1)/3;
-    // A zero Transition duration steps instantly at the trigger itself.
+    // A zero Transition duration steps instantly when the run is due.
     if(!(pace>0)){if(elapsed>=0)steps+=run.count;continue;}
     if(elapsed<=0)continue;
     if(elapsed>=pace+cruise)steps+=run.count;
