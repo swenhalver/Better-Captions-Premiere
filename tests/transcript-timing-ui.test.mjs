@@ -137,6 +137,8 @@ function transcriptController(captions = [cue()], fps = 24, options = {}) {
     export function setDraft(value) { draftText = value; }
     export { choosePause, deletePause, beginPauseEdit };
     export function setQuery(value) { query = value; }
+    export function setList(value) { listEl = value; }
+    export { revealSelection };
     export function setPauseSettings(value) { pauseSettings = value; }
     export function inspect() { return { rows: sentenceRows, allRows: transcriptRows, filteredRows, pauses: pauseRows, selectedPause, selectedLane, sentenceCount, captions, editingRowKey, editingError, editingCaret, caretSplitIndex, timingRowKey, timingError, draftStart, draftEnd, selectedWordOffset, selectedLine: selectedRow, error, draftText }; }
   `);
@@ -1156,4 +1158,65 @@ test('Add line between touching lines takes time from the last word above and le
   assert.deepEqual(words.slice(0, 2), first.words.slice(0, 2));
   assert.deepEqual([words[3].text, words[3].startTime, words[3].endTime], ['', words[2].endTime, 3.75]);
   assert.deepEqual(words.slice(4).map(({ text, startTime, endTime }) => ({ text, startTime, endTime })), next.words.map(({ text, startTime, endTime }) => ({ text, startTime, endTime })));
+});
+
+// A line list of 40px rows showing three rows at a time, in place of the DOM.
+function scrollingList(h) {
+  const list = { scrollTop: 0, clientTop: 0, clientHeight: 120, scrolls: 0, querySelector: () => null,
+    getBoundingClientRect: () => ({ top: 0 }),
+    querySelectorAll: selector => h.inspect().allRows.map((row, index) => ({ dataset: selector === '[data-row-key]' ? { rowKey: row.key } : { captionId: row.line?.caption.id }, offsetHeight: 40,
+      getBoundingClientRect: () => ({ top: index * 40 - list.scrollTop }), scrollIntoView() { throw new Error('Only the line list may scroll, never the panel around it.'); } })) };
+  let top = 0;
+  return new Proxy(list, { set(target, name, value) { if (name === 'scrollTop') { target.scrolls++; top = value; } target[name] = value; return true; }, get(target, name) { return name === 'scrollTop' ? top : target[name]; } });
+}
+function longTranscript(count = 10) {
+  return Array.from({ length: count }, (_, i) => ({ id: `line-${i}`, text: `word${i} more`, startTime: i, endTime: i + 1,
+    words: [{ text: `word${i}`, startTime: i, endTime: i + .5 }, { text: 'more', startTime: i + .5, endTime: i + 1 }] }));
+}
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+test('editing a line leaves the line list where the user scrolled it, through typing, saving and Premiere confirming', async () => {
+  const h = transcriptController(longTranscript()), list = scrollingList(h);
+  h.setList(list); h.revealSelection(); await settle();
+  h.choose(h.inspect().rows[7]); h.revealSelection(); await settle();
+  assert.equal(list.scrollTop, 7 * 40 + 40 - 120, 'Choosing a line below the list scrolls it just into view');
+  const row = h.inspect().rows[7];
+  h.beginTextEdit(row); h.revealSelection(); await settle();
+  h.setDraft('word7 more and then some'); h.revealSelection(); await settle();
+  list.scrollTop = 40; const scrolls = list.scrolls;
+  assert.equal(h.saveInlineText(row), true); h.revealSelection(); await settle();
+  // Premiere confirms the edit: the same transcript arrives again as new objects.
+  h.setCaptions(clone(h.inspect().captions)); h.revealSelection(); await settle();
+  assert.equal(h.changes.length, 1);
+  assert.equal(h.inspect().selectedLine.key, row.key, 'The edited line stays selected');
+  assert.equal(list.scrollTop, 40, 'The list stays where the user scrolled it');
+  assert.equal(list.scrolls, scrolls, 'Nothing scrolled after the edit');
+});
+
+test('a line edited above the selection shifts row keys but not the selection or scroll', async () => {
+  const h = transcriptController(longTranscript()), list = scrollingList(h);
+  h.setList(list); h.choose(h.inspect().rows[5]); h.revealSelection(); await settle();
+  const selected = h.inspect().selectedLine, scrolls = list.scrolls;
+  // An Undo in Premiere adds a word to an earlier line while line 6 stays selected.
+  const next = clone(h.inspect().captions); next[2].words.splice(1, 0, { text: 'extra', startTime: 2.25, endTime: 2.5 }); next[2].words[0].endTime = 2.25; next[2].words[2].startTime = 2.5; next[2].text = 'word2 extra more';
+  h.setCaptions(next); h.revealSelection(); await settle();
+  assert.equal(h.inspect().selectedLine.caption.id, selected.caption.id);
+  assert.equal(list.scrolls, scrolls);
+});
+
+test('choosing, adding or splitting to another line still brings it into view', async () => {
+  const h = transcriptController(longTranscript(), 24, { selectedId: 'line-0' }), list = scrollingList(h);
+  h.setList(list); h.revealSelection(); await settle();
+  assert.equal(list.scrollTop, 0);
+  h.choose(h.inspect().rows[9]); h.revealSelection(); await settle();
+  assert.equal(list.scrollTop, 9 * 40 + 40 - 120);
+  h.choose(h.inspect().rows[1]); h.revealSelection(); await settle();
+  assert.equal(list.scrollTop, 40, 'A line above the list scrolls to its top edge');
+  h.splitCaption(1); h.revealSelection(); await settle();
+  assert.equal(h.inspect().selectedLine.start, 3, 'Split selects its right half');
+  assert.equal(list.scrollTop, 40, 'The new line below is already in view');
+  h.choose(h.inspect().rows[10]); h.revealSelection(); await settle();
+  await h.addLine('after'); h.revealSelection(); await settle();
+  assert.equal(h.inspect().selectedLine.start, h.inspect().rows.at(-1).start, 'Add line selects the new last line');
+  assert.equal(list.scrollTop, (h.inspect().allRows.length) * 40 - 120, 'The new line scrolls into view');
 });

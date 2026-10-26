@@ -182,12 +182,27 @@
     query = ""; selectedRowKey = null; selectedPauseKey = null; editingRowKey = null; editingSource = ""; editingError = ""; timingRowKey = null; timingSource = ''; timingError = ''; error = ""; notice = "";
     if (untrack(() => typingAt)) { typingAt = null; void untrack(() => typing)?.end('abandon', 'sequence changed'); }
   });
-  $effect(() => {
-    const visibleId = selectedPause?.key ?? selectedId ?? activeId;
-    if (!visibleId || !listEl) return;
-    const el = [...listEl.querySelectorAll<HTMLElement>("[data-row-key]")].find((node) => node.dataset.rowKey === (selectedPause?.key ?? selectedRow?.key)) ?? [...listEl.querySelectorAll<HTMLElement>("[data-caption-id]")].find((node) => node.dataset.captionId === visibleId);
-    el?.scrollIntoView({ block: "nearest" });
-  });
+  // Where the selection sits in time. Typing, saving, Premiere confirming an
+  // edit or a refresh rebuild the rows (keys count words, so they shift) but
+  // leave this alone; only choosing another line, pause or caption moves it.
+  let revealTarget = $derived(selectedPause ? `pause:${selectedPause.startTime}` : selectedRow ? `line:${selectedRow.segment?.startTime ?? selectedRow.window?.startTime ?? selectedRow.caption.startTime}` : activeId ? `caption:${activeId}` : '');
+  let revealed = '', revealedIn: HTMLDivElement | undefined;
+  $effect(revealSelection);
+  // Scrolls the list to a newly selected line, never the panel around it, and
+  // leaves the list where the user put it while the same line stays selected.
+  function revealSelection() {
+    const target = revealTarget, list = listEl;
+    if (!target || !list || (target === revealed && list === revealedIn)) return;
+    revealed = target; revealedIn = list;
+    void tick().then(() => {
+      const key = selectedPause?.key ?? selectedRow?.key;
+      const el = [...list.querySelectorAll<HTMLElement>("[data-row-key]")].find(node => node.dataset.rowKey === key) ?? [...list.querySelectorAll<HTMLElement>("[data-caption-id]")].find(node => node.dataset.captionId === (selectedId ?? activeId));
+      if (!el) return;
+      const top = el.getBoundingClientRect().top - list.getBoundingClientRect().top - list.clientTop + list.scrollTop, bottom = top + el.offsetHeight;
+      if (top < list.scrollTop) list.scrollTop = top;
+      else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = Math.min(top, bottom - list.clientHeight);
+    });
+  }
   function commit(next: CaptionItem[], message: string, historyLabel?: string) {
     error = "";
     try {
