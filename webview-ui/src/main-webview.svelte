@@ -187,6 +187,13 @@
     flush: () => { typingEvent(typingController.flush() ? 'cmd-flush' : 'cmd'); },
     hint() { typingEvent('cmd-up'); for (const delay of [120, 400]) setTimeout(() => reconnect?.notify(), delay); },
     end: (mode, reason) => finishTyping(mode, reason),
+    // Writes pending line edits now, through the serialized live output, so a
+    // structural edit is confirmed as its own history step before typing starts.
+    async settle() {
+      const session = sessionManager.current;
+      if (!session || !liveOutput || !await liveOutput.settle()) return false;
+      return sessionManager.current === session && appliedSignatures[outputKey(session)] === outputSignature(session);
+    },
   };
   async function finishTyping(mode: 'commit' | 'cancel' | 'abandon', reason?: string) {
     const typing = typingSession;

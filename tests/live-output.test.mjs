@@ -152,3 +152,32 @@ test('after the layer is read back (Premiere Undo), returning to an earlier writ
   assert.deepEqual(h.calls, ['first', 'first']);
   h.controller.stop();
 });
+test('settle writes the queued edit without its quiet time and resolves once it is confirmed', async () => {
+  const h = fixture(() => { h.context = { ...h.context, needed: false }; });
+  h.controller.notify(); let confirmed = null;
+  void h.controller.settle().then(value => { confirmed = value; });
+  await h.advance(0);
+  assert.deepEqual(h.calls, ['first']); assert.equal(confirmed, true);
+  assert.equal(await h.controller.settle(), true, 'nothing queued is already settled'); h.controller.stop();
+});
+test('settle waits for Premiere to be ready, and is false when a newer edit replaces the queued one first', async () => {
+  const h = fixture(() => { h.context = { ...h.context, needed: false }; });
+  h.context = { ...h.context, ready: false }; let confirmed = null;
+  void h.controller.settle().then(value => { confirmed = value; });
+  await h.advance(2000); assert.deepEqual(h.calls, []); assert.equal(confirmed, null);
+  h.context = { ...h.context, signature: 'newer' }; h.controller.notify(); await h.advance(0);
+  assert.equal(confirmed, false, 'the replaced edit was never confirmed on its own');
+  h.context = { ...h.context, ready: true }; const newer = h.controller.settle(); await h.advance(0);
+  assert.equal(await newer, true); assert.deepEqual(h.calls, ['newer']); h.controller.stop();
+});
+test('settle is false when the write fails and keeps an in-flight write of the same edit', async () => {
+  let release; const h = fixture(() => new Promise(resolve => { release = resolve; }));
+  h.controller.notify(); await h.advance(400); assert.deepEqual(h.calls, ['first']);
+  const running = h.controller.settle();
+  h.context = { ...h.context, signature: 'later' }; h.controller.notify();
+  release(); await h.advance(0);
+  assert.equal(await running, true, 'a newer edit cannot cancel a write already confirming'); assert.deepEqual(h.calls, ['first'], 'the newer edit keeps its quiet time');
+  const failing = fixture(() => { throw new Error('write failed'); });
+  const result = failing.controller.settle(); await failing.advance(0);
+  assert.equal(await result, false); failing.controller.stop(); h.controller.stop();
+});

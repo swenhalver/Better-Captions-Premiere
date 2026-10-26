@@ -17,6 +17,20 @@ export interface PauseLine {
   index: number;
 }
 
+/** Seconds one pause row lasts: the set blank-line time, or else the average
+ * spoken line. Blank lines are silence, not speech: they do not set the pace. */
+function lineCadence(lines: { startTime: number; endTime: number; blank: boolean }[], blankLineSeconds: number): number {
+  if (blankLineSeconds > 0) return blankLineSeconds;
+  const spoken = lines.filter(line => line.endTime > line.startTime && !line.blank);
+  return spoken.length ? spoken.reduce((total, line) => total + (line.endTime - line.startTime), 0) / spoken.length : .6;
+}
+/** The pause row length for these captions, which is also a new line's length. */
+export function pauseCadence(captions: CaptionItem[], blankLineSeconds = 0): number {
+  const words = transcriptWords(captions);
+  return lineCadence(transcriptLines(captions).map(line => ({ blank: isBlankLine(words.slice(line.start, line.end)),
+    startTime: words[line.start].startTime, endTime: Math.max(...words.slice(line.start, line.end).map(word => word.endTime)) })), blankLineSeconds);
+}
+
 /** Native silence-row derivation, shared by paged and rolling presentation.
  * Text rows come from current grouping; storage containers add no boundaries.
  * Removing a row changes only its count, never speech or pause timestamps. */
@@ -30,10 +44,7 @@ export function derivePauseLines(captions: CaptionItem[], settings: PauseLineSet
     startTime: words[line.start].startTime,
     endTime: Math.max(...words.slice(line.start, line.end).map(word => word.endTime)) }));
   if (!lines.length) return [];
-  // Blank lines are silence, not speech: they do not set the pace.
-  const spoken = lines.filter(line => line.endTime > line.startTime && !line.blank);
-  const cadence = settings.blankLineSeconds > 0 ? settings.blankLineSeconds :
-    spoken.length ? spoken.reduce((total, line) => total + (line.endTime - line.startTime), 0) / spoken.length : .6;
+  const cadence = lineCadence(lines, settings.blankLineSeconds);
   const result: PauseLine[] = [];
   for (let line = 1; line < lines.length; line++) {
     const previous = lines[line - 1], next = lines[line];

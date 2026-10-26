@@ -5,11 +5,13 @@
   interface Props { caption: CaptionItem; fps: number; currentTime: number; selectedWord?: number; onSelectWord?: (index: number) => void; onChange: (caption: CaptionItem) => void; onSeek: (time: number) => void;
     wordOffset?: number; onSplitBefore?: (wordIndex: number) => void; splitDisabled?: boolean; splitTitle?: string; caretSplitIndex?: number | null;
     onMergeNext?: () => void; mergeDisabled?: boolean; mergeTitle?: string;
+    /** Adds a line above ('before') or below ('after'); a problem string explains why that side has no room. */
+    onAddLine?: (side: 'before' | 'after') => void; addLineDisabled?: boolean; addLineProblems?: { before: string; after: string } | null;
     /** Words outside this range belong to the neighbouring lines and are shown for retiming across the line ending. */
     focusStart?: number; focusEnd?: number;
   }
   let { caption, fps, currentTime, selectedWord = 0, onSelectWord = () => {}, onChange, onSeek,
-    wordOffset = 0, onSplitBefore, splitDisabled = false, splitTitle, caretSplitIndex = null, onMergeNext, mergeDisabled = false, mergeTitle, focusStart = 0, focusEnd = Infinity }: Props = $props();
+    wordOffset = 0, onSplitBefore, splitDisabled = false, splitTitle, caretSplitIndex = null, onMergeNext, mergeDisabled = false, mergeTitle, onAddLine, addLineDisabled = false, addLineProblems = null, focusStart = 0, focusEnd = Infinity }: Props = $props();
   let zoom = $state<number | 'fit'>('fit'), problem = $state(''), draft = $state<CaptionItem | null>(null);
   let lane: HTMLDivElement;
   let cleanupDrag: (() => void) | undefined;
@@ -30,6 +32,10 @@
   const splitAllowed = $derived(caretSplitIndex !== null ? splitIndex > 0 : index > focusStart && index < Math.min(focusEnd, shown.words.length));
   function splitSelected() { if (!splitDisabled && onSplitBefore && splitAllowed) onSplitBefore(splitIndex); }
   function mergeSelected() { if (!mergeDisabled) onMergeNext?.(); }
+  const addLines = [
+    { side: 'before', label: 'Add line above', icon: 'M4 14h16M4 19h16M12 3v7M8.5 6.5h7' },
+    { side: 'after', label: 'Add line below', icon: 'M4 5h16M4 10h16M12 14v7M8.5 17.5h7' },
+  ] as const;
   async function zoomAtPointer(container: HTMLDivElement, next: number | 'fit', clientX: number) {
     const currentLane = lane, before = currentLane.getBoundingClientRect(), revision = ++zoomRevision;
     const fraction = Math.max(0, Math.min(1, (clientX - before.left) / before.width));
@@ -138,6 +144,9 @@
   <div class="word-timing__toolbar"><span>Words</span><div class="word-timing__actions">
     <button class="word-timing__action" aria-label={caretSplitIndex !== null ? "Split line at text cursor" : "Split line before selected word"} onpointerdown={(event) => event.preventDefault()} title={splitTitle ?? (caretSplitIndex !== null ? (splitIndex > 0 ? 'Split line at text cursor' : 'Place the text cursor between words to split') : wordOffset + index > 0 ? `Split line before “${word.text}”` : 'Select a word after the first word to split')} disabled={splitDisabled || !onSplitBefore || !splitAllowed} onclick={splitSelected}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="m8.12 8.12 3.88 3.88m-3.88 3.88L20 4m-6 10 6 6"/></svg></button>
     <button class="word-timing__action" aria-label="Merge with next line" title={mergeTitle ?? 'Merge with next line'} disabled={mergeDisabled || !onMergeNext} onclick={mergeSelected}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 4v3c0 3 3 5 7 5M5 20v-3c0-3 3-5 7-5m0 0h8m-3-3 3 3-3 3"/></svg></button>
+    {#if onAddLine && addLineProblems}{#each addLines as add (add.side)}{@const problem = addLineProblems[add.side]}
+      <button class="word-timing__action" aria-label={add.label} title={problem || `${add.label} (Enter at the ${add.side === 'before' ? 'start' : 'end'} of the text)`} onpointerdown={(event) => event.preventDefault()} disabled={addLineDisabled || !!problem} onclick={() => onAddLine(add.side)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d={add.icon}/></svg></button>
+    {/each}{/if}
     <label>Zoom <select aria-label="Word timeline zoom" bind:value={zoom}><option value="fit">Fit content</option><option value={1}>100%</option><option value={1.5}>150%</option><option value={2}>200%</option><option value={3}>300%</option><option value={4}>400%</option></select></label>
   </div></div>
   <div class="word-timing__scroll" role="region" aria-label="Word timeline; scroll horizontally" use:wheelZoom>
@@ -166,7 +175,7 @@
 <style>
   .word-timing{display:flex;flex-direction:column;gap:var(--caption-space-s);min-inline-size:0}
   .word-timing__toolbar{display:flex;justify-content:space-between;align-items:center;font-size:var(--caption-type-xs);gap:.5rem}.word-timing__toolbar select{background:var(--color-input);color:var(--color-panel-text);border:1px solid var(--color-panel-border);padding:.2rem}
-  .word-timing__actions{display:flex;align-items:center;gap:var(--caption-space-xs);label{display:flex;align-items:center;gap:var(--caption-space-xs);white-space:nowrap}}
+  .word-timing__actions{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:var(--caption-space-xs);label{display:flex;align-items:center;gap:var(--caption-space-xs);white-space:nowrap}}
   .word-timing__action{display:grid;place-items:center;inline-size:2rem;block-size:2rem;padding:.25rem;border:1px solid transparent;border-radius:var(--caption-radius);background:transparent;color:var(--color-panel-text);cursor:pointer;svg{inline-size:1.15rem;block-size:1.15rem}&:hover:enabled{border-color:var(--color-panel-border);background:var(--color-surface-raised)}&:disabled{opacity:.45;cursor:default}}
   .word-timing__scroll{overflow-x:auto;min-inline-size:0;border:1px solid var(--color-panel-border);padding:0 .45rem}
   .word-timing__lane{position:relative;block-size:5rem;min-inline-size:100%}

@@ -37,12 +37,23 @@ export function createLiveOutput(options: Options) {
   let current: Promise<void> | null = null;
   const debounce = () => typeof options.debounce === 'function' ? options.debounce() : options.debounce ?? 400;
   const uncertain = new Map<string, string>();
+  // settle() callers, each waiting for one edit's write to be confirmed or lost.
+  const settling: { key: string; sequenceId: string; resolve: (confirmed: boolean) => void }[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   function schedule(delay: number) {
     if (!alive || running || timer !== undefined) return;
     timer = setTimeout(() => { timer = undefined; void drain(); }, Math.max(0, delay));
   }
-  function notify() {
+  function settleWaiters() {
+    for (const waiter of [...settling]) {
+      const lost = !alive || failed === waiter.key || uncertain.has(waiter.sequenceId) || (desired !== waiter.key && running !== waiter.key);
+      if (complete !== waiter.key && !lost) continue;
+      settling.splice(settling.indexOf(waiter), 1);
+      waiter.resolve(complete === waiter.key);
+    }
+  }
+  function notify() { update(); settleWaiters(); }
+  function update() {
     if (!alive) return;
     const context = options.current(), next = context?.needed ? identity(context) : '';
     if (next !== desired) {
@@ -62,7 +73,7 @@ export function createLiveOutput(options: Options) {
   async function drain() {
     if (!alive || running) return;
     const context = options.current();
-    if (!context?.needed) { desired = ''; options.onStatus({ phase: 'idle', message: '' }); return; }
+    if (!context?.needed) { desired = ''; options.onStatus({ phase: 'idle', message: '' }); settleWaiters(); return; }
     const key = identity(context);
     if (key !== desired) { notify(); return; }
     if (uncertain.has(context.sequenceId) || failed === key || complete === key) return;
@@ -118,6 +129,23 @@ export function createLiveOutput(options: Options) {
     diagnostics: () => ({ running: !!running, queued: !!desired && desired !== complete, retries, blocked: uncertain.size > 0 }),
     /** Settles when no write is in flight. A write that is not ready yet is not awaited. */
     idle: () => current ?? Promise.resolve(),
-    stop() { alive = false; if (timer !== undefined) clearTimeout(timer); },
+    /** Writes the current edit without its quiet time, so it becomes a history
+     * step of its own. True once that write is confirmed; false if it fails, is
+     * blocked or a newer edit replaces it first. A write waiting for Premiere keeps waiting. */
+    settle(): Promise<boolean> {
+      notify();
+      const context = options.current();
+      if (!alive) return Promise.resolve(false);
+      if (!context?.needed) return Promise.resolve(true);
+      const key = identity(context);
+      const settled = new Promise<boolean>(resolve => settling.push({ key, sequenceId: context.sequenceId, resolve }));
+      if (running !== key && complete !== key) {
+        changedAt = now() - debounce();
+        if (timer !== undefined) { clearTimeout(timer); timer = undefined; }
+      }
+      notify();
+      return settled;
+    },
+    stop() { alive = false; if (timer !== undefined) clearTimeout(timer); settleWaiters(); },
   };
 }

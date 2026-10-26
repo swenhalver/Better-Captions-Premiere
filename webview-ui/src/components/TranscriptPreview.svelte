@@ -6,11 +6,13 @@
   import type { CaptionItem, LineWrap } from "../lib/types";
   import { formatTime, validateCharacterLimit } from "../lib/transcript/parser";
   import { replaceText, retime, validateCaptions } from "../lib/transcript/edit";
-  import { captionWordOffset, changeTranscriptLineBreak, isBlankLine, lineSegment, replaceTranscriptLine, replaceTranscriptWords, transcriptLineCaption, transcriptLineLane, transcriptLines, transcriptWords, withTranscriptLines, type TranscriptLine } from "../lib/transcript/lines";
+  import { captionWordOffset, changeTranscriptLineBreak, insertTranscriptLine, isBlankLine, lineSegment, newLineRoom, replaceTranscriptLine, replaceTranscriptWords, transcriptLineCaption, transcriptLineLane, transcriptLines, transcriptWords, withTranscriptLines, type NewLineBorrow, type NewLineSide, type TranscriptLine } from "../lib/transcript/lines";
   import type { WordEdge } from '../lib/transcript/timing';
   import { applyTypingText, typingAnchor, typingRange, typingText, type TypingAnchor } from '../lib/transcript/typing';
-  import { derivePauseLines, removePauseLine, type PauseLine, type PauseLineSettings } from '../lib/native-effect/pause-lines';
+  import { derivePauseLines, pauseCadence, removePauseLine, type PauseLine, type PauseLineSettings } from '../lib/native-effect/pause-lines';
   type SentenceRow = TranscriptLine;
+  // At touching lines, Add line takes time from one neighbouring word (see insertTranscriptLine).
+  const newLineBorrow: NewLineBorrow = 'neighbour';
   type TranscriptRow = { kind: 'text'; key: string; line: SentenceRow } | { kind: 'pause'; key: string; pause: PauseLine };
   /** Line editor typing on a native layer: Premiere history steps while it is open (main-webview). */
   export interface TranscriptTyping {
@@ -21,6 +23,8 @@
     /** Cmd/Ctrl came up: Premiere may just have run Undo or Redo. */
     hint(): void;
     end(mode: 'commit' | 'cancel' | 'abandon', reason?: string): Promise<void>;
+    /** Writes pending line edits now. True once Premiere confirmed them as their own history step. */
+    settle(): Promise<boolean>;
   }
   interface Props {
     frameRate: number; selectedWord?: number; onSelectWord?: (index:number)=>void;
@@ -48,6 +52,28 @@
   // Blur runs before a pause button's click. Retain its history merge so that
   // a subsequent deletion waits even after the editor has already closed.
   let typingFinished: Promise<void> | null = null;
+  // Premiere confirming the last Add line as its own Undo step (true) or not
+  // (false). Until then an open editor keeps what is typed without typing
+  // steps, and saving its text or adding another line waits here.
+  let lineAdded: Promise<boolean> | null = null, afterLineAddedRunning = false, addingLine = false, destroyed = false;
+  function awaitLineAdded(pending: Promise<boolean>) {
+    lineAdded = pending;
+    void pending.then(() => { if (lineAdded === pending) lineAdded = null; });
+  }
+  // Runs after the pending Add line settles; false (run it now) when none is pending.
+  function afterLineAdded(run: (confirmed: boolean) => void) {
+    const pending = lineAdded;
+    if (!pending || afterLineAddedRunning) return false;
+    awaitLineAdded(pending.then(confirmed => {
+      if (destroyed) return confirmed;
+      afterLineAddedRunning = true;
+      try { run(confirmed); }
+      catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
+      finally { afterLineAddedRunning = false; }
+      return confirmed;
+    }));
+    return true;
+  }
   let sentenceRows = $derived.by((): SentenceRow[] => {
     const rows = transcriptLines(captions);
     return typingAt && editingRowKey ? pinTypingRow(rows, editingRowKey, typingAt) : rows;
@@ -64,6 +90,8 @@
   }));
   let selectedPause = $derived(pauseRows.find(pause => pause.key === selectedPauseKey));
   let filteredRows = $derived(transcriptRows.filter((row, index) => {
+    // The open editor stays visible, such as a just-added blank line during a search.
+    if (row.key === editingRowKey) return true;
     const text = row.kind === 'pause' ? `Pause ${formatTime(row.pause.startTime)} ${formatTime(row.pause.endTime)}` : rowCaption(row.line).text;
     return `${index + 1} ${text}`.toLowerCase().includes(query.toLowerCase());
   }));
@@ -125,7 +153,7 @@
   let timingRowKey = $state<string | null>(null);
   let timingSource = $state('');
   $effect(()=>onEditingChange(editingRowKey!==null||timingRowKey!==null));
-  onDestroy(()=>{ if (typingAt) { typingAt = null; void typing?.end('abandon', 'editor closed'); } onEditingChange(false); });
+  onDestroy(()=>{ destroyed = true; if (typingAt) { typingAt = null; void typing?.end('abandon', 'editor closed'); } onEditingChange(false); });
   // Something other than typing (an Undo past it, another tool) changed the
   // words around the open editor: close it without merging its steps.
   $effect(() => { if (typingAt && editingRowKey && !typingRange(captions, typingAt)) { closeTextEdit(); void typing?.end('abandon', 'words around the line changed'); } });
@@ -136,6 +164,13 @@
   let error = $state("");
   let notice = $state("");
   let sentenceCount = $derived(transcriptRows.length);
+  // A new line is one pause row long, the same as typing into a pause.
+  let newLineOptions = $derived({ frameRate, cadence: captions.length ? pauseCadence(captions, pauseSettings?.blankLineSeconds ?? 0) : 0, borrow: newLineBorrow });
+  let newLineProblems = $derived.by(() => {
+    if (!selectedRow || selectedPause || selectedRow.end <= selectedRow.start) return null;
+    const problem = (at: number, side: NewLineSide) => { const room = newLineRoom(captions, at, { ...newLineOptions, side }); return 'problem' in room ? room.problem : ''; };
+    return { before: problem(selectedRow.start, 'before'), after: problem(selectedRow.end, 'after') };
+  });
   let hasNextLine = $derived(!!selectedRow && sentenceRows.indexOf(selectedRow) < sentenceRows.length - 1);
   let listEl: HTMLDivElement | undefined = $state();
   // Reset only when the sequence really changes: the parent's session object is
@@ -211,11 +246,17 @@
     editingSource = textSource(current);
     editingError = '';
     editingRowKey = row.key;
-    const span = typing && { start: current.start, end: current.end };
-    if (typing && span) {
-      typingAt = typingAnchor(captions, current.caption.id, span.start, span.end, true);
-      typing.open(typingAt, captions, draftText, editingCaret, showTypingDraft);
-    }
+    if (!afterLineAdded(confirmed => { if (confirmed) openTyping(row.key); })) openTyping(row.key);
+  }
+  // Hands the open editor to Premiere history steps. Text typed while an Add
+  // line was being confirmed becomes the first typing step.
+  function openTyping(key: string) {
+    const current = sentenceRows.find(item => item.key === key);
+    if (!typing || typingAt || editingRowKey !== key || !current || textSource(current) !== editingSource) return;
+    const text = rowCaption(current).text, caret = textEditor?.selectionStart ?? editingCaret;
+    typingAt = typingAnchor(captions, current.caption.id, current.start, current.end, true);
+    typing.open(typingAt, captions, text, Math.min(caret, text.length), showTypingDraft);
+    if (draftText !== text) typing.input(draftText, caret);
   }
   // Premiere Undo/Redo of a typing step, while the editor stays open.
   function showTypingDraft(draft: string, caret: number) {
@@ -247,18 +288,27 @@
       typingFinished = typing.end('commit');
       return true;
     }
+    // Text saved before Premiere confirmed its Add line is saved right after,
+    // as an Undo step of its own.
+    const draft = draftText, source = editingSource;
+    if (afterLineAdded(() => { try { saveText(row.key, draft, source); } catch (problem) { throw new Error(`${problem instanceof Error ? problem.message : String(problem)} Your text was: ${draft}`); } })) {
+      closeTextEdit();
+      return true;
+    }
     try {
-      const current = sentenceRows.find(item => item.key === row.key);
-      if (!current || textSource(current) !== editingSource) throw new Error('This line changed while you were editing. Cancel and select it again.');
-      const source = rowCaption(current), updated = replaceText(source, draftText);
-      if (updated.words.length !== source.words.length || updated.text !== source.text) {
-        const next = replaceTranscriptLine(captions, current, updated);
-        const message = !updated.text ? 'Line text deleted. The blank line keeps its time.' : updated.timingEstimated ? 'Text saved. Review the estimated word timings.' : 'Text saved with existing word timings.';
-        if (!commit(next, message, 'Edit transcript')) { editingError = error; return false; }
-      }
+      saveText(row.key, draft, source);
       closeTextEdit();
       return true;
     } catch (problem) { editingError = problem instanceof Error ? problem.message : String(problem); return false; }
+  }
+  function saveText(key: string, draft: string, source: string) {
+    const current = sentenceRows.find(item => item.key === key);
+    if (!current || textSource(current) !== source) throw new Error('This line changed while you were editing. Cancel and select it again.');
+    const before = rowCaption(current), updated = replaceText(before, draft);
+    if (updated.words.length === before.words.length && updated.text === before.text) return;
+    const next = replaceTranscriptLine(captions, current, updated);
+    const message = !updated.text ? 'Line text deleted. The blank line keeps its time.' : updated.timingEstimated ? 'Text saved. Review the estimated word timings.' : 'Text saved with existing word timings.';
+    if (!commit(next, message, 'Edit transcript')) throw new Error(error);
   }
   function cancelTextEdit() {
     const typed = !!typingAt;
@@ -278,6 +328,18 @@
     // Premiere handles Cmd+Z itself; only the bare Cmd key reaches the panel.
     if (event.key === 'Meta' || event.key === 'Control') { typing?.flush(); return; }
     if (event.isComposing) return;
+    // Enter breaks the line at the text cursor, as in a text editor: at the end
+    // it adds a line below, at the start a line above, between words it splits.
+    if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      if (event.repeat) return;
+      const index = wordBoundaryAtCaret(draftText, (event.currentTarget as HTMLTextAreaElement).selectionStart ?? draftText.length);
+      const count = draftText.match(/\S+/g)?.length ?? 0;
+      if (count && index <= 0) void addLine('before');
+      else if (index >= count) void addLine('after');
+      else splitCaption(index + row.start - captionWordOffset(captions, selectedContainer!.id));
+      return;
+    }
     if (event.key !== 'Escape' && !((event.ctrlKey || event.metaKey) && event.key === 'Enter')) return;
     event.preventDefault();
     if (event.key === 'Escape') cancelTextEdit();
@@ -364,6 +426,8 @@
   }
   function splitCaption(wordIndex: number, typed = false) {
     if (disabled || !selectedRow) return;
+    // After a pending Add line, so the text typed meanwhile is split too.
+    if (!typed && afterLineAdded(() => splitCaption(wordIndex))) return;
     const row = selectedRow, splitAt = wordIndex + captionWordOffset(captions, selectedContainer!.id);
     if (!typed && typing && typingAt && editingRowKey) {
       const problem = typingProblem();
@@ -392,6 +456,7 @@
   }
   function mergeNext(typed = false) {
     if (disabled || !selectedRow || !hasNextLine) return;
+    if (!typed && afterLineAdded(() => mergeNext())) return;
     if (!typed && typing && typingAt && editingRowKey) {
       const problem = typingProblem();
       if (problem) { error = problem; return; }
@@ -413,6 +478,35 @@
       selectedRowKey = transcriptLines(next).find(item => item.start === current.start)!.key;
       void tick().then(() => listEl?.querySelector<HTMLButtonElement>('.transcript-editor__cue--selected .transcript-editor__cue-text')?.focus({ preventScroll: true }));
     } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
+  }
+  // One "Add line" step adds a blank line beside the selected one, then opens
+  // it for typing. Open editors are saved first, as when choosing a pause.
+  async function addLine(side: NewLineSide) {
+    if (disabled || !selectedRow || selectedPause || addingLine) return;
+    const start = selectedRow.start;
+    addingLine = true;
+    try {
+      if (!await finishPauseEditing()) return;
+      // Edits still waiting to be written, such as the previous new line's
+      // text, become Undo steps of their own first.
+      if (typing) await typing.settle();
+      if (disabled) return;
+      const current = sentenceRows.find(row => row.start === start && row.end > row.start);
+      if (!current) throw new Error('Select the line again.');
+      const at = side === 'before' ? current.start : current.end;
+      const added = insertTranscriptLine(captions, at, { ...newLineOptions, side });
+      if (!commit(added.captions, '', 'Add line')) return;
+      await tick();
+      const line = sentenceRows.find(row => row.start === at);
+      if (!line) throw new Error('The line was added. Select it to type.');
+      // The editor opens at once and keeps what is typed; its typing steps
+      // start once Premiere confirms Add line as one Undo step.
+      if (typing) awaitLineAdded(typing.settle());
+      beginTextEdit(line);
+      const borrowed = added.borrowed;
+      notice = !borrowed ? 'Line added.' : `Line added. It took ${borrowed.frames} ${borrowed.frames === 1 ? 'frame' : 'frames'} from the ${borrowed.edge === 'endTime' ? 'end' : 'start'} of ${borrowed.text ? `“${borrowed.text}”` : 'a blank line'}.`;
+    } catch (problem) { error = problem instanceof Error ? problem.message : String(problem); }
+    finally { addingLine = false; }
   }
   const lineWraps: { value: LineWrap; label: string; title: string }[] = [
     { value: 'fill', label: 'Fill', title: 'Fill: as many words on each line as fit' },
@@ -438,6 +532,8 @@
       if (textRow && !saveInlineText(textRow)) return false;
     }
     await typingFinished;
+    // A pause editor or another new line never opens before Premiere confirms an Add line.
+    await lineAdded;
     return true;
   }
   async function choosePause(pause: PauseLine) {
@@ -533,7 +629,7 @@
                   <div class="transcript-editor__cue-time"><button class="transcript-editor__timestamp" aria-label="Edit line {number} start time" onclick={() => beginTimingEdit(row,'startTime')} disabled={disabled}>{formatTime(row.segment?.startTime ?? row.caption.startTime)}</button><span aria-hidden="true">—</span><button class="transcript-editor__timestamp" aria-label="Edit line {number} end time" onclick={() => beginTimingEdit(row,'endTime')} disabled={disabled}>{formatTime(row.segment?.endTime ?? row.caption.endTime)}</button></div>
                 {/if}
                 {#if editingRowKey === row.key}
-                  <textarea class="transcript-editor__cue-input" aria-label="Edit line {number} text" aria-invalid={!!editingError} aria-describedby={editingError ? 'caption-inline-error' : undefined} rows="1" bind:value={draftText} bind:this={textEditor} spellcheck="true" use:focusTextEditor onselect={trackTextCaret} onclick={trackTextCaret} onkeyup={(event) => { if (event.key === 'Meta' || event.key === 'Control') typing?.hint(); trackTextCaret(event); }} oninput={(event) => { editingError = ''; trackTextCaret(event); resizeTextEditor(event.currentTarget); typing?.input(event.currentTarget.value, event.currentTarget.selectionStart ?? 0); }} onkeydown={(event) => textKeydown(event,row)} onfocus={() => textEditorFocused = true} onblur={() => { textEditorFocused = false; saveInlineText(row); }}></textarea>
+                  <textarea class="transcript-editor__cue-input" aria-label="Edit line {number} text" aria-invalid={!!editingError} aria-describedby={editingError ? 'caption-inline-error' : undefined} rows="1" bind:value={draftText} bind:this={textEditor} spellcheck="true" use:focusTextEditor onselect={trackTextCaret} onclick={trackTextCaret} onkeyup={(event) => { if (event.key === 'Meta' || event.key === 'Control') typing?.hint(); trackTextCaret(event); }} oninput={(event) => { editingError = ''; trackTextCaret(event); resizeTextEditor(event.currentTarget); if (typingAt) typing?.input(event.currentTarget.value, event.currentTarget.selectionStart ?? 0); }} onkeydown={(event) => textKeydown(event,row)} onfocus={() => textEditorFocused = true} onblur={() => { textEditorFocused = false; saveInlineText(row); }}></textarea>
                   {#if editingError}<p class="transcript-editor__text-error" id="caption-inline-error" role="alert">{editingError}</p>{:else if draftText !== rowCaption(row).text}<span class="transcript-editor__text-pending" role="status">Unsaved</span>{/if}
                 {:else}
                   <button class="transcript-editor__cue-text" aria-label="Edit line {number} text" onclick={(event) => beginTextEdit(row,event)} disabled={disabled}>{#if blank}<span aria-hidden="true">&nbsp;</span>{:else if row.segment}{row.segment.text}{:else if row.caption.renderSegments}{#each row.caption.renderSegments as group (group.id)}<span class="transcript-editor__cue-phrase">{group.text}</span>{/each}{:else}{row.caption.text}{/if}</button>
@@ -550,7 +646,8 @@
         <div class="transcript-editor__edit">
           <WordTimeline caption={selected} fps={frameRate} {currentTime} selectedWord={Math.max(0, selectedWord-selectedWordOffset)} onSelectWord={(index) => onSelectWord(index+selectedWordOffset)} onSeek={onSeek} onChange={(caption) => updateCaption(caption,"Word timing saved.")}
             wordOffset={selectedWordOffset} focusStart={selectedLane?.focusStart} focusEnd={selectedLane?.focusEnd} onSplitBefore={splitCaption} {caretSplitIndex} splitDisabled={disabled}
-            onMergeNext={mergeNext} mergeDisabled={disabled || !hasNextLine} mergeTitle="Merge with the next line" />
+            onMergeNext={mergeNext} mergeDisabled={disabled || !hasNextLine} mergeTitle="Merge with the next line"
+            onAddLine={addLine} addLineDisabled={disabled} addLineProblems={newLineProblems} />
           {#if error}<p class="caption-message caption-message--error" role="alert">{error}</p>{/if}
           {#if notice}<p class="caption-message" role="status">{notice}</p>{/if}
           {#if selected.timingEstimated}<p class="transcript-editor__estimated">Word timings are estimated. Review them in the word lane.</p>{/if}

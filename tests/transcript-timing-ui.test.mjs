@@ -131,7 +131,7 @@ function transcriptController(captions = [cue()], fps = 24, options = {}) {
   const changes = [], selections = [], seeks = [], labels = [];
   h = controller('TranscriptPreview', { ...transcriptProps(captions), ...options, frameRate: fps,
     onUpdate: (value, label) => { changes.push(clone(value)); labels.push(label); h.setCaptions(value); }, onSelect: value => { selections.push(value); h.setSelectedId(value); }, onSeek: value => seeks.push(value) }, `
-    export { wordBoundaryAtCaret, trackTextCaret, changeCharacterLimit, beginTextEdit, saveInlineText, cancelTextEdit, textKeydown, textCaretOffset, focusTextEditor, beginTimingEdit, inputCaptionTime, saveInlineTiming, cancelTimingEdit, timingBlur, timingKeydown, timingRange, updateCaption, splitCaption, mergeNext, choose };
+    export { addLine, wordBoundaryAtCaret, trackTextCaret, changeCharacterLimit, beginTextEdit, saveInlineText, cancelTextEdit, textKeydown, textCaretOffset, focusTextEditor, beginTimingEdit, inputCaptionTime, saveInlineTiming, cancelTimingEdit, timingBlur, timingKeydown, timingRange, updateCaption, splitCaption, mergeNext, choose };
     export function setCaptions(value) { captions = value; }
     export function setSelectedId(value) { selectedId = value; }
     export function setDraft(value) { draftText = value; }
@@ -323,7 +323,11 @@ test('inline text Escape cancels, a blank draft leaves a timed blank line, and s
   assert.equal(h.saveInlineText(row), true); assert.equal(h.inspect().editingRowKey, null);
   assert.deepEqual(h.changes[0][0].words.map(word => [word.text, word.startTime, word.endTime]), [['', 0, 90 / 24]]);
   assert.equal(h.labels[0], 'Edit transcript');
-  assert.match(render(TranscriptPreview, { props: transcriptProps(h.changes[0]) }).body, /transcript-editor__blank-label[^>]*>Blank line</);
+  // The blank row shows no placeholder: a hidden space keeps its height, and
+  // the button keeps its accessible name.
+  const blankHtml = render(TranscriptPreview, { props: transcriptProps(h.changes[0]) }).body;
+  assert.match(blankHtml, /<button class="transcript-editor__cue-text[^"]*" aria-label="Edit line 1 text"[^>]*>(<!--[^>]*-->)*<span aria-hidden="true">(&nbsp;|\u00a0)<\/span>(<!--[^>]*-->)*<\/button>/);
+  assert.doesNotMatch(blankHtml, /Blank line/);
   // The blank row stays addressable and takes new text in the same time.
   const blank = h.inspect().rows[0];
   h.beginTextEdit(blank); assert.equal(h.inspect().draftText, ''); h.setDraft('back again');
@@ -1003,6 +1007,66 @@ test('pause controls respect disabled deletion and text timing remains bounded b
   assert.equal(editable.inspect().pauses.at(-1).endTime, 7);
 });
 
+// Add line on a native layer is one Undo step of its own: typing steps start
+// only after Premiere confirms its write, and nothing typed meanwhile is lost.
+function addLineFixture() {
+  const calls = [], holds = [];
+  const typing = { open: (anchor, captions, text) => calls.push(['open', anchor.start, text]), input: draft => calls.push(['input', draft]),
+    flush() {}, hint() {}, end: async mode => { calls.push(['end', mode]); },
+    // Pending edits before the line is added settle at once; the Add line write is held.
+    settle: () => { calls.push(['settle']); return calls.filter(call => call[0] === 'settle').length % 2 ? Promise.resolve(true) : new Promise(resolve => holds.push(resolve)); } };
+  const h = transcriptController(pauseFixture(), 24, { typing });
+  h.choose(h.inspect().rows[0]);
+  const added = () => h.inspect().rows.find(row => row.key === h.inspect().editingRowKey);
+  return { h, calls, holds, added, settled: () => new Promise(resolve => setImmediate(resolve)) };
+}
+test('Add line opens its editor at once but starts typing steps only after Premiere confirms the Add line step', async () => {
+  const { h, calls, holds, added, settled } = addLineFixture();
+  await h.addLine('after');
+  assert.deepEqual(h.labels, ['Add line']);
+  const row = added(); assert.ok(row, 'the new line is open for typing'); assert.equal(h.inspect().draftText, '');
+  assert.deepEqual(calls, [['settle'], ['settle']], 'no typing step can join the unconfirmed Add line write');
+  h.setDraft('Fresh words');
+  holds[0](true); await settled();
+  assert.deepEqual(calls.slice(2), [['open', row.start, ''], ['input', 'Fresh words']], 'text typed meanwhile becomes the first typing step');
+  // Leaving now merges the typing steps; the panel commits nothing itself.
+  assert.equal(h.saveInlineText(added()), true);
+  assert.deepEqual(calls.at(-1), ['end', 'commit']); assert.equal(h.changes.length, 1);
+});
+test('text saved before Add line is confirmed is written after it, as a separate Undo step', async () => {
+  const { h, calls, holds, added, settled } = addLineFixture();
+  await h.addLine('after');
+  const row = added(); h.setDraft('Quick words');
+  assert.equal(h.saveInlineText(row), true); assert.equal(h.inspect().editingRowKey, null);
+  assert.equal(h.changes.length, 1, 'the text waits for the Add line step');
+  holds[0](true); await settled();
+  assert.deepEqual(h.labels, ['Add line', 'Edit transcript']);
+  assert.deepEqual(lines.transcriptLines(h.changes[1]).map(item => lines.transcriptLineCaption(h.changes[1], item).text), ['one two three', 'Quick words', 'one two three']);
+  assert.equal(calls.some(call => call[0] === 'open'), false, 'the closed editor opens no typing session');
+  // A second Add line waits for the first and is its own step too.
+  h.choose(h.inspect().rows[1]);
+  await h.addLine('after');
+  assert.deepEqual(h.labels, ['Add line', 'Edit transcript', 'Add line']);
+});
+test('Enter between words typed before Add line is confirmed splits that text after the confirmation', async () => {
+  const { h, calls, holds, added, settled } = addLineFixture();
+  await h.addLine('after');
+  const row = added(); h.setDraft('left right');
+  h.splitCaption(1 + row.start - lines.captionWordOffset(h.inspect().captions, h.inspect().selectedLine.caption.id));
+  assert.equal(h.changes.length, 1, 'nothing is split before Premiere confirms Add line');
+  holds[0](true); await settled();
+  assert.deepEqual(calls.slice(2), [['open', row.start, ''], ['input', 'left right'], ['end', 'commit']], 'the typing is merged first, then split as usual');
+});
+test('if Premiere cannot confirm Add line, its editor saves text as an ordinary edit', async () => {
+  const { h, calls, holds, added, settled } = addLineFixture();
+  await h.addLine('after');
+  holds[0](false); await settled();
+  assert.equal(calls.some(call => call[0] === 'open'), false);
+  h.setDraft('Plain save');
+  assert.equal(h.saveInlineText(added()), true);
+  assert.deepEqual(h.labels, ['Add line', 'Edit transcript']);
+});
+
 test('deleting a pause waits for native typing to finish before publishing its independent history edit', async () => {
   let finish;
   const calls = [], typing = { open() {}, input() {}, flush() {}, hint() {}, end: mode => { calls.push(mode); return new Promise(resolve => { finish = resolve; }); } };
@@ -1076,4 +1140,20 @@ test('the blur before a pause deletion click finishes its typing history merge b
   assert.deepEqual(calls, ['commit']); assert.equal(h.changes.length, 0);
   finish(); await deletion;
   assert.equal(h.changes.length, 1); assert.deepEqual(h.labels, ['Delete pause line']);
+});
+test('Add line between touching lines takes time from the last word above and leaves every other word alone', async () => {
+  const first = unlinked(cue()), next = unlinked(cue());
+  next.id = 'next'; next.startTime = 3.75; next.endTime = 7.5;
+  next.words = next.words.map(word => ({ ...word, startTime: word.startTime + 3.75, endTime: word.endTime + 3.75 }));
+  const h = transcriptController([first, next], 24);
+  h.choose(h.inspect().rows[0]);
+  await h.addLine('after');
+  assert.equal(h.inspect().error, '');
+  assert.deepEqual(h.labels, ['Add line']);
+  const words = h.changes[0].flatMap(caption => caption.words);
+  assert.equal(words.length, 7);
+  assert.ok(words[2].endTime < 3.75, 'the last word above gives up its end');
+  assert.deepEqual(words.slice(0, 2), first.words.slice(0, 2));
+  assert.deepEqual([words[3].text, words[3].startTime, words[3].endTime], ['', words[2].endTime, 3.75]);
+  assert.deepEqual(words.slice(4).map(({ text, startTime, endTime }) => ({ text, startTime, endTime })), next.words.map(({ text, startTime, endTime }) => ({ text, startTime, endTime })));
 });

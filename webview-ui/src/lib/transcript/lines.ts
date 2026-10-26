@@ -107,9 +107,11 @@ export function replaceTranscriptWords(captions: CaptionItem[], start: number, e
     const inserted = equalCount ? replacement.slice(Math.max(first, start) - start, Math.min(last, end) - start) : holds ? replacement : [];
     const words = [...prefix, ...inserted.map(word => ({ ...word })), ...suffix];
     if (!words.length) return [];
+    // An insertion only adds words, so it never shrinks a storage envelope.
+    const inserting = start === end;
     return [{ ...caption, words, text: words.map(word => word.text).join(' '),
-      startTime: words[0].startTime !== caption.words[0].startTime ? words[0].startTime : caption.startTime,
-      endTime: words.at(-1)!.endTime !== caption.words.at(-1)!.endTime ? words.at(-1)!.endTime : caption.endTime,
+      startTime: inserting ? Math.min(caption.startTime, words[0].startTime) : words[0].startTime !== caption.words[0].startTime ? words[0].startTime : caption.startTime,
+      endTime: inserting ? Math.max(caption.endTime, words.at(-1)!.endTime) : words.at(-1)!.endTime !== caption.words.at(-1)!.endTime ? words.at(-1)!.endTime : caption.endTime,
       ...(timingEstimated === undefined ? {} : { timingEstimated }) }];
   });
   for (let index = 1; index < result.length; index++) {
@@ -169,6 +171,69 @@ export function replaceTranscriptLine(captions: CaptionItem[], line: TranscriptL
   }
   insert(line.key);
   return withTranscriptLines(result, ranges);
+}
+
+/** Where a new line goes at a boundary: right after the line above ('after'),
+ * or right before the line below ('before'). It gets free time on that side. */
+export type NewLineSide = 'after' | 'before';
+/** At touching lines: 'never' refuses; 'neighbour' trims the last word of the
+ * line above (or else the first word of the line below) by up to half its time. */
+export type NewLineBorrow = 'never' | 'neighbour';
+export interface NewLineOptions { frameRate: number; cadence: number; side: NewLineSide; borrow?: NewLineBorrow }
+export type NewLineRoom = { window: { startTime: number; endTime: number }; borrow?: { index: number; edge: 'startTime' | 'endTime'; time: number; frames: number; text: string } } | { problem: string };
+
+/** The time a new line before transcript word `at` (a line boundary, or the
+ * word count to add at the end) would take: free time beside the boundary, up
+ * to one pause row's length, inside the existing storage envelopes. */
+export function newLineRoom(captions: CaptionItem[], at: number, { frameRate, cadence, side, borrow = 'never' }: NewLineOptions): NewLineRoom {
+  const words = transcriptWords(captions);
+  if (!words.length) return { problem: 'Transcribe or load captions first.' };
+  if (!Number.isInteger(at) || at < 0 || at > words.length || at > 0 && at < words.length && !transcriptLines(captions).some(line => line.start === at)) return { problem: 'Select the line again.' };
+  if (!(frameRate > 0)) return { problem: 'The sequence frame rate is unknown.' };
+  const frame = 1 / frameRate, length = Math.max(frame, Number.isFinite(cadence) ? cadence : 0);
+  const lower = at ? words[at - 1].endTime : captions[0].startTime;
+  const upper = at < words.length ? words[at].startTime : captions.at(-1)!.endTime;
+  if (upper - lower >= frame - 1e-7) {
+    const hugAbove = at === words.length || at > 0 && side === 'after';
+    return { window: hugAbove ? { startTime: lower, endTime: Math.min(upper, lower + length) } : { startTime: Math.max(lower, upper - length), endTime: upper } };
+  }
+  if (borrow === 'neighbour') {
+    const frames = (word: CaptionWord) => Math.min(Math.floor((word.endTime - word.startTime) * frameRate / 2 + 1e-7), Math.max(1, Math.round(length * frameRate)));
+    const above = at ? words[at - 1] : undefined, below = words[at];
+    if (above && frames(above) >= 1) {
+      const count = frames(above), time = above.endTime - count / frameRate;
+      return { window: { startTime: time, endTime: upper }, borrow: { index: at - 1, edge: 'endTime', time, frames: count, text: above.text } };
+    }
+    if (below && frames(below) >= 1) {
+      const count = frames(below), time = below.startTime + count / frameRate;
+      return { window: { startTime: lower, endTime: time }, borrow: { index: at, edge: 'startTime', time, frames: count, text: below.text } };
+    }
+  }
+  return { problem: 'No free time here. Shorten the line above or below first.' };
+}
+
+/** Add a blank line before transcript word `at` in the time newLineRoom finds.
+ * It is a timed empty word with a manual break before it and before the next
+ * line, so it keeps its own row through refresh and reflow. Other words keep
+ * their text, times and markers, except the one word a 'neighbour' borrow
+ * trims, and a following line's removed pause rows, which move to the new line
+ * when it ends where that line starts: they belong to the gap before it. */
+export function insertTranscriptLine(captions: CaptionItem[], at: number, options: NewLineOptions) {
+  const room = newLineRoom(captions, at, options);
+  if ('problem' in room) throw new Error(room.problem);
+  const rows = transcriptLines(captions), all = transcriptWords(captions);
+  const keep = rows.map(row => ({ start: row.start, end: row.end, key: row.segment?.id ?? row.key }));
+  const touch = (source: CaptionItem[], index: number, word: CaptionWord) => withTranscriptLines(replaceTranscriptWords(source, index, index + 1, [word]), keep);
+  let source = captions;
+  if (room.borrow) source = touch(source, room.borrow.index, { ...all[room.borrow.index], [room.borrow.edge]: room.borrow.time });
+  const following = transcriptWords(source)[at], removed = following?.pauseLinesRemoved;
+  const endsAtFollowing = following && Math.abs(room.window.endTime - following.startTime) < 1e-7;
+  if (endsAtFollowing && removed !== undefined) { const { pauseLinesRemoved: _moved, ...rest } = following; source = touch(source, at, rest); }
+  const blank: CaptionWord = { text: '', ...room.window, isActive: false, ...(endsAtFollowing && removed !== undefined ? { pauseLinesRemoved: removed } : {}) };
+  let offset = 0;
+  const owner = captions.find(caption => (offset += caption.words.length) > at) ?? captions.at(-1)!;
+  const line: TranscriptLine = { key: `${owner.id}:new-${at}`, caption: owner, start: at, end: at, window: room.window };
+  return { captions: replaceTranscriptLine(source, line, { ...owner, words: [blank], text: '', renderSegments: undefined, ...room.window }), start: at, borrowed: room.borrow };
 }
 
 const mergeMarker = (word: CaptionWord) => word.lineBreakBefore === 'join' || word.lineBreakBefore === 'edge';
