@@ -1,13 +1,13 @@
 <script lang="ts">
   import {onMount} from 'svelte';
   import AlignmentButtons from './AlignmentButtons.svelte';
-  import {createNativeGeometryController,canSeekGeometryKeyframe} from '../lib/native-effect/geometry-controller';
+  import {createNativeGeometryController,canSeekGeometryKeyframe,nativeGeometryLayer} from '../lib/native-effect/geometry-controller';
   import type {NativeCaptionSnapshot,NativeCaptionControls,NativeCaptionControlEdit,NativeCaptionKeyframeSeek} from '../cep-api';
   interface Props {snapshot:NativeCaptionSnapshot;sequenceId:string;currentTime:number;visible:boolean;disabled?:boolean;
     read:(snapshot:NativeCaptionSnapshot,id:string)=>Promise<NativeCaptionControls>;edit:(snapshot:NativeCaptionSnapshot,request:NativeCaptionControlEdit,id:string)=>Promise<NativeCaptionControls>;seek:(snapshot:NativeCaptionSnapshot,request:NativeCaptionKeyframeSeek,id:string)=>Promise<NativeCaptionControls>;onTimeChange?:(seconds:number)=>void;}
   let {snapshot,sequenceId,currentTime,visible,disabled=false,read,edit,seek,onTimeChange=()=>{}}:Props=$props();
   let controls=$state.raw<NativeCaptionControls|null>(null),error=$state('');
-  const controller=createNativeGeometryController({current:()=>({key:JSON.stringify([sequenceId,snapshot.locator,snapshot.revision]),sequenceId,snapshot,visible,disabled}),read:(s,id)=>read(s,id),edit:(s,r,id)=>edit(s,r,id),seek:(s,r,id)=>seek(s,r,id),state:value=>controls=value,error:value=>error=value});
+  const controller=createNativeGeometryController({current:()=>({key:JSON.stringify([sequenceId,snapshot.locator,snapshot.revision]),layer:nativeGeometryLayer(sequenceId,snapshot),sequenceId,snapshot,visible,disabled}),read:(s,id)=>read(s,id),edit:(s,r,id)=>edit(s,r,id),seek:(s,r,id)=>seek(s,r,id),state:value=>controls=value,error:value=>error=value});
   let readTimer:ReturnType<typeof setTimeout>|undefined;
   $effect(()=>{void currentTime;void snapshot;void visible;void disabled;if(!visible||disabled){clearTimeout(readTimer);readTimer=undefined;return;}if(readTimer===undefined)readTimer=setTimeout(()=>{readTimer=undefined;void controller.read();},80);});
   onMount(()=>{const timer=setInterval(()=>{void controller.read();},1200);return()=>{clearInterval(timer);clearTimeout(readTimer);controller.dispose();};});

@@ -1,7 +1,12 @@
 import type { NativeCaptionSnapshot, NativeCaptionControls, NativeCaptionControlEdit, NativeCaptionKeyframeSeek, NativeBoundaryControlKey } from '../../cep-api.ts';
 import { transientNativeRead } from '../live-output.ts';
 export type GeometryParameter = NativeBoundaryControlKey|'position'|'width'|'height'|'groups'|'rollUp'|'rollUpLines'|'rollUpCurrentLine'|'rollUpBlankLineSeconds'|'rollUpDuration'|'rollUpFade'|'rollUpFadePosition'|'rollUpFadeThickness'|'rollUpFadeAmount'|'rollUpFadeCurve'|'rollUpDirection'|'rollUpSpeed'|'rollUpWait'|'rollUpTransition'|'alignment';
-export interface GeometryContext { key:string; sequenceId:string; snapshot:NativeCaptionSnapshot; visible:boolean; disabled:boolean; }
+/** `key` binds host calls to one document revision. `layer` names the clip
+ * without its revision: a new revision of the same layer keeps the last
+ * confirmed values on screen (marked stale) instead of clearing them. */
+export interface GeometryContext { key:string; layer?:string; sequenceId:string; snapshot:NativeCaptionSnapshot; visible:boolean; disabled:boolean; }
+/** Layer identity for GeometryContext.layer: the clip, not its document revision. */
+export const nativeGeometryLayer=(sequenceId:string,snapshot:NativeCaptionSnapshot)=>JSON.stringify([sequenceId,snapshot.locator.projectPath,snapshot.locator.sequenceId,snapshot.locator.clipNodeId]);
 interface Options {
  current:()=>GeometryContext; read:(snapshot:NativeCaptionSnapshot,id:string)=>Promise<NativeCaptionControls>;
  edit:(snapshot:NativeCaptionSnapshot,request:NativeCaptionControlEdit,id:string)=>Promise<NativeCaptionControls>;
@@ -12,9 +17,11 @@ interface Options {
  * the original clip/document/clock; stale replies never enter a new session.
  * A read discarded mid-scrub keeps the last confirmed values on screen but
  * marks their clock stale: no edit or keyframe step uses it, and the next
- * scheduled read (playhead debounce or poll) fetches a fresh one. */
+ * scheduled read (playhead debounce or poll) fetches a fresh one. A new
+ * document revision of the same layer is handled the same way, except the
+ * controller fetches the fresh read itself as soon as it is idle. */
 export function createNativeGeometryController(options:Options){
- let alive=true,generation=0,key='',active=false,dragging=false,blocked=false,stale=false;
+ let alive=true,generation=0,key='',layer:string|undefined,active=false,dragging=false,blocked=false,stale=false,refreshDue=false;
  const now=options.now??Date.now;let receiptAt=-Infinity,lastInteraction=false;
  let activeKind:'read'|'edit'|'seek'|null=null;
  let pendingSeek:{parameter:GeometryParameter;direction:'previous'|'next';context:GeometryContext;generation:number;identity:string;receipt:NativeCaptionControls;resolve:(value:NativeCaptionControls|null)=>void}|null=null;
@@ -24,9 +31,16 @@ export function createNativeGeometryController(options:Options){
  function publish(next:NativeCaptionControls|null){state=next;stale=false;receiptAt=next?now():-Infinity;if(alive)options.state(next);}
  function cancelSeek(){const queued=pendingSeek;pendingSeek=null;queued?.resolve(null);}
  function notifyInteraction(){const next=alive&&(dragging||!!pending||activeKind==='edit'||activeKind==='seek');if(next!==lastInteraction){lastInteraction=next;options.interacting?.(next);}}
- function drain(){if(pending){cancelSeek();void flush();}else if(pendingSeek)void flushSeek();notifyInteraction();}
- function sync(){const c=options.current();if(c.key!==key){key=c.key;generation++;pending=null;cancelSeek();blocked=false;publish(null);}return c;}
- async function read(){const c=sync(),g=generation;if(!enabled(c)){pending=null;cancelSeek();if(!c.visible)dragging=false;notifyInteraction();return;}if(active||(dragging||pending)&&!stale)return;active=true;activeKind='read';
+ function drain(){if(refreshDue)void read();else if(pending){cancelSeek();void flush();}else if(pendingSeek)void flushSeek();notifyInteraction();}
+ function sync(){const c=options.current();if(c.key!==key){
+  // Same layer, new revision: keep the confirmed values visible so the panel
+  // layout holds still, but no write or step may use their revision or clock.
+  // An unsent coalesced value waits for the fresh read and then uses it.
+  const retained=!!state&&c.layer!==undefined&&c.layer===layer;
+  key=c.key;layer=c.layer;generation++;cancelSeek();blocked=false;
+  if(retained){stale=true;receiptAt=-Infinity;refreshDue=true;}else{pending=null;refreshDue=false;publish(null);}}
+ return c;}
+ async function read(){const c=sync(),g=generation;if(!enabled(c)){pending=null;cancelSeek();if(!c.visible)dragging=false;notifyInteraction();return;}if(active||(dragging||pending)&&!stale)return;refreshDue=false;active=true;activeKind='read';
   // Uncertain writes block further writes, not observation. A fresh read adopts
   // Premiere's actual state without replaying the failed or discarded edits.
   try{const next=await options.read(c.snapshot,c.sequenceId);if(current(c,g)&&enabled(options.current())){if(next.clipNodeId!==c.snapshot.locator.clipNodeId)throw new Error('The native caption clip changed.');publish(next);blocked=false;options.error('');}}

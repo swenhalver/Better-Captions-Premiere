@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import ScrubbableNumber from './ScrubbableNumber.svelte';
   import LucideIcon from './LucideIcon.svelte';
-  import { createNativeGeometryController, canSeekGeometryKeyframe } from '../lib/native-effect/geometry-controller';
+  import { createNativeGeometryController, canSeekGeometryKeyframe, nativeGeometryLayer } from '../lib/native-effect/geometry-controller';
   import type { NativeCaptionSnapshot, NativeCaptionControls, NativeCaptionControlEdit, NativeCaptionKeyframeSeek } from '../cep-api';
   interface Props {
     snapshot:NativeCaptionSnapshot;sequenceId:string;currentTime:number;visible:boolean;disabled?:boolean;
@@ -15,7 +15,7 @@
   let controls=$state.raw<NativeCaptionControls|null>(null),error=$state(''),dragging=$state(false);
   const parameter='rollUpBlankLineSeconds';
   const help="Seconds of silence that make one blank (pause) line in scrolling captions. A pause gets one blank line for every full length of silence, up to Visible lines; a shorter pause adds none. Example: at 2 s, a 1 s pause adds nothing and a 4.5 s pause adds 2 blank lines. 0 = Auto (uses the clip's average line length).";
-  const controller=createNativeGeometryController({current:()=>({key:JSON.stringify([sequenceId,snapshot.locator,snapshot.revision]),sequenceId,snapshot,visible,disabled}),read:(s,id)=>read(s,id),edit:(s,r,id)=>edit(s,r,id),seek:(s,r,id)=>seek(s,r,id),state:value=>{controls=value;onControlsChange(value);},error:value=>error=value,interacting:active=>onInteracting(active)});
+  const controller=createNativeGeometryController({current:()=>({key:JSON.stringify([sequenceId,snapshot.locator,snapshot.revision]),layer:nativeGeometryLayer(sequenceId,snapshot),sequenceId,snapshot,visible,disabled}),read:(s,id)=>read(s,id),edit:(s,r,id)=>edit(s,r,id),seek:(s,r,id)=>seek(s,r,id),state:value=>{controls=value;onControlsChange(value);},error:value=>error=value,interacting:active=>onInteracting(active)});
   let readTimer:ReturnType<typeof setTimeout>|undefined;
   $effect(()=>{void currentTime;void snapshot;void visible;void disabled;
     if(!visible||disabled){clearTimeout(readTimer);readTimer=undefined;return;}

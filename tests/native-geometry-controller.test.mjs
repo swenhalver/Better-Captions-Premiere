@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createNativeGeometryController} from '../webview-ui/src/lib/native-effect/geometry-controller.ts';
+import {createNativeGeometryController,nativeGeometryLayer} from '../webview-ui/src/lib/native-effect/geometry-controller.ts';
 const tick=()=>new Promise(r=>setImmediate(r));
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return{promise,resolve,reject};};
 function receipt(revision='r0',width=600){const d=value=>({value,defaultValue:value,animated:false,keyframesSupported:true,hasKey:false,keys:[]});return{ok:true,revision,clipNodeId:'clip',timelineTicks:'254016000000',sourceTicks:'254016000000',insideClip:true,clock:'clip-source',startTicks:'0',endTicks:'900000000000',inTicks:'0',outTicks:'900000000000',position:d([.5,.9]),width:d(width),height:d(150)};}
@@ -131,4 +131,78 @@ test('Effect Controls changes to Visible lines stay synced by the existing perio
  const context={key:'one',sequenceId:'sequence',snapshot:{locator:{clipNodeId:'clip'},revision:'doc'},visible:true,disabled:false};
  const c=createNativeGeometryController({current:()=>context,read:async()=>actual,edit:async()=>{throw Error('No writes expected');},state:s=>states.push(s),error:()=>{}});
  await c.read();actual={...actual,revision:'effect-controls',rollUpLines:{...actual.rollUpLines,value:3}};await c.read();assert.equal(states.at(-1).rollUpLines.value,3);c.dispose();
+});
+
+function layered(options={}){
+ const at=(revision,clipNodeId='clip',sequenceId='sequence',projectPath='/p.prproj')=>{const snapshot={locator:{projectPath,sequenceId,clipNodeId},revision};return{key:JSON.stringify([sequenceId,snapshot.locator,revision]),layer:nativeGeometryLayer(sequenceId,snapshot),sequenceId,snapshot,visible:true,disabled:false};};
+ const f={context:at('doc1'),at,states:[],errors:[],reads:[],edits:[],seeks:[],get since(){return f.states.slice(f.mark);},mark:0};
+ f.c=createNativeGeometryController({current:()=>f.context,read:async s=>{f.reads.push(s.revision);return options.read?options.read(s,f):receipt('controls-'+s.revision);},edit:async(s,r)=>{f.edits.push({doc:s.revision,...r});return options.edit?options.edit(s,r,f):{...receipt('edited',r.value),readbackVerified:true};},seek:async(s,r)=>{f.seeks.push(r);return{...receipt(),readbackVerified:true};},state:s=>f.states.push(s),error:e=>f.errors.push(e)});
+ return f;
+}
+test('a new document revision of the same layer keeps the confirmed controls on screen and refreshes them itself',async()=>{
+ const wait=deferred();const f=layered({read:(s,f)=>f.reads.length===1?receipt('controls-doc1'):wait.promise});
+ await f.c.read();f.mark=f.states.length;assert.equal(f.states.at(-1).revision,'controls-doc1');
+ f.context=f.at('doc2');const reread=f.c.read();
+ assert.deepEqual(f.since,[]);assert.deepEqual(f.reads,['doc1','doc2']);
+ wait.resolve({...receipt('controls-doc2'),width:{...receipt().width,value:640}});await reread;
+ assert.equal(f.since.length,1);assert.equal(f.since[0].revision,'controls-doc2');assert.equal(f.since[0].width.value,640);f.c.dispose();
+});
+test('an edit queued across a revision change never writes with the old revision or clock and then uses the fresh receipt',async()=>{
+ const wait=deferred();const f=layered({read:(s,f)=>f.reads.length===1?receipt('controls-doc1'):wait.promise});
+ await f.c.read();f.mark=f.states.length;f.context=f.at('doc2');f.c.queue('width',700);await tick();
+ assert.deepEqual(f.edits,[]);assert.deepEqual(f.reads,['doc1','doc2']);assert.deepEqual(f.since,[]);
+ wait.resolve({...receipt('controls-doc2'),timelineTicks:'508032000000'});await tick();await tick();
+ assert.equal(f.edits.length,1);assert.equal(f.edits[0].doc,'doc2');assert.equal(f.edits[0].revision,'controls-doc2');assert.equal(f.edits[0].atTicks,'508032000000');assert.equal(f.edits[0].value,700);
+ assert.equal(f.since.includes(null),false);assert.equal(f.since.at(-1).width.value,700);f.c.dispose();
+});
+test('late replies from the old revision are ignored and the controller rereads the new one once idle',async()=>{
+ for(const kind of ['read','edit']){
+  const old=deferred();const f=layered({read:(s,f)=>kind==='read'&&f.reads.length===2?old.promise:receipt('controls-'+s.revision),edit:()=>old.promise});
+  await f.c.read();if(kind==='read')void f.c.read();else f.c.queue('width',650);
+  await tick();f.mark=f.states.length;f.context=f.at('doc2');
+  void f.c.read();assert.deepEqual(f.since,[]);
+  old.resolve({...receipt('controls-old',111),readbackVerified:true});await tick();await tick();
+  assert.equal(f.since.some(s=>s?.revision==='controls-old'),false);assert.equal(f.reads.at(-1),'doc2');assert.equal(f.since.length,1);assert.equal(f.since[0].revision,'controls-doc2');assert.equal(f.edits.filter(e=>e.doc==='doc2').length,0);f.c.dispose();
+ }
+});
+test('keyframe steps queued across a revision change are cancelled, not run on the old receipt',async()=>{
+ const wait=deferred();const f=layered({read:(s,f)=>f.reads.length===1?receipt('controls-doc1'):wait.promise});
+ await f.c.read();const polling=f.c.read();const step=f.c.seek('width','next');f.context=f.at('doc2');f.c.queue('width',600);
+ assert.equal(await step,null);wait.resolve(receipt('controls-doc1'));await polling;await tick();await tick();assert.deepEqual(f.seeks,[]);f.c.dispose();
+});
+test('switching clip, sequence or project clears the controls and drops queued edits',async()=>{
+ for(const next of [['doc2','other-clip'],['doc2','clip','other-sequence'],['doc2','clip','sequence','/other.prproj']]){
+  const wait=deferred();const f=layered({read:(s,f)=>f.reads.length===1?receipt('controls-doc1'):wait.promise.then(r=>({...r,clipNodeId:s.locator.clipNodeId})),edit:(s,r)=>wait.promise.then(()=>({...receipt('stale-edit',r.value),readbackVerified:true}))});
+  await f.c.read();f.c.queue('width',700);assert.equal(f.edits.length,1);f.mark=f.states.length;f.context=f.at(...next);
+  void f.c.read();assert.deepEqual(f.since,[null]);
+  wait.resolve(receipt('controls-new'));await tick();await tick();assert.deepEqual(f.since,[null]);
+  await f.c.read();assert.equal(f.edits.length,1);assert.equal(f.since.at(-1).revision,'controls-new');f.c.dispose();
+ }
+});
+test('across a revision change a sent setter is never replayed; only the unsent latest value writes, after a fresh same-layer read',async()=>{
+ for(const outcome of ['confirmed','unconfirmed','failed']){
+  const sent=deferred(),fresh=deferred();const f=layered({read:(s,f)=>f.reads.length===1?receipt('controls-doc1'):fresh.promise,edit:(s,r,f)=>f.edits.length===1?sent.promise:{...receipt('edited',r.value),readbackVerified:true}});
+  await f.c.read();f.c.queue('width',700);f.c.queue('width',710);assert.deepEqual(f.edits.map(e=>e.value),[700]);
+  f.context=f.at('doc2');f.c.read();
+  if(outcome==='confirmed')sent.resolve({...receipt('controls-old',700),readbackVerified:true});
+  else sent.reject(outcome==='unconfirmed'?Object.assign(new Error('uncertain'),{code:'BC_OUTPUT_UNCONFIRMED'}):new Error('setter failed'));
+  await tick();await tick();assert.deepEqual(f.edits.map(e=>e.value),[700]);assert.deepEqual(f.reads,['doc1','doc2']);assert.deepEqual(f.errors.filter(Boolean),[]);
+  fresh.resolve(receipt('controls-doc2'));await tick();await tick();await tick();
+  assert.deepEqual(f.edits.map(e=>e.value),[700,710]);assert.equal(f.edits[1].doc,'doc2');assert.equal(f.edits[1].revision,'controls-doc2');
+  await tick();await tick();assert.equal(f.edits.length,2);f.c.dispose();
+ }
+});
+test('a revision change on a hidden or disabled panel waits without a read loop and drops queued values',async()=>{
+ for(const off of [{visible:false},{disabled:true}]){
+  const sent=deferred();const f=layered({edit:(s,r,f)=>f.edits.length===1?sent.promise:{...receipt('edited',r.value),readbackVerified:true}});
+  await f.c.read();f.c.queue('width',700);f.c.queue('width',710);f.context={...f.at('doc2'),...off};f.c.read();
+  sent.resolve({...receipt('controls-old',700),readbackVerified:true});for(let i=0;i<6;i++)await tick();
+  assert.deepEqual(f.reads,['doc1']);assert.equal(f.edits.length,1);
+  f.context=f.at('doc2');await f.c.read();await tick();assert.deepEqual(f.reads,['doc1','doc2']);assert.equal(f.edits.length,1);f.c.dispose();
+ }
+});
+test('a failing fresh read after a revision change does not retry in a loop or let the queued value write',async()=>{
+ const f=layered({read:(s,f)=>{if(f.reads.length===1)return receipt('controls-doc1');throw new Error('Premiere is busy');}});
+ await f.c.read();f.context=f.at('doc2');f.c.queue('width',700);for(let i=0;i<6;i++)await tick();
+ assert.deepEqual(f.reads,['doc1','doc2']);assert.deepEqual(f.edits,[]);assert.equal(f.errors.at(-1),'Premiere is busy');f.c.dispose();
 });

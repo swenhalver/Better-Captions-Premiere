@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import ScrubbableNumber from './ScrubbableNumber.svelte';
   import LucideIcon from './LucideIcon.svelte';
-  import { createNativeGeometryController, canSeekGeometryKeyframe, type GeometryParameter } from '../lib/native-effect/geometry-controller';
+  import { createNativeGeometryController, canSeekGeometryKeyframe, nativeGeometryLayer, type GeometryParameter } from '../lib/native-effect/geometry-controller';
   import type { NativeCaptionSnapshot, NativeCaptionControls, NativeCaptionControlEdit, NativeCaptionKeyframeSeek } from '../cep-api';
   interface Props {
     snapshot:NativeCaptionSnapshot;sequenceId:string;frameWidth:number;frameHeight:number;currentTime:number;visible:boolean;disabled?:boolean;
@@ -14,7 +14,7 @@
   let {snapshot,sequenceId,frameWidth,frameHeight,currentTime,visible,disabled=false,read,edit,seek,onTimeChange=()=>{},onInteracting=()=>{},onControlsChange=()=>{}}:Props=$props();
   let controls=$state.raw<NativeCaptionControls|null>(null),error=$state(''),dragging=$state(false);
   const identity=()=>JSON.stringify([sequenceId,snapshot.locator,snapshot.revision]);
-  const controller=createNativeGeometryController({current:()=>({key:identity(),sequenceId,snapshot,visible,disabled}),read:(s,id)=>read(s,id),edit:(s,r,id)=>edit(s,r,id),seek:(s,r,id)=>seek(s,r,id),state:value=>{controls=value;onControlsChange(value);},error:message=>error=message,interacting:active=>onInteracting(active)});
+  const controller=createNativeGeometryController({current:()=>({key:identity(),layer:nativeGeometryLayer(sequenceId,snapshot),sequenceId,snapshot,visible,disabled}),read:(s,id)=>read(s,id),edit:(s,r,id)=>edit(s,r,id),seek:(s,r,id)=>seek(s,r,id),state:value=>{controls=value;onControlsChange(value);},error:message=>error=message,interacting:active=>onInteracting(active)});
   let readTimer:ReturnType<typeof setTimeout>|undefined;
   $effect(()=>{void currentTime;void snapshot;void visible;void disabled;
     if(!visible||disabled){if(readTimer!==undefined)clearTimeout(readTimer);readTimer=undefined;return;}
