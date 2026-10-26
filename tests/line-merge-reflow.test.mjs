@@ -125,7 +125,7 @@ async function controller(panel) {
     export function connect(binding) { nativeBinding = binding; }
     export function problem() { return error; }`;
   vm.runInNewContext(ts.transpileModule(source + extension, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, {
-    exports, document: { hidden: false, visibilityState: 'visible', hasFocus: () => false, activeElement: null }, window: {}, HTMLElement: class {}, structuredClone, console,
+    exports, document: { hidden: false, visibilityState: 'visible', hasFocus: () => false, activeElement: null, querySelector: () => null }, window: {}, navigator: { userAgent: 'node-test' }, HTMLElement: class {}, structuredClone, console,
     $state: Object.assign(value => value, { raw: value => value, snapshot: value => value }), $derived: Object.assign(value => value, { by: callback => callback() }), $effect() {}, $props: () => ({}),
     require(name) {
       if (name === 'svelte') return { onMount() {}, tick: async () => {} };

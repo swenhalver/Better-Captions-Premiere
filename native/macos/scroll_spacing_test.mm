@@ -18,7 +18,7 @@ int main(int argc,char** argv){
   const auto normal=layoutFrame(document,2.4,box,measure,56,.6,{},3);
   auto normalPixels=macos::rasterize(document,2.4,box,720,1400,56,.6,3);
   if(baseline.is_open()){baseline.write(reinterpret_cast<const char*>(normalPixels.pixels.data()),normalPixels.pixels.size());continue;}
-  RollUpSettings scrolling;scrolling.enabled=true;scrolling.visibleLines=3;scrolling.scrollDuration=0;scrolling.boundaryEnabled=false;
+  RollUpSettings scrolling;scrolling.enabled=true;scrolling.visibleLines=3;scrolling.currentLine=3;scrolling.scrollDuration=0;scrolling.boundaryEnabled=false;
   const auto rolling=layoutFrame(document,2.4,box,measure,56,.6,{},3,scrolling);
   check(rolling.words.size()==4&&rolling.words.back().state==WordState::Upcoming&&rolling.words.back().style.opacity==0,"Scrolling did not retain the complete current row with authored hidden Next styling");
   double translate=0;bool first=true;

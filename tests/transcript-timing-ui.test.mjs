@@ -111,7 +111,7 @@ function controller(name, props, extension) {
     },
   }, { filename: `${name}.svelte` });
   for (const effect of effects) effect();
-  return { ...output, runEffect: index => effects[index](), destroyComponent: () => { for (const destructor of destructors) destructor(); } };
+  return { ...output, runEffect: index => effects.at(index)(), destroyComponent: () => { for (const destructor of destructors) destructor(); } };
 }
 function wordController(caption = cue(), fps = 24, selectedWord = 1, options = {}) {
   let h;
@@ -140,7 +140,9 @@ function transcriptController(captions = [cue()], fps = 24, options = {}) {
     export function setList(value) { listEl = value; }
     export { revealSelection };
     export function setPauseSettings(value) { pauseSettings = value; }
-    export function inspect() { return { rows: sentenceRows, allRows: transcriptRows, filteredRows, pauses: pauseRows, selectedPause, selectedLane, sentenceCount, captions, editingRowKey, editingError, editingCaret, caretSplitIndex, timingRowKey, timingError, draftStart, draftEnd, selectedWordOffset, selectedLine: selectedRow, error, draftText }; }
+    export function setSequenceId(value) { sequenceId = value; }
+    export function setNativeLayerKey(value) { nativeLayerKey = value; }
+    export function inspect() { return { newLineOptions, rows: sentenceRows, allRows: transcriptRows, filteredRows, pauses: pauseRows, selectedPause, selectedLane, sentenceCount, captions, editingRowKey, editingError, editingCaret, caretSplitIndex, timingRowKey, timingError, draftStart, draftEnd, selectedWordOffset, selectedLine: selectedRow, error, draftText }; }
   `);
   return { ...h, changes, selections, seeks, labels };
 }
@@ -1202,6 +1204,87 @@ test('a line edited above the selection shifts row keys but not the selection or
   h.setCaptions(next); h.revealSelection(); await settle();
   assert.equal(h.inspect().selectedLine.caption.id, selected.caption.id);
   assert.equal(list.scrolls, scrolls);
+});
+
+test('the line list keeps its place while Premiere re-reads the pause settings after confirming a typing step', async () => {
+  let anchor;
+  const typing = { open: at => { anchor = at; }, input() {}, flush() {}, hint() {}, end: async () => {} };
+  const h = transcriptController(pauseFixture(), 24, { pauseSettings, typing, nativeLayerKey: 'layer-a', selectedId: 'next' }), list = scrollingList(h);
+  list.clientHeight = 80;
+  // The browser keeps scrollTop within the content at every layout.
+  const layout = () => { const bottom = Math.max(0, h.inspect().allRows.length * 40 - list.clientHeight); if (list.scrollTop > bottom) list.scrollTop = bottom; };
+  h.setList(list);
+  const row = h.inspect().rows[1], keys = [...h.inspect().allRows].map(item => item.key), cadence = h.inspect().newLineOptions.cadence;
+  h.beginTextEdit(row); h.revealSelection(); await settle(); layout();
+  assert.equal(list.scrollTop, 4 * 40 + 40 - 80, 'The last line, below three pause rows, is in view');
+  const scrolls = list.scrolls;
+  // A typing step is written, then Premiere confirms it with a new document
+  // revision, and the pause controls are unknown until they are read again.
+  h.setDraft('one two'); h.setCaptions(typingModule.applyTypingText(h.inspect().captions, anchor, 'one two')); layout();
+  h.setPauseSettings(null); h.revealSelection(); await settle(); layout();
+  assert.deepEqual([...h.inspect().allRows].map(item => item.key), keys, 'The pause rows stay while the settings are read again');
+  assert.equal(h.inspect().newLineOptions.cadence, cadence, 'Add line keeps the pause cadence meanwhile');
+  h.setPauseSettings({ ...pauseSettings }); h.revealSelection(); await settle(); layout();
+  assert.equal(list.scrollTop, 120, 'The list did not jump above the line being typed');
+  assert.equal(list.scrolls, scrolls);
+  assert.equal(h.inspect().editingRowKey, row.key);
+});
+
+// main-webview passes one constant typing bridge whatever layer is connected.
+const typingBridge = { open() {}, input() {}, flush() {}, hint() {}, end: async () => {}, settle: async () => true };
+test('newly confirmed pause settings replace the kept ones at once', () => {
+  const h = transcriptController(pauseFixture(), 24, { pauseSettings, typing: typingBridge, nativeLayerKey: 'layer-a' });
+  assert.equal(h.inspect().pauses.length, 3);
+  h.setPauseSettings(null);
+  assert.equal(h.inspect().pauses.length, 3);
+  const settings = { blankLineSeconds: 5, visibleLines: 4 };
+  h.setPauseSettings(settings);
+  assert.equal(h.inspect().pauses.length, 1, 'A new pause length applies immediately');
+  assert.equal(h.inspect().newLineOptions.cadence, pauseLines.pauseCadence(h.inspect().captions, 5), 'and so does its Add line cadence');
+  h.setPauseSettings(null);
+  assert.equal(h.inspect().pauses.length, 1, 'The newest settings are the ones kept');
+});
+
+test('another layer in the same sequence never shows the last layer\'s pause rows', () => {
+  const h = transcriptController(pauseFixture(), 24, { pauseSettings, typing: typingBridge, nativeLayerKey: 'layer-a' });
+  assert.equal(h.inspect().pauses.length, 3);
+  // Premiere switches to another caption clip; its controls are not read yet.
+  h.setPauseSettings(null); h.setNativeLayerKey('layer-b');
+  assert.equal(h.inspect().pauses.length, 0);
+  assert.equal(h.inspect().newLineOptions.cadence, pauseLines.pauseCadence(h.inspect().captions, 0));
+  h.setPauseSettings({ blankLineSeconds: 5, visibleLines: 3 });
+  assert.equal(h.inspect().pauses.length, 1, 'The new layer\'s own settings apply');
+  // Back and forth with no read of the rows in between: only the layer effect
+  // (the component's last) sees layer A.
+  h.setPauseSettings(null); h.setNativeLayerKey('layer-a'); h.runEffect(-1); h.setNativeLayerKey('layer-b');
+  assert.equal(h.inspect().pauses.length, 0);
+});
+
+test('a reconnected layer waits for a fresh read instead of resurrecting its old pause rows', () => {
+  const h = transcriptController(pauseFixture(), 24, { pauseSettings, typing: typingBridge, nativeLayerKey: 'layer-a' });
+  h.setPauseSettings(null); h.setNativeLayerKey(null);
+  assert.equal(h.inspect().pauses.length, 0, 'Without a native layer the pause rows go');
+  h.setNativeLayerKey('layer-a');
+  assert.equal(h.inspect().pauses.length, 0, 'The same layer reconnecting starts without them');
+  h.setPauseSettings(pauseSettings);
+  assert.equal(h.inspect().pauses.length, 3, 'and gets them back from its fresh read');
+  // The rows are not read while disconnected; only the layer effect runs.
+  h.setPauseSettings(null); h.setNativeLayerKey(null); h.runEffect(-1); h.setNativeLayerKey('layer-a');
+  assert.equal(h.inspect().pauses.length, 0);
+});
+
+test('a sequence switch drops the kept pause rows, and captions without a native layer keep their own settings only', () => {
+  const h = transcriptController(pauseFixture(), 24, { pauseSettings, typing: typingBridge, nativeLayerKey: 'layer-a' });
+  h.setPauseSettings(null); h.setSequenceId('other');
+  assert.equal(h.inspect().pauses.length, 0, 'Another sequence never shows the last one\'s pause rows');
+  h.setSequenceId('sequence');
+  assert.equal(h.inspect().pauses.length, 0);
+  const fresh = transcriptController(pauseFixture(), 24, { typing: typingBridge, nativeLayerKey: 'layer-a' });
+  assert.equal(fresh.inspect().pauses.length, 0, 'A freshly opened panel starts without pause rows');
+  const plain = transcriptController(pauseFixture(), 24, { pauseSettings });
+  assert.equal(plain.inspect().pauses.length, 3, 'Supplied settings still show without a layer');
+  plain.setPauseSettings(null);
+  assert.equal(plain.inspect().pauses.length, 0, 'and nothing is kept for them');
 });
 
 test('choosing, adding or splitting to another line still brings it into view', async () => {

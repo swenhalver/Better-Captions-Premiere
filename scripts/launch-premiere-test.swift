@@ -91,13 +91,10 @@ func publish(_ value: [String: Any], receipt: URL?) throws {
     guard NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty else {
         throw LaunchFailure(message: "Premiere is already running. Save it and quit through Computer Use before this test launch; this launcher never quits or hides a running user session.")
     }
-    _ = try sspace(["prepare-app", "--app", bundleID])
     let priorFrontmost = NSWorkspace.shared.frontmostApplication
     let frontmostBefore = priorFrontmost?.processIdentifier ?? 0
-    // Large projects can take minutes to open. prepare-app registration lasts
-    // 60 seconds, so it is refreshed every 50 seconds until placement is done.
+    // Large projects can take minutes to open.
     let deadline = Date().addingTimeInterval(300)
-    var lastPrepare = Date()
     var physicalWindows = Set<UInt32>(), focusTaken = false
     let startupObserver = Task { @MainActor in
         while !Task.isCancelled {
@@ -127,9 +124,6 @@ func publish(_ value: [String: Any], receipt: URL?) throws {
     var records: [String: [String: Any]] = [:]
     var placementReady = false, projectFrame: CGRect?
     while Date() < deadline && !app.isTerminated {
-        if Date().timeIntervalSince(lastPrepare) >= 50 {
-            _ = try? sspace(["prepare-app", "--app", bundleID]); lastPrepare = Date()
-        }
         // Adobe can override a launch-hidden request while initializing. Keep
         // startup windows hidden until every normal window is on S-Space.
         if !app.isHidden {
@@ -159,10 +153,10 @@ func publish(_ value: [String: Any], receipt: URL?) throws {
             if title.contains(project.lastPathComponent) { projectFrame = frame(window) }
         }
         if projectFrame != nil && !windows.isEmpty && windows.allSatisfy({ frame($0).map { $0.width < 100 || $0.height < 80 || onMonitor($0, monitor) } ?? false }) {
-            // Explicit preparation must own the exact hidden windows before
-            // reveal, or normal S-Space routing could return them to main.
+            // S-Space no longer routes windows, so nothing can claim or move
+            // them back. Every placed AX window must still be exactly one
+            // window server window before reveal.
             let inventory = visibleNormalWindows(pid: pid, visibleOnly: false)
-            let claims = Set((try sspace(["status"])["routingClaimedWindowIDs"] as? [Int]) ?? [])
             let axFrames = windows.compactMap(frame).filter { $0.width >= 100 && $0.height >= 80 }
             let matches = axFrames.map { expected in
                 inventory.filter { row in
@@ -170,7 +164,7 @@ func publish(_ value: [String: Any], receipt: URL?) throws {
                     return abs(actual.minX-expected.minX) <= 1 && abs(actual.minY-expected.minY) <= 1 && abs(actual.width-expected.width) <= 1 && abs(actual.height-expected.height) <= 1
                 }
             }
-            if !matches.isEmpty && matches.allSatisfy({ $0.count == 1 && claims.contains(($0[0][kCGWindowNumber as String] as? Int) ?? -1) }) {
+            if !matches.isEmpty && matches.allSatisfy({ $0.count == 1 }) {
                 placementReady = true; break
             }
         }
@@ -188,7 +182,7 @@ func publish(_ value: [String: Any], receipt: URL?) throws {
         try publish(["ok": false, "pid": pid, "placementReady": placementReady, "focusTaken": focusTaken,
                      "mainDisplayWindowIDsObserved": Array(physicalWindows), "placements": Array(records.values),
                      "adobeRequestedFocusDuringStartup": focusTaken, "frontmostPIDBefore": frontmostBefore, "frontmostPIDAfter": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0], receipt: receipt)
-        throw LaunchFailure(message: "Premiere did not complete an isolated hidden launch (placement, registration, or focus verification failed). It remains hidden.")
+        throw LaunchFailure(message: "Premiere did not complete an isolated hidden launch (placement, window identity, or focus verification failed). It remains hidden.")
     }
     startupObserver.cancel()
     // AppKit can report false although Adobe has already revealed the window.

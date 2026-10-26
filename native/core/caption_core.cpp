@@ -609,9 +609,12 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
   // exactly the settled current-line layout once the opening glide ends.
   // Negative steps reuse every transition's normal neighbouring windows;
   // virtual blanks have the reserved slot height, not active word metrics.
+  // Each move eases count rows over duration from start. A blank run's
+  // arrival is a deadline for every earlier move as well (see below).
+  struct Move{double start,duration,count,deadline;};std::vector<Move> moves;
+  const double noDeadline=std::numeric_limits<double>::infinity();
   if(!horizontal&&lead>1&&settings.scrollDuration>0){
-   const double duration=settings.scrollDuration/settings.speed;
-   steps=-double(lead-1)*(1-rollCurve((time-rows.front().start)/duration,2));
+   steps=-double(lead-1);moves.push_back({rows.front().start,settings.scrollDuration/settings.speed,double(lead-1),noDeadline});
   }
   auto authoredOffset=[&](double progress){
    if(progress<0)return progress*rowHeight;
@@ -624,7 +627,29 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    }
    return rowTops[index]+fraction*rows[index].advance(d.style.lineHeight);
   };
+  // Plain vertical scrolling that waits for lines glides through each run of
+  // blank rows (authored or derived) as one move. It starts when the text line
+  // before the run leaves the active slot and stops once the next text line
+  // reaches it. Blank rows keep their slots; only the stops on each are gone.
+  // One step per blank row's own length (the shortest in the run), scaled by
+  // speed, and at least one ordinary scroll. The next line's speech start wins
+  // over that minimum: a short gap compresses the glide rather than arriving
+  // late, and so does any earlier move still running (a brief line just
+  // before the blanks): it finishes by the arrival instead of carrying past it.
+  const bool glideBlanks=!horizontal&&settings.waitForLine&&settings.transition==1;
+  auto blank=[&](std::size_t index){return rows[index].words.empty();};
   for(std::size_t block=1;block<blocks;++block){
+   if(glideBlanks&&(blank(block)||blank(block-1))){
+    const auto first=blank(block-1)?block-1:block;auto last=first;
+    while(last+1<rows.size()&&blank(last+1))++last;
+    const auto through=std::min(last+1,blocks-1);const double count=double(through-block+1);
+    const double start=first>0?rows[first-1].end:rows[first].start,arrival=last+1<rows.size()?rows[last+1].start:streamEnd;
+    double pace=0;
+    for(auto index=first;index<=last;++index){const double length=rows[index].end-rows[index].start;if(length>0&&(pace==0||length<pace))pace=length;}
+    const double duration=std::min(std::max(settings.scrollDuration/settings.speed,count*pace/settings.speed),std::max(0.0,arrival-start));
+    moves.push_back({start,duration,count,arrival});
+    block=through;continue;
+   }
    const auto first=(block-1)*blockRows,last=std::min(rows.size(),first+blockRows);double end=rows[first].end;
    for(std::size_t index=first+1;index<last;++index)end=std::max(end,rows[index].end);
    const double start=rows[first].start;
@@ -632,9 +657,15 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    // and duration for speech, blanks and upcoming text in every wait mode.
    const double trigger=settings.waitForLine?end:start;
    const double duration=(settings.waitForLine?settings.scrollDuration:std::max(settings.scrollDuration,end-start))/settings.speed;
-   const double progress=duration>0?rollCurve((time-trigger)/duration,2):(time>=trigger?1:0);
-   steps+=progress;
+   moves.push_back({trigger,duration,1,noDeadline});
   }
+  // Shortening an earlier ease keeps it continuous and monotonic; it only
+  // ends sooner, so every move has settled when the arriving line is due.
+  double deadline=noDeadline;
+  for(auto move=moves.rbegin();move!=moves.rend();++move){
+   move->duration=std::min(move->duration,std::max(0.0,deadline-move->start));deadline=std::min(deadline,move->deadline);
+  }
+  for(const auto& move:moves)steps+=move.duration>0?move.count*rollCurve((time-move.start)/move.duration,2):(time>=move.start?move.count:0);
   // Each drawn row at one scroll progress, with its left/top in the frame.
   using Visit=std::function<void(const ComposedRow&,double left,double top)>;
   auto legacyRows=[&](double progress,const Visit& visit){

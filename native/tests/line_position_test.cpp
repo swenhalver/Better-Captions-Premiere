@@ -22,8 +22,10 @@ Document lineDocument(std::size_t count){
  for(auto* s:{&d.style.upcoming,&d.style.current,&d.style.spoken}){s->fontSize=10;s->padding=0;}
  d.style.lineHeight=1;d.style.wordSpacing=4;return d;
 }
-RollUpSettings rolling(std::size_t lines,std::size_t current=1,int direction=1,int transition=1){
- RollUpSettings r;r.enabled=true;r.visibleLines=lines;r.currentLine=current;r.direction=direction;r.transition=transition;r.boundaryEnabled=false;return r;
+// Current line counts from the top. current 0 is the entry edge, which keeps
+// full history: Up's bottom slot (Line lines), Down's Line 1.
+RollUpSettings rolling(std::size_t lines,std::size_t current=0,int direction=1,int transition=1){
+ RollUpSettings r;r.enabled=true;r.visibleLines=lines;r.currentLine=current?current:direction==1?lines:1;r.direction=direction;r.transition=transition;r.boundaryEnabled=false;return r;
 }
 const LayoutBox box{0,0,1000,1000};
 Frame frameAt(const Document& d,double time,const RollUpSettings& r,std::size_t groups=1){return layoutFrame(d,time,box,measure,56,.6,{},groups,r);}
@@ -240,7 +242,7 @@ void weightInterpolation(){
  for(int direction:{1,2})for(int transition:{1,2,3,4}){
   for(auto& p:d.style.positions)p=PositionStyle{};
   auto& target=d.style.positions[direction==1?0:3];target.fields=PositionWeight;target.value=bold;
-  const auto r=rolling(4,1,direction,transition);
+  const auto r=rolling(4,0,direction,transition);
   const auto frame=layoutFrame(d,4.89,box,measure,56,.6,{},1,r,supported);
   const auto& moving=word(frame,2);
   assert(moving.style.fontWeightOffset==-1&&near(moving.style.fontWeight,550,1e-6));
@@ -284,7 +286,7 @@ void transitions(){
  // blending red to white and its spacing, with no jump at either end.
  auto d=lineDocument(6);auto& bottom=d.style.positions[3];bottom.fields=PositionColor|PositionMarginTop;bottom.value.color={1,0,0,1};bottom.value.marginTop=6;
  for(int transition:{2,3,4}){
-  const auto r=rolling(4,1,1,transition);
+  const auto r=rolling(4,0,1,transition);
   const auto settled=frameAt(d,4.5,r),after=frameAt(d,5.5,r);assert(word(settled,4).style.color.g==0&&word(settled,3).style.color.g==1);
   const auto mid=frameAt(d,4.89,r);
   assert(word(mid,5).style.color.g==0&&word(mid,5).style.opacity<1&&word(mid,1).style.color.g==1);

@@ -53,11 +53,11 @@ function fixture(t, options = {}) {
   const timers = new Map(), modules = new Map(), storage = new Map(), effects = [], calls = { apply: [], commits: [], saves: [], renders: [], seeks: [], transcript: 0, supersedes: 0 };
   const info = { id: 'sequence', name: 'Caption verification', projectPath: '/project/test.prproj', frameWidth: 1920, frameHeight: 1080, frameRate: 24, duration: 8, playhead: .25, tracks: [{ index: 2, name: 'Captions', clips: 1, locked: false }] };
   const profile = { signature: 'motion-rendered', watchSignature: 'geometry-rendered', samples: [{ time: .25, scaleX: 1, scaleY: 1 }, { time: 7.75, scaleX: 1, scaleY: 1 }] };
-  const document = { hidden: false, visibilityState: 'visible', activeElement: null, hasFocus: () => false, addEventListener() {}, removeEventListener() {} };
+  const document = { hidden: false, visibilityState: 'visible', activeElement: null, hasFocus: () => false, querySelector: () => null, addEventListener() {}, removeEventListener() {} };
   const window = { addEventListener() {}, removeEventListener() {} };
   const clockDate = class extends Date { static now() { return time; } };
   const globals = {
-    document, window, Date: clockDate, HTMLElement: class {}, AbortController, structuredClone, TextDecoder, TextEncoder, Uint8Array, DataView, BigInt,
+    document, window, navigator: { userAgent: 'node-test' }, Date: clockDate, HTMLElement: class {}, AbortController, structuredClone, TextDecoder, TextEncoder, Uint8Array, DataView, BigInt,
     $state: Object.assign(value => value, { raw: value => value }), $derived: Object.assign(value => value, { by: fn => fn }), $effect: fn => effects.push(fn),
     localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) },
     setTimeout: (fn, delay = 0) => { timers.set(++nextTimer, { fn, at: time + delay }); return nextTimer; }, clearTimeout: id => timers.delete(id),

@@ -154,7 +154,9 @@ int main(){
  for(std::size_t y=emptyTop;y<emptyBottom;++y)for(std::size_t x=0;x<silencePage.width;++x)check(silencePage.pixels[y*silencePage.stride+x*4+3]==0,"Derived blank row painted pixels between speech lines");
  check(count(macos::rasterize(silence,.5,silenceBox,640,360))>100&&count(macos::rasterize(silence,3.5,silenceBox,640,360))>100,"Silence fixture lost surrounding speech");
  for(double time:{1.5,2.,2.5})check(count(macos::rasterize(silence,time,silenceBox,640,360))==0,"Static silence interval contains caption pixels");
- auto ordinarySilence=silence;ordinarySilence.containers.front().words={{"Before.",0,1,true},{" ",1,3,true},{"After.",3,4,true}};
+ // The reference is an authored empty line, which plain scrolling glides
+ // through exactly like a derived pause row.
+ auto ordinarySilence=silence;ordinarySilence.containers.front().words={{"Before.",0,1,true},{"",1,3,true},{"After.",3,4,true}};
  for(int direction:{1,2,3,4})for(int transition:{1,2,3,4})for(bool wait:{false,true}){RollUpSettings settings;settings.enabled=true;settings.visibleLines=1;settings.scrollDuration=.1;settings.boundaryEnabled=false;settings.direction=direction;settings.transition=transition;settings.waitForLine=wait;
   for(double time:{1.5,2.,2.5})check(macos::rasterize(silence,time,silenceBox,640,360,56,.6,1,settings).pixels==macos::rasterize(ordinarySilence,time,silenceBox,640,360,56,.6,1,settings).pixels,"Pause lines differ from ordinary empty-line transition pixels");
   check(count(macos::rasterize(silence,3.5,silenceBox,640,360,56,.6,1,settings))>100,"Scrolling speech failed to resume after a blank row");
@@ -248,7 +250,8 @@ int main(){
  RollUpSettings rollingSettings;rollingSettings.enabled=true;rollingSettings.boundaryEnabled=false;
  std::vector<macos::Bitmap> countPixels;
  for(std::size_t requested:{1,3,8}){
-  rollingSettings.visibleLines=requested;const auto frame=layoutFrame(rollingCount,20.5,countBox,nativeMeasure,56,.6,{},1,rollingSettings);
+  // Current line counts from the top; Up's bottom slot keeps full history.
+  rollingSettings.visibleLines=requested;rollingSettings.currentLine=requested;const auto frame=layoutFrame(rollingCount,20.5,countBox,nativeMeasure,56,.6,{},1,rollingSettings);
   check(frame.words.size()==requested,"Visible-line count silently capped by caption height");
   auto pixels=macos::rasterize(rollingCount,20.5,countBox,640,940,56,.6,1,rollingSettings);
   std::size_t bands=0;bool previous=false;

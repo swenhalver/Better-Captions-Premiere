@@ -40,8 +40,10 @@
     typing?: TranscriptTyping | null;
     nativeGrouping?: Snippet;
     pauseSettings?: PauseLineSettings | null;
+    /** The connected native layer (project, sequence, clip), without its revision; null when none is connected. */
+    nativeLayerKey?: string | null;
   }
-  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, lineWrap = null, onLineWrapChange, disabled = false, groupingDisabled = false, onEditingChange=()=>{}, lineFitCapacity=null, onSmartLineFit, onCharacterLimitGesture, typing = null, nativeGrouping, pauseSettings = null }: Props = $props();
+  let { frameRate, selectedWord = 0, onSelectWord = () => {}, sequenceId, captions, currentTime, maxChars, selectedId = null, onSeek, onSelect, onMaxCharsChange, onUpdate, lineWrap = null, onLineWrapChange, disabled = false, groupingDisabled = false, onEditingChange=()=>{}, lineFitCapacity=null, onSmartLineFit, onCharacterLimitGesture, typing = null, nativeGrouping, pauseSettings = null, nativeLayerKey = null }: Props = $props();
   let activeId = $derived(captions.find((caption) => currentTime >= caption.startTime && currentTime < caption.endTime)?.id ?? null);
   let selectedContainer = $derived(captions.find((caption) => caption.id === selectedId) ?? captions[0]);
   let selectedRowKey = $state<string | null>(null);
@@ -78,7 +80,21 @@
     const rows = transcriptLines(captions);
     return typingAt && editingRowKey ? pinTypingRow(rows, editingRowKey, typingAt) : rows;
   });
-  let pauseRows = $derived(pauseSettings ? derivePauseLines(captions, pauseSettings) : []);
+  // Premiere's pause controls are read again after every confirmed write, and
+  // are unknown (null) until that read returns. The pause rows keep the last
+  // known settings of the same connected layer meanwhile: dropping them shrinks
+  // the list for a moment, and the browser then clamps its scroll position far
+  // above the line being typed. Another sequence or layer, or no layer at all,
+  // never shows them; fresh settings always replace them.
+  let pauseLayer = $derived(nativeLayerKey ? JSON.stringify([sequenceId, nativeLayerKey]) : null);
+  let knownPauseSettings: { layer: string; settings: PauseLineSettings } | null = null;
+  let pauseLineSettings = $derived.by(() => {
+    const layer = pauseLayer;
+    if (knownPauseSettings?.layer !== layer) knownPauseSettings = null;
+    if (pauseSettings && layer) knownPauseSettings = { layer, settings: pauseSettings };
+    return pauseSettings ?? knownPauseSettings?.settings ?? null;
+  });
+  let pauseRows = $derived(pauseLineSettings ? derivePauseLines(captions, pauseLineSettings) : []);
   // The pause slot an open editor types into; its empty row takes that slot's place.
   let editingPauseSlot = $state(0);
   let transcriptRows = $derived.by((): TranscriptRow[] => sentenceRows.flatMap((line, index) => {
@@ -165,7 +181,7 @@
   let notice = $state("");
   let sentenceCount = $derived(transcriptRows.length);
   // A new line is one pause row long, the same as typing into a pause.
-  let newLineOptions = $derived({ frameRate, cadence: captions.length ? pauseCadence(captions, pauseSettings?.blankLineSeconds ?? 0) : 0, borrow: newLineBorrow });
+  let newLineOptions = $derived({ frameRate, cadence: captions.length ? pauseCadence(captions, pauseLineSettings?.blankLineSeconds ?? 0) : 0, borrow: newLineBorrow });
   let newLineProblems = $derived.by(() => {
     if (!selectedRow || selectedPause || selectedRow.end <= selectedRow.start) return null;
     const problem = (at: number, side: NewLineSide) => { const room = newLineRoom(captions, at, { ...newLineOptions, side }); return 'problem' in room ? room.problem : ''; };
@@ -188,6 +204,9 @@
   let revealTarget = $derived(selectedPause ? `pause:${selectedPause.startTime}` : selectedRow ? `line:${selectedRow.segment?.startTime ?? selectedRow.window?.startTime ?? selectedRow.caption.startTime}` : activeId ? `caption:${activeId}` : '');
   let revealed = '', revealedIn: HTMLDivElement | undefined;
   $effect(revealSelection);
+  // Forget the kept pause settings as soon as the layer disconnects or changes,
+  // even while the rows are not drawn, so a reconnect never brings them back.
+  $effect(() => { if (knownPauseSettings && knownPauseSettings.layer !== pauseLayer) knownPauseSettings = null; });
   // Scrolls the list to a newly selected line, never the panel around it, and
   // leaves the list where the user put it while the same line stays selected.
   function revealSelection() {

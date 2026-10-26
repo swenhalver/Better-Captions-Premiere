@@ -26,7 +26,7 @@ function harness(t, options = {}) {
     text: 'words', words: [], motionProfile: profile('rendered-99') };
   const session = { sequenceId: 'sequence', captions: [caption], hasTranscript: true, isLoading: false, currentTime: .5, frameRate: 1, style: {}, animation: {} };
   const manager = { current: session, sessions: new Map([['sequence', session]]) };
-  const document = { hidden: false, visibilityState: 'visible', hasFocus: () => false, activeElement: null };
+  const document = { hidden: false, visibilityState: 'visible', hasFocus: () => false, activeElement: null, querySelector: () => null };
   let calls = 0;
   const api = { isDemo: false,
     readCaptionMotion: async (items, id) => { calls++; assert.equal(items.length, 1); assert.equal(id, 'sequence'); assert.equal(items[0].motionProfile, undefined, 'Do not send saved per-frame samples back to the host'); return options.read ? options.read(items, id) : { ok: true, cues: [{ id: 'cue', clipNodeId: 'clip', projectItemId: 'item', path: '/caption.mov', motionProfile: profile('live-99', .99, 'geometry-99') }] }; }
@@ -48,7 +48,7 @@ function harness(t, options = {}) {
   `;
   const exports = {};
   vm.runInNewContext(transpile(source + extension), {
-    exports, document, window: {}, HTMLElement: class {},
+    exports, document, window: {}, navigator: { userAgent: 'node-test' }, HTMLElement: class {},
     $state: Object.assign(value => value, { raw: value => value }), $derived: Object.assign(value => value, {by: callback => callback()}), $effect() {},
     require(name) {
       if (name === 'svelte') return { onMount() {}, tick: async () => {} };
