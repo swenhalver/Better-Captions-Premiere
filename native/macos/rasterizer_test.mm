@@ -179,8 +179,9 @@ int main(){
   check(count(moving)>20&&moving.pixels!=entry.pixels,"Leading blanks did not animate visible speech");
   auto settled=settings;settled.scrollDuration=0;
   // In continuous mode the real first-row event also starts at 10. Compare
-  // only after it completes; in wait mode the opening alone is done at 10.4.
-  const double time=wait?10.5:11.5;
+  // only after it completes; in wait mode the opening alone is done at 10.4,
+  // except plain scroll, which adds 2/3 of a duration per further blank slot.
+  const double time=!wait?11.5:transition==1?10.1+.4*(1+2*double(slots.second-2)/3):10.5;
   check(renderOpening(time,settings).pixels==renderOpening(time,settled).pixels,"Opening changed settled current-line pixels");
   check(entry.pixels==renderOpening(10,settings).pixels,"Backward seek changed the opening pixels");
  }

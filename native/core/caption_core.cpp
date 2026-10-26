@@ -603,19 +603,15 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
   const auto lead=settings.direction==1?lines+1-currentSlot:currentSlot;
   const double initialOffset=horizontal?0:-double(lines-lead)*rowHeight;double steps=0;
   // Virtual leading blanks let the first line enter at the new-line edge.
-  // Glide through all lead-1 blank slots during the first scrollDuration
-  // (scaled by speed), rather than holding back any real line events. This
-  // keeps speech/highlight times and ordinary line triggers untouched, and is
-  // exactly the settled current-line layout once the opening glide ends.
+  // Glide through all lead-1 blank slots from the first line's start, rather
+  // than holding back any real line events. This keeps speech/highlight times
+  // and ordinary line triggers untouched, and is exactly the settled
+  // current-line layout once the opening glide ends.
   // Negative steps reuse every transition's normal neighbouring windows;
   // virtual blanks have the reserved slot height, not active word metrics.
-  // Each move eases count rows over duration from start. A blank run's
-  // arrival is a deadline for every earlier move as well (see below).
-  struct Move{double start,duration,count,deadline;};std::vector<Move> moves;
-  const double noDeadline=std::numeric_limits<double>::infinity();
-  if(!horizontal&&lead>1&&settings.scrollDuration>0){
-   steps=-double(lead-1);moves.push_back({rows.front().start,settings.scrollDuration/settings.speed,double(lead-1),noDeadline});
-  }
+  const double pace=settings.scrollDuration/settings.speed;
+  const bool opening=!horizontal&&lead>1&&settings.scrollDuration>0;
+  if(opening)steps=-double(lead-1);
   auto authoredOffset=[&](double progress){
    if(progress<0)return progress*rowHeight;
    const auto whole=static_cast<std::size_t>(std::max(0.0,std::floor(progress)));
@@ -627,45 +623,55 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    }
    return rowTops[index]+fraction*rows[index].advance(d.style.lineHeight);
   };
-  // Plain vertical scrolling that waits for lines glides through each run of
-  // blank rows (authored or derived) as one move. It starts when the text line
-  // before the run leaves the active slot and stops once the next text line
-  // reaches it. Blank rows keep their slots; only the stops on each are gone.
-  // One step per blank row's own length (the shortest in the run), scaled by
-  // speed, and at least one ordinary scroll. The next line's speech start wins
-  // over that minimum: a short gap compresses the glide rather than arriving
-  // late, and so does any earlier move still running (a brief line just
-  // before the blanks): it finishes by the arrival instead of carrying past it.
-  const bool glideBlanks=!horizontal&&settings.waitForLine&&settings.transition==1;
-  auto blank=[&](std::size_t index){return rows[index].words.empty();};
-  for(std::size_t block=1;block<blocks;++block){
-   if(glideBlanks&&(blank(block)||blank(block-1))){
-    const auto first=blank(block-1)?block-1:block;auto last=first;
-    while(last+1<rows.size()&&blank(last+1))++last;
-    const auto through=std::min(last+1,blocks-1);const double count=double(through-block+1);
-    const double start=first>0?rows[first-1].end:rows[first].start,arrival=last+1<rows.size()?rows[last+1].start:streamEnd;
-    double pace=0;
-    for(auto index=first;index<=last;++index){const double length=rows[index].end-rows[index].start;if(length>0&&(pace==0||length<pace))pace=length;}
-    const double duration=std::min(std::max(settings.scrollDuration/settings.speed,count*pace/settings.speed),std::max(0.0,arrival-start));
-    moves.push_back({start,duration,count,arrival});
-    block=through;continue;
+  if(!horizontal&&settings.waitForLine&&settings.transition==1){
+   // Plain vertical scrolling that waits for lines moves at one rate. A run
+   // eases in like an ordinary scroll, cruises at that scroll's peak speed and
+   // eases out like it, so one row is exactly an ordinary scroll and every
+   // further row adds the same 2/3 of one. Blank rows (authored, derived or
+   // the opening's virtual ones) never hold the run, so it glides through
+   // them and stops on the next text line. A text line that ended before the
+   // run would carry it past joins the run too; one still speaking holds it.
+   // Runs never overlap, so brief lines queue instead of adding speed, and
+   // nothing speeds up to meet a speech start: a line may arrive after its
+   // first word, whose highlighting keeps its own time.
+   struct Run{double start,count;};std::vector<Run> runs;
+   auto runEnd=[&](const Run& run){return run.start+pace*(1+2*(run.count-1)/3);};
+   auto step=[&](double trigger,bool held){
+    if(!runs.empty()){auto& run=runs.back();const double end=runEnd(run);
+     // The run would pass the row it now stops on pace/6 before its end.
+     if(!held||trigger<=end-pace/6){++run.count;return;}
+     trigger=std::max(trigger,end);
+    }
+    runs.push_back({trigger,1});
+   };
+   if(opening){runs.push_back({rows.front().start,double(lead-1)});}
+   for(std::size_t block=1;block<blocks;++block){
+    const auto& leaving=rows[block-1];const bool blank=leaving.words.empty();
+    step(blank&&runs.empty()?leaving.start:leaving.end,!blank);
    }
-   const auto first=(block-1)*blockRows,last=std::min(rows.size(),first+blockRows);double end=rows[first].end;
-   for(std::size_t index=first+1;index<last;++index)end=std::max(end,rows[index].end);
-   const double start=rows[first].start;
-   // Empty pause rows are ordinary timed rows: use the same line/page event
-   // and duration for speech, blanks and upcoming text in every wait mode.
-   const double trigger=settings.waitForLine?end:start;
-   const double duration=(settings.waitForLine?settings.scrollDuration:std::max(settings.scrollDuration,end-start))/settings.speed;
-   moves.push_back({trigger,duration,1,noDeadline});
+   for(const auto& run:runs){
+    const double elapsed=time-run.start,cruise=pace*2*(run.count-1)/3;
+    // A zero Transition duration steps instantly at the trigger itself.
+    if(!(pace>0)){if(elapsed>=0)steps+=run.count;continue;}
+    if(elapsed<=0)continue;
+    if(elapsed>=pace+cruise)steps+=run.count;
+    else if(elapsed<pace/2)steps+=rollCurve(elapsed/pace,2);
+    else if(elapsed<pace/2+cruise)steps+=.5+1.5*(elapsed-pace/2)/pace;
+    else steps+=run.count-1+rollCurve(.5+(elapsed-pace/2-cruise)/pace,2);
+   }
+  }else{
+   if(opening)steps+=double(lead-1)*rollCurve((time-rows.front().start)/pace,2);
+   for(std::size_t block=1;block<blocks;++block){
+    const auto first=(block-1)*blockRows,last=std::min(rows.size(),first+blockRows);double end=rows[first].end;
+    for(std::size_t index=first+1;index<last;++index)end=std::max(end,rows[index].end);
+    const double start=rows[first].start;
+    // Empty pause rows are ordinary timed rows: use the same line/page event
+    // and duration for speech, blanks and upcoming text in every wait mode.
+    const double trigger=settings.waitForLine?end:start;
+    const double duration=(settings.waitForLine?settings.scrollDuration:std::max(settings.scrollDuration,end-start))/settings.speed;
+    steps+=duration>0?rollCurve((time-trigger)/duration,2):(time>=trigger?1:0);
+   }
   }
-  // Shortening an earlier ease keeps it continuous and monotonic; it only
-  // ends sooner, so every move has settled when the arriving line is due.
-  double deadline=noDeadline;
-  for(auto move=moves.rbegin();move!=moves.rend();++move){
-   move->duration=std::min(move->duration,std::max(0.0,deadline-move->start));deadline=std::min(deadline,move->deadline);
-  }
-  for(const auto& move:moves)steps+=move.duration>0?move.count*rollCurve((time-move.start)/move.duration,2):(time>=move.start?move.count:0);
   // Each drawn row at one scroll progress, with its left/top in the frame.
   using Visit=std::function<void(const ComposedRow&,double left,double top)>;
   auto legacyRows=[&](double progress,const Visit& visit){
