@@ -337,7 +337,7 @@ async function editArea(ppro, project, sequence, descriptor, request, revalidate
     if(!receipt || receipt.ok!==true || !receipt.descriptor || identity(receipt.descriptor)!==identity(descriptor) || !descriptorMotionMatches(receipt.descriptor,target)) { histories.delete(id);throw new Error('Premiere did not confirm the in-place keyframe edit. Refresh Position & size before continuing.'); }
   } else if (actions.length) {
     let committed=false;
-    project.lockedAccess(()=>{ committed=project.executeTransaction(compound=>{for(const createAction of actions) if(compound.addAction(createAction())===false)throw new Error('Premiere refused a Motion action.');},'Better Captions: Position & size'); });
+    project.lockedAccess(()=>{ committed=project.executeTransaction(compound=>{for(const createAction of actions) if(compound.addAction(createAction())===false)throw new Error('Premiere refused a Motion action.');},'S-Captions: Position & size'); });
     if (!committed) throw new Error('Premiere did not commit the text-area edit.');
   }
   let afterParams, after;

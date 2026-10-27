@@ -14,6 +14,22 @@
     changed:(context:AreaContext,state:TextAreaState)=>Promise<void>;
   }
   const snapshot=<T,>(value:T):T=>JSON.parse(JSON.stringify(value));
+  export interface AreaDefaults {position:number[];width:number|null;height:number|null;}
+  /** Reset to the caption's original paragraph box, not the center of the video. */
+  export function captionAreaDefaults(caption:CaptionItem,frameWidth:number,frameHeight:number,position:{x:number;y:number},sampleSize?:{width:number;height:number}):AreaDefaults {
+    const bounds=caption.renderBounds;
+    const width=bounds&&Number.isFinite(bounds.width)&&bounds.width>0?bounds.width:sampleSize?.width??null;
+    const height=bounds&&Number.isFinite(bounds.height)&&bounds.height>0?bounds.height:sampleSize?.height??null;
+    const center=bounds&&width!==null&&height!==null&&Number.isFinite(bounds.x)&&Number.isFinite(bounds.y)
+      ?[bounds.x+width/2,bounds.y+height/2]
+      :[frameWidth*(caption.position?.x??position.x),frameHeight*(caption.position?.y??position.y)];
+    return {position:center,width,height};
+  }
+  export function areaPropertyReset(track:AreaTrack,defaults:AreaDefaults):Omit<TextAreaEdit,'signature'|'frame'>|null {
+    const value=track==='position'?defaults.position:[defaults[track]];
+    if(!value.every(item=>typeof item==='number'&&Number.isFinite(item))||track!=='position'&&Number(value[0])<=0)return null;
+    return {track,operation:'set',value:[...value] as number[]};
+  }
   export function captionFrame(context:AreaContext,time=context.currentTime,reference?:Pick<TextAreaState,'startTime'|'frameRate'|'count'>|null):number {
     const rate=reference?.frameRate??context.frameRate,start=reference?.startTime??context.caption.startTime;
     const count=reference?.count??Math.max(1,Math.round((context.caption.endTime-context.caption.startTime)*rate));
@@ -108,11 +124,12 @@
 </script>
 <script lang="ts">
   import {onDestroy,untrack} from 'svelte';
+  import {DEFAULT_STYLE} from '../lib/types';
   import {sampleArea,sampleAt,editSample} from '../lib/text-area';
   import MotionIcon from './MotionIcon.svelte';
   interface Props {caption:CaptionItem;sequenceId:string;frameRate:number;frameWidth:number;frameHeight:number;currentTime:number;visible:boolean;disabled?:boolean;refreshRevision?:string|number;isDemo:boolean;read:(caption:CaptionItem,id:string,frame:number)=>Promise<TextAreaState>;edit:(caption:CaptionItem,id:string,request:TextAreaEdit)=>Promise<TextAreaState>;getCurrentTime:()=>Promise<number>;onSeek:(time:number)=>void|Promise<void>;onSelect:()=>void|Promise<void>;onBusy:(busy:boolean)=>void;onChanged:(state?:TextAreaState)=>void|Promise<void>;}
   let {caption,sequenceId,frameRate,frameWidth,frameHeight,currentTime,visible,disabled=false,refreshRevision=0,isDemo,read,edit,getCurrentTime,onSeek,onSelect,onBusy,onChanged}:Props=$props();
-  let area=$state<TextAreaState|null>(null),busy=$state(false),problem=$state(''),notice=$state(''),expanded=$state(false);
+  let area=$state<TextAreaState|null>(null),busy=$state(false),problem=$state(''),notice=$state(''),expanded=$state(true),keyframesExpanded=$state(false);
   let cachedArea=$state<{key:string;identity:string;value:TextAreaState}|null>(null);
   let selectedKey=$state<{scope:string;track:AreaTrack;ticks:string}|null>(null),keyZoom=$state(1);
   let refreshReady=false,lastRefreshRevision:string|number;
@@ -125,6 +142,7 @@
   const readOnly=$derived(busy||disabled||!area||!!problem||cachedArea?.identity!==identity);
   const selectedTrack=$derived(selectedKey?.scope===displayIdentity?selectedKey.track:null);
   const selected=$derived(selectedTrack&&shownArea?shownArea.tracks[selectedTrack].keys.find(key=>key.ticks===selectedKey?.ticks):undefined);
+  const defaults=$derived(captionAreaDefaults(caption,frameWidth,frameHeight,{x:DEFAULT_STYLE.positionX,y:DEFAULT_STYLE.positionY},isDemo?{width:frameWidth*.8,height:frameHeight*.4}:undefined));
   const controller=createTextAreaController({
     current:()=>({key:identity,caption,sequenceId,frameRate,currentTime,visible:visible&&expanded&&(isDemo||!!caption.clipNodeId),disabled}),
     read:async(context,at)=>isDemo?sampleAt(samples.get(context.key)??sampleArea(frameWidth,frameHeight,context.frameRate,context.caption.startTime,context.caption.endTime),at):read(context.caption,context.sequenceId,at),
@@ -161,6 +179,11 @@
   function setValue(name:AreaTrack,index:number,value:number){
     if(!area||!Number.isFinite(value)||(name!=='position'&&value<=0)){problem='Enter a valid pixel value. Width and height must be greater than zero.';return;}
     void controller.change({track:name,operation:'set'},{index,value});
+  }
+  function resetProperty(track:AreaTrack){
+    if(readOnly)return;
+    const request=areaPropertyReset(track,defaults);
+    if(request)void controller.change(request);
   }
   function chooseKey(track:AreaTrack,key:AreaKey){
     if(readOnly||typeof key.ticks!=='string')return;
@@ -203,10 +226,33 @@
 <details class="caption-section text-area" bind:open={expanded}>
   <summary class="caption-section__heading">Position & size <span>Selected caption</span></summary>
   <div class="caption-section__body">
-    <p class="caption-help">All word states · {frameWidth} × {frameHeight} px</p>
-    {#if !isDemo&&!caption.clipNodeId}<p class="caption-help">Apply this caption to the Program Monitor first to edit its native Motion keyframes.</p>{/if}
-    <div class="text-area__toolbar"><button class="caption-button" disabled={busy||disabled||(!isDemo&&!caption.clipNodeId)} onclick={()=>refresh()}>Refresh from {isDemo?'sample':'playhead'}</button><button class="caption-button" disabled={busy||disabled||isDemo||!caption.clipNodeId} onclick={onSelect}>Select in Program Monitor</button><button class="caption-button" disabled={readOnly||!area?.canUndo} onclick={()=>change({operation:'undo'})}>Undo</button><button class="caption-button" disabled={readOnly||!area?.canRedo} onclick={()=>change({operation:'redo'})}>Redo</button></div>
+    <fieldset class="text-area__properties" disabled={readOnly} aria-label="Caption position and independent dimensions">
+      {#each names as item}
+        {@const track=shownArea?.tracks[item.key]}
+        <div class="text-area__property">
+          <button class="caption-button caption-button--icon" aria-label="{item.label} keyframes" aria-pressed={track?.animated??false} title="{track?.animated?'Disable':'Enable'} {item.label.toLowerCase()} animation" onclick={()=>change({track:item.key,operation:'toggle'})}><MotionIcon name="clock"/></button>
+          <span class="text-area__property-label">{item.label}</span>
+          <div class="text-area__property-values" class:text-area__property-values--single={item.key!=='position'}>
+            {#if item.key==='position'}
+              {#each ['X','Y'] as axis,index}<label class="text-area__value"><span aria-hidden="true">{axis}</span><input type="number" step="1" aria-label="Position {axis}, px" title="Position {axis}, px" value={track?Number(track.value[index].toFixed(3)):''} placeholder="—" onchange={(event)=>setValue('position',index,event.currentTarget.valueAsNumber)}/></label>{/each}
+            {:else}
+              <label class="text-area__value"><input type="number" min=".01" step="1" aria-label="{item.label}, px" title="{item.label}, px — independent text area dimension" value={track?Number(track.value[0].toFixed(3)):''} placeholder="—" onchange={(event)=>setValue(item.key,0,event.currentTarget.valueAsNumber)}/><span aria-hidden="true">px</span></label>
+            {/if}
+          </div>
+          <button class="caption-button caption-button--icon text-area__reset" aria-label="Reset {item.label.toLowerCase()} at playhead" title={item.key==='position'?'Reset to the original caption location at this frame':`Reset ${item.label.toLowerCase()} to the original text area size at this frame`} disabled={!areaPropertyReset(item.key,defaults)} onclick={()=>resetProperty(item.key)}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 8a6 6 0 1 1 .3 4M4 3v5h5"/></svg></button>
+        </div>
+      {/each}
+    </fieldset>
+    <div class="text-area__toolbar">
+      <button class="caption-button text-area__select" disabled={busy||disabled||isDemo||!caption.clipNodeId} onclick={onSelect} title="Select the caption in the Program Monitor and show its transform handles">Select caption</button>
+      <button class="caption-button caption-button--icon" aria-label="Undo caption position or size" title="Undo position or size edit" disabled={readOnly||!area?.canUndo} onclick={()=>change({operation:'undo'})}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 8h7a5 5 0 0 1 0 10M4 8l4-4M4 8l4 4"/></svg></button>
+      <button class="caption-button caption-button--icon" aria-label="Redo caption position or size" title="Redo position or size edit" disabled={readOnly||!area?.canRedo} onclick={()=>change({operation:'redo'})}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M16 8H9a5 5 0 0 0 0 10M16 8l-4-4M16 8l-4 4"/></svg></button>
+      <button class="caption-button caption-button--icon" aria-label="Refresh caption position and size" title="Read the current caption position and size" disabled={busy||disabled||(!isDemo&&!caption.clipNodeId)} onclick={()=>refresh()}><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M16 7a6.5 6.5 0 1 0 .3 5M16 3v4h-4"/></svg></button>
+    </div>
+    {#if !isDemo&&!caption.clipNodeId}<p class="caption-help" role="status">Waiting for captions in the Program Monitor…</p>{/if}
     {#if busy&&!shownArea}<p class="caption-help" role="status">Reading caption Motion…</p>{/if}
+    <details class="text-area__keyframes" bind:open={keyframesExpanded}>
+      <summary>Keyframes</summary>
     {#if shownArea}
       <fieldset disabled={readOnly}>
         <label class="caption-field"><span>Playhead, caption frame</span><input type="number" aria-label="Text area playhead frame" min="0" max={shownArea.count-1} step="1" value={shownArea.frame} onchange={(e)=>seek(e.currentTarget.valueAsNumber)}/></label>
@@ -235,7 +281,6 @@
             </div>
           </div>
         {/if}
-        <h3 class="text-area__values-heading">At playhead</h3>
         {#each names as item}
           {@const track=shownArea.tracks[item.key]}
           {@const atKey=track.keys.find(k=>Math.abs(k.frame-shownArea!.frame)<.001)}
@@ -243,20 +288,17 @@
           {@const next=track.keys.find(k=>k.frame>shownArea!.frame&&k.frame<shownArea!.count)}
           <div class="text-area__track">
             <div class="text-area__track-heading">
-              <button class="caption-button caption-button--icon" aria-label="{item.label} keyframes" aria-pressed={track.animated} title="{track.animated?'Disable':'Enable'} {item.label.toLowerCase()} animation" onclick={()=>change({track:item.key,operation:'toggle'})}><MotionIcon name="clock"/></button>
               <strong>{item.label}</strong><span>{track.animated?`${track.keys.length} keys`:'Static'}</span>
               <button class="caption-button caption-button--icon" aria-label="Previous {item.label.toLowerCase()} keyframe" disabled={!previous} onclick={()=>previous&&chooseKey(item.key,previous)}><MotionIcon name="previous"/></button>
               <button class="caption-button caption-button--icon" aria-label="Add or remove {item.label.toLowerCase()} keyframe at playhead" aria-pressed={!!atKey} disabled={!track.animated} onclick={()=>keyAtPlayhead(item.key)}><MotionIcon name="key"/></button>
               <button class="caption-button caption-button--icon" aria-label="Next {item.label.toLowerCase()} keyframe" disabled={!next} onclick={()=>next&&chooseKey(item.key,next)}><MotionIcon name="next"/></button>
             </div>
-            <div class="caption-controls">
-              {#each track.value as value,i}<label class="caption-field" class:caption-field--wide={item.key!=='position'}><span>{item.key==='position'?(i===0?'X':'Y'):'Size'}, px</span><input type="number" step="1" aria-label="{item.label} {item.key==='position'?(i===0?'X':'Y'):'size'}, px" value={Number(value.toFixed(3))} onchange={(e)=>setValue(item.key,i,e.currentTarget.valueAsNumber)}/></label>{/each}
-            </div>
           </div>
         {/each}
       </fieldset>
-      <p class="caption-help">Width reflows text at the same font size; height is independent.</p>
+      <p class="caption-help">Reset changes only this frame’s value. Width reflows text; height stays independent.</p>
     {/if}
+    </details>
     {#if problem}<p class="caption-message caption-message--error" role="alert">{problem}</p>{:else if notice}<p class="caption-help" role="status">{notice}</p>{/if}
   </div>
 </details>
@@ -267,8 +309,34 @@
     & input[type=number] { font-variant-numeric:tabular-nums; }
   }
   .text-area__toolbar {
-    display:flex;flex-wrap:wrap;gap:var(--caption-space-xs);
+    display:flex;align-items:center;gap:var(--caption-space-xs);
     & button { font-size:var(--caption-type-xs);padding-inline:var(--caption-space-s); }
+    & .caption-button--icon { inline-size:1.8rem;min-block-size:1.8rem;padding:.25rem; }
+  }
+  .text-area__select { flex:1;min-inline-size:0;min-block-size:1.8rem; }
+  .text-area__properties { display:flex;flex-direction:column;gap:var(--caption-space-xs); }
+  .text-area__property {
+    display:grid;grid-template-columns:1.8rem 4.5rem minmax(0,1fr) 1.8rem;align-items:center;gap:var(--caption-space-xs);min-block-size:2rem;
+    & .caption-button--icon { inline-size:1.8rem;min-block-size:1.8rem;padding:.25rem; }
+    & [aria-pressed=true] { color:var(--color-accent);background:var(--color-selection); }
+  }
+  .text-area__property-label { font-size:var(--caption-type-s); }
+  .text-area__property-values { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--caption-space-xs);min-inline-size:0; }
+  .text-area__property-values--single { grid-template-columns:minmax(0,1fr); }
+  .text-area__value {
+    display:flex;align-items:center;gap:.15rem;min-inline-size:0;
+    & span { color:var(--color-panel-secondary);font-size:var(--caption-type-xs); }
+    & input { inline-size:100%;min-inline-size:0;min-block-size:1.8rem;border:1px solid transparent;border-radius:var(--caption-radius);padding:.15rem .2rem;color:var(--color-accent);background:transparent;font-size:var(--caption-type-s);appearance:textfield; }
+    & input:hover:enabled { border-color:var(--color-panel-border);background:var(--color-input); }
+    & input:focus { border-color:var(--color-panel-border);background:var(--color-input); }
+    & input:disabled { color:var(--color-panel-secondary); }
+    & input::-webkit-inner-spin-button, & input::-webkit-outer-spin-button { appearance:none;margin:0; }
+  }
+  .text-area__reset { color:var(--color-panel-secondary); }
+  .text-area__keyframes {
+    border-block-start:1px solid var(--color-panel-border);padding-block-start:var(--caption-space-xs);
+    & > summary { cursor:pointer;padding-block:var(--caption-space-xs);font-size:var(--caption-type-s);color:var(--color-panel-secondary); }
+    & > fieldset { margin-block-start:var(--caption-space-s); }
   }
   .text-area__scrub { inline-size:100%;accent-color:var(--color-accent);margin-block:var(--caption-space-s); }
   .text-area__overview-heading {
@@ -302,7 +370,6 @@
     display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:end;gap:var(--caption-space-xs);margin-block-end:var(--caption-space-s);
     & button { min-inline-size:0;padding-inline:var(--caption-space-s); }
   }
-  .text-area__values-heading { font-size:var(--caption-type-s);font-weight:600;margin-block:var(--caption-space-m) 0; }
   .text-area__track { border-block-start:1px solid var(--color-panel-border);margin-block-start:var(--caption-space-m);padding-block-start:var(--caption-space-s); }
   .text-area__track-heading {
     display:flex;align-items:center;gap:var(--caption-space-xs);margin-block-end:var(--caption-space-s);font-size:var(--caption-type-s);

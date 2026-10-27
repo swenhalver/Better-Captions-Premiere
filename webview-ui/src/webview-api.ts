@@ -44,3 +44,13 @@ export const setSequenceCallbacks = (
   sequenceActivatedCallback = onActivated;
   sequenceClosedCallback = onClosed;
 };
+
+let timelinePlayheadCallback: ((position: unknown) => void) | null = null;
+
+export const onTimelinePlayhead = (position: unknown) => {
+  timelinePlayheadCallback?.(position);
+};
+
+export const setTimelinePlayheadCallback = (callback: ((position: unknown) => void) | null) => {
+  timelinePlayheadCallback = callback;
+};

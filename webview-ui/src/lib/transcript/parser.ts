@@ -35,11 +35,12 @@ export function groupCaptionWords(words:CaptionWord[],maxChars=DEFAULT_MAX_CHARS
   validateCharacterLimit(maxChars);
   const out:CaptionItem[]=[];let group:CaptionWord[]=[],length=0;
   function flush(){if(!group.length)return;out.push({id:'caption-'+Date.now().toString(36)+'-'+nextCaptionId++,words:group.map(w=>({...w})),text:group.map(w=>w.text).join(' '),startTime:group[0].startTime,endTime:group[group.length-1].endTime});group=[];length=0;}
-  for(const w of words){
+  for(let index=0;index<words.length;index++){
+    const w=words[index], next=words[index+1];
     const last=group[group.length-1],wordLength=captionCharacterCount(w.text);
-    if(last&&(w.startTime-last.endTime>=.5||length+1+wordLength>maxChars||w.endTime-group[0].startTime>5.5))flush();
+    if(last&&(w.lineBreakBefore==='break'||w.lineBreakBefore==='edge'||w.lineBreakBefore!=='join'&&(w.startTime-last.endTime>=.5||length+1+wordLength>maxChars||w.endTime-group[0].startTime>5.5)))flush();
     length+=wordLength+(group.length?1:0);group.push(w);
-    if(w.endOfSentence||sentenceEnds.has(w)||/[.!?]["'”’)]*$/.test(w.text)&&!/^(Mr|Mrs|Ms|Dr|St|vs)\.$/i.test(w.text))flush();
+    if(next?.lineBreakBefore!=='join'&&(w.endOfSentence||sentenceEnds.has(w)||/[.!?]["'”’)]*$/.test(w.text)&&!/^(Mr|Mrs|Ms|Dr|St|vs)\.$/i.test(w.text)))flush();
   }flush();
   for(let i=0;i<out.length;i++)out[i].endTime=Math.min(out[i].endTime+.12,out[i+1]?.startTime??Infinity);
   return out;
@@ -62,7 +63,7 @@ function sentenceGroups(captions: CaptionItem[], maxChars: number): CaptionItem[
   }
   for (const caption of captions) {
     const previous = run[run.length - 1];
-    if (previous && (previous.speaker !== caption.speaker || previous.position?.x !== caption.position?.x || previous.position?.y !== caption.position?.y)) flush();
+    if (previous && caption.words[0]?.lineBreakBefore !== 'join' && (previous.speaker !== caption.speaker || previous.position?.x !== caption.position?.x || previous.position?.y !== caption.position?.y)) flush();
     for (const word of caption.words) owners.set(word.startTime, caption);
     run.push(caption);
   }

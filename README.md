@@ -1,10 +1,57 @@
-# Better Captions — Swen's Premiere fork
+# S-Captions — Swen's Premiere fork
 
-Editable word-highlight captions using **Premiere Pro's built-in Speech to Text**. Based on [Matthew Paquette's Better Captions](https://github.com/Paquette1111/Better-Captions-Premiere), upstream commit `16c32128506a9c1a29a3577ea6d8e37339e9e6b9`.
+Previously named Better Captions. Editable word-highlight captions using **Premiere Pro's built-in Speech to Text**. Based on [Matthew Paquette's Better Captions](https://github.com/Paquette1111/Better-Captions-Premiere), upstream commit `16c32128506a9c1a29a3577ea6d8e37339e9e6b9`.
 
 This fork adds independent upcoming, currently spoken, and previously spoken word appearances; a rounded bubble behind the active word; word sizing; transcript and timing edits; a movable, independently resizable text area in Premiere's Program Monitor; native position and size keyframes; actual timeline insertion; and a local agent API.
 
 **Pre-release status:** [0.7.8](https://github.com/swenhalver/Better-Captions-Premiere/releases/tag/v0.7.8) adds one-clip output, automatic tracks and installed Mac fixes. Native Mac checks confirmed a new track above occupied footage, character regrouping, plugin size-keyframe edits, retiming and preserved Razor cuts. Physical mouse dragging remains unverified by the automated native tests, compatible static legacy conversion still needs native acceptance, and Adobe installation is blocking Windows acceptance. See the [Mac verification record](docs/mac-verification-0.7.8.md) and [Windows verification record](docs/windows-verification-0.7.3.md) for the exact boundaries.
+
+**Development branch:** `swen/native-caption-effect` now defaults new transcripts to a **native caption effect** in **0.7.27**. One Premiere Transparent Video clip holds the transcript and the compiled effect; text, timing and supported three-state styles update live from Better Captions. Phrase rows follow the native character limit, adjustable in Caption grouping. **Smart line fit** is a button there: it measures the caption width and font and sets **Characters per line** to the number that fits one line (shown as ≈N on the button). The number then stays until you change it. Styling uses compact responsive tabs with working native word-spacing, outline/shadow toggles and Layout controls; left/center/right alignment icons appear only under All words. Smart line fit uses real font measurements and a 5% safety margin to fit a line to the selected width. **Scrolling text** restores line-by-line roll-up with four directions, speed, wait-for-line timing and a soft fade boundary; all its settings can use native Effect Controls keyframes. Outlines render beneath a clean glyph fill to preserve font weight; the shared case selector supports As typed, Uppercase, Lowercase and Title Case. Position, Width and Height also appear in the plugin as blue drag-adjustable values with reset buttons and Effect Controls keyframing indicators. **Groups per page** shows 1–100 consecutive lines together, with each line retaining the character limit. The native Program Monitor outline previews the selected caption area without being exported. Native keyframes remain in Effect Controls, with previous/next navigation in the plugin. **Sequence actions (…) → Extend captions** appends dialogue from newly added footage without replacing existing text edits or timings. Numeric styling values use the same drag/click-to-type behavior. Existing movie captions reconnect unchanged, with an explicit **Create native effect copy** action. Native effects require the separate experimental compiled plugin; the panel never silently falls back to a movie. See [0.7.27 notes](docs/release-0.7.27.md), [Mac verification](docs/mac-verification-0.7.24.md), and [native-effect acceptance](docs/native-effect-acceptance.md). Native Premiere graphics are being developed separately. The published 0.7.8 instructions below retain their rendered-movie workflow.
+
+**Current line position** chooses which visible scrolling line holds the words being spoken, counted from the top: Line 1 is the top line, the same numbering as line position styles. With Up scrolling, set it to Visible lines to keep the current line at the bottom edge where new lines appear. Choose 2 with 3 visible lines, or 3 with 5, to center the current line between spoken history and upcoming lines; independent top and bottom fades can soften both sides. The position is limited by the lines that fit in the caption area and applies to Up and Down scrolling.
+
+**Pause Line Length**, in **Transcript → Caption grouping** (and **Effect Controls → Scrolling text**), sets the seconds of silence per blank scrolling row (0–30 s in 0.1 s steps). **0 = Auto** keeps the average spoken-line cadence. A positive length adds one row per complete interval of silence, capped at Visible lines; shorter pauses add none, and any remaining time holds the last state. At 2 s, a 0.99 s pause adds no blank and a 4.5 s pause adds two. This setting supports native keyframes and Premiere Undo/Redo. Scrolling and paged layouts use one continuous stream across internal storage boundaries. Every complete interval contributes a blank pause line, up to Visible lines; remaining silence holds that state. These occupy ordinary line slots and do not hide upcoming text. Pause rows also appear in the transcript with their times and a delete control. Deleting one removes it from the list and native output through a normal Premiere Undo/Redo step; a deletion count at the following line survives regrouping, text edits and Pause Line Length changes. Phrase splitting still uses its separate 0.6 s pause.
+
+**Line editing:** the header counts rendered lines. Split inserts a line break; Merge joins adjacent lines across internal storage boundaries. BCAP v9 stores explicit per-word break/join markers and persistent pause-line deletions; older documents load with their existing storage splits preserved as line breaks, retaining all words, timing and styles. The panel and native effect share these markers, including after save/reload and Premiere Undo/Redo.
+
+**Undo and Redo.** Every panel change to the native caption effect layer (transcript text, timing, grouping, styles, animation, the character limit, position and size) is a Premiere history step, so Premiere's **Edit › Undo** and **Redo** revert and restore it. The panel polls the layer and updates itself, showing "Updated from Premiere": within a few seconds for the character limit, Width and font size, and within about 30 seconds for text, timing, style and animation edits.
+
+While a sentence's text is being edited, each pause in typing (0.75 s) is its own step, "S-Captions: Typing". Cmd+Z and Shift+Cmd+Z then step through those pause points with the editor still open; its text and caret follow within about a second. Pressing Cmd saves pending typing as a step at once: the step goes into Premiere's history within a few tens of milliseconds and its text follows, so Cmd+Z right after typing takes back exactly that burst and Shift+Cmd+Z brings it back. If Undo still arrives before the step, the unsaved typing is dropped, like the latest burst in a text editor, and cannot be redone. Leaving the editor merges its typing steps into one "S-Captions: Edit text" step (none if the text is unchanged), so one Undo afterwards takes back the whole edit; Escape takes all the typing back. Typing steps are only merged when Premiere's history still ends with exactly those steps; otherwise they stay.
+
+## Portable captions: the normal output
+
+The normal workflow renders transparent **ProRes 4444 movie clips** into Premiere.
+Use S-Captions to edit the transcript, word timing, layout and appearance;
+the panel regenerates the caption media for Premiere. After rendering finishes,
+Premiere reads those captions as ordinary media without Better Captions installed.
+Premiere can still move, trim, split and scale the movie clips. Their letters and
+internal styles are baked pixels; changing those requires the panel and a render.
+
+Keep the project and its adjacent **Better Captions** folder together. That folder
+contains the linked caption movies and `captions.better-captions.json` editing
+session. A receiver needs the media for playback; retain the session too if later
+panel editing is needed. See [the portable caption workflow](docs/portable-caption-workflow.md)
+for handoff details and verification boundaries.
+
+Installed verification with panel 0.7.11 made all three Better Captions
+components temporarily unavailable across a fresh Premiere restart: the portable
+fixture still played and exported fresh PNG frames, with identical decoded
+2.5-second pixels. All 29 component files were restored with matching hashes.
+The original project then reopened/reconnected; changing the phrase to **These
+captions still work.** automatically regenerated the ProRes 4444 movie while
+preserving its clip and project-item identities. Full video-file export was not
+part of this check. See [verification details](docs/portable-caption-workflow.md#installed-verification-receipt--2026-10-18).
+
+The verified editable handoff is **Portable Captions - Plugin-Free Playback** in
+`artifacts/host-scratch/Native Effect Scratch.prproj`. The exported `Portable
+Captions.prproj` is a playback-only fixture: `exportAsProject` rebased item IDs,
+and panel reconnection correctly refused the mismatch. It is not an editable
+handoff; retain the original project with its media and session.
+
+Existing experimental native-effect adjustment layers are preserved. They are
+**not automatically converted** into movies and still require the compiled effect
+to render. An explicit, separately verified bake would be needed to make those
+particular captions portable; this workflow does not add that conversion feature.
 
 ## What you can edit
 
@@ -28,6 +75,10 @@ The installer targets **Windows and macOS (Apple Silicon or Intel), with Premier
 - macOS: Fontconfig (`fc-list`) for the font picker. Windows uses its installed font families through the system Windows PowerShell/.NET APIs, with no Fontconfig dependency.
 - Premiere's Speech to Text language pack and transcription preferences set as desired.
 
+These creation/editing requirements do not apply to ordinary playback of already
+rendered caption movies. The receiver needs Premiere and the linked media, not
+Better Captions, FFmpeg, Fontconfig or the fonts used to create the baked text.
+
 With Homebrew, run `brew install ffmpeg fontconfig`. On Windows, install a local FFmpeg distribution containing both `ffmpeg.exe` and `ffprobe.exe`, for example `winget install --id Gyan.FFmpeg --exact`. Restart Premiere after installing dependencies. Custom locations can be set through `BETTER_CAPTIONS_FFMPEG`, `BETTER_CAPTIONS_FFPROBE` and (macOS) `BETTER_CAPTIONS_FC_LIST`, each containing an absolute executable path. These are local configuration; caption requests cannot choose executables.
 
 ## Install and use
@@ -50,7 +101,7 @@ If Adobe UPIA reports an installation error, open the `.ccx` in Creative Cloud D
 
 Private queue and agent files live under `%APPDATA%\Better Captions` on Windows and `~/Library/Application Support/Better Captions` on macOS. Windows folders have a protected ACL for the current user, SYSTEM and Administrators; macOS folders/files retain 0700/0600 permissions. Caption assets still live beside the project. Local drive paths, spaces and Unicode are supported; UNC/device paths and traversal segments are rejected.
 
-1. Open **Window > UXP Plugins > Better Captions**. This is the only visible plugin panel.
+1. Open **Window > UXP Plugins > S-Captions**. This is the only visible plugin panel.
 2. Open a saved sequence, then **Refresh sequence** in the caption editor.
 3. Click **Transcribe in Premiere**. The main plugin calls Adobe's native `Transcript.transcribeClipProjectItem` API for enabled audio clips missing a transcript, using Premiere's language preferences. Existing native transcripts are reused.
 4. In **Transcript**, select a sentence to open its single word lane. Select a word and drag an edge, use the arrow keys, or edit the seconds. Boundaries snap to frames and stop before they overlap another word; connected edges move together. In **Styling**, choose **Past words**, **Current word**, or **Next words** to edit each state’s typography, color, opacity, case, tracking, stroke, shadow and bubble.
@@ -58,7 +109,7 @@ Private queue and agent files live under `%APPDATA%\Better Captions` on Windows 
 6. Choose a caption and click **Select in Program Monitor**. Enable Premiere's **Transform** control below the Program Monitor to show its native handles, or select **Motion** in Effect Controls. Drag the area to move it or drag its handles to resize it. Generated caption clips use independent width and height.
 7. In **Styling → Position & size**, enable a stopwatch for **Position**, **Width**, or **Height**, move the caption-frame playhead, then edit X/Y or the size in pixels. Select a diamond in a keyframe lane to edit that exact key's frame and value, independently of the playhead. Use the frame field or ±1-frame buttons to move it, or Delete key to remove it. Existing Position and Bezier size values are changed in place to preserve their native easing. Linear/Hold size keys support structural edits; Premiere's unreadable custom curves require native controls for moving, deletion or easing changes. Panel **Undo** and **Redo** keep up to 32 confirmed edits per caption for the current session, including across automatic reflow. Native changes invalidate incompatible panel history. Save the Premiere project to retain its actual keyframes.
 
-Keep Better Captions open while editing the box dimensions. After a resize settles for about 750 ms, the plugin rerenders only the selected caption, using Premiere's evaluated width and height at every output frame. Inverse scaling keeps the font size constant, including between size keyframes. The existing movie can briefly stretch during the drag while the replacement renders. Position changes display immediately without rerendering. An overflow notice means the text needs a taller or wider area; the plugin does not silently shrink its font. After other text, timing or style edits, click **Update Program Monitor**.
+Keep S-Captions open while editing the box dimensions. After a resize settles for about 750 ms, the plugin rerenders only the selected caption, using Premiere's evaluated width and height at every output frame. Inverse scaling keeps the font size constant, including between size keyframes. The existing movie can briefly stretch during the drag while the replacement renders. Position changes display immediately without rerendering. An overflow notice means the text needs a taller or wider area; the plugin does not silently shrink its font. After other text, timing or style edits, click **Update Program Monitor**.
 
 Background geometry checks use a bounded change fingerprint rather than evaluating every output frame or reading media metadata on each poll. They stop while the panel is hidden and pause after an error until you Refresh or Update. Native requests run in one serialized lane; a timeout does not pretend to cancel Premiere or start another overlapping call. Only one background service instance owns the queue. The plugin does not open or navigate native menus for transcription or timeline updates.
 
@@ -103,9 +154,9 @@ The [online interface review](https://better-captions-premiere-review.swenhalver
 
 ## Character limits
 
-In **Transcript → Caption grouping** (**Sentence grouping** in 0.7.2), set **Characters per caption** (1–500, default 56), then choose **Regroup**. For captions already applied, click **Update Program Monitor** to render the new caption groups. The count includes spaces and punctuation, with Unicode grapheme counting where available. There is no word-count cap. A single word longer than the chosen limit stays whole in its own caption.
+In **Transcript → Caption grouping** (**Sentence grouping** in 0.7.2), set **Characters per line** (1–500, default 56), then choose **Regroup**. For captions already applied, click **Update Program Monitor** to render the new caption groups. The count includes spaces and punctuation, with Unicode grapheme counting where available. There is no word-count cap. A single word longer than the chosen limit stays whole in its own caption.
 
-Regroup splits or rejoins sentences while preserving word timings, sentence markers, pauses, speaker/placement boundaries and readable durations. Undo restores the previous grouping. Linked Premiere clips keep their physical boundaries and native keyframes while their rendered sentence groups change. Older sessions adopt the 56-character default instead of interpreting their old word count as characters; existing captions remain unchanged until regrouping. Style presets preserve the destination character limit.
+Regroup splits or rejoins sentences while preserving word timings, sentence markers, pauses, speaker/placement boundaries and readable durations. Linked Premiere clips keep their physical boundaries and native keyframes while their rendered sentence groups change. Older sessions adopt the 56-character default instead of interpreting their old word count as characters; existing captions remain unchanged until regrouping. Style presets preserve the destination character limit.
 
 If you delete a generated caption clip or its whole video track in Premiere, click **Update Program Monitor** to recreate it from the saved transcript and style. The replacement uses an automatic track above footage. Deliberate transcript splits remain separate, and surviving linked clips retain their native identities and Motion. Recreated clips start with the saved panel placement; native keyframes deleted with the old clips are no longer available. A remaining Razor fragment or media copy in the active sequence is protected, and automatic single-caption reflow does not recreate deleted clips.
 
@@ -124,3 +175,5 @@ No After Effects, Whisper, audio-export transcription pipeline, paid speech API,
 Credit belongs to [Matthew Paquette / Better Captions](https://github.com/Paquette1111/Better-Captions-Premiere). The original README is preserved in [UPSTREAM-README.md](UPSTREAM-README.md). Its README claims the MIT license, but the reviewed upstream commit has no LICENSE file. This fork preserves attribution and existing file notices and does not invent a license grant for upstream code. Clarify that omission with upstream before broader redistribution.
 
 The original UXP scaffold remains for comparison/rebasing; the supported build and installer use `uxp/` for the single panel and `cep/` for invisible rendering/timeline operations.
+
+For isolated development restarts on S-Space, use the [Premiere test launcher](docs/premiere-test-launch.md).

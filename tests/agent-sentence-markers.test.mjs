@@ -45,3 +45,12 @@ test('agent caption validation rejects non-Boolean sentence markers', () => {
     assert.throws(() => validateCaptionPatch(patch, original), /Expected true or false/);
   }
 });
+
+
+test('agent patch preserves omitted sentence and explicit line markers and validates supplied boundaries',()=>{
+ const current=[{id:'line',text:'One. two',startTime:0,endTime:2,words:[{text:'One.',startTime:0,endTime:1,endOfSentence:true,lineBreakBefore:'break',pauseLinesRemoved:2},{text:'two',startTime:1,endTime:2,lineBreakBefore:'join'}]}];
+ const patch=structuredClone(current);for(const word of patch[0].words){delete word.endOfSentence;delete word.lineBreakBefore;delete word.pauseLinesRemoved;}
+ const result=validateCaptionPatch(patch,current);
+ assert.equal(result[0].words[0].pauseLinesRemoved,2);assert.equal(result[0].words[0].endOfSentence,true);assert.equal(result[0].words[0].lineBreakBefore,'break');assert.equal(result[0].words[1].lineBreakBefore,'join');
+ for(const invalid of ['auto',null,0,true]){const next=structuredClone(patch);next[0].words[1].lineBreakBefore=invalid;assert.throws(()=>validateCaptionPatch(next,current),/Invalid line boundary/);}
+});

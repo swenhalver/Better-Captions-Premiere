@@ -9,9 +9,9 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url), ts = require('../webview-ui/node_modules/typescript');
 const platform = require('../cep/platform.cjs');
 const source = fs.readFileSync(new URL('../cep/service.ts', import.meta.url), 'utf8');
-function loadService() {
+function loadService(clock = () => Date.now()) {
   const exports = {}, code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  vm.runInNewContext(code, { exports, console, setTimeout, setInterval, clearInterval, require: () => ({ createHostAPI: () => { throw new Error('Tests must inject the API'); } }) });
+  vm.runInNewContext(code, { Date: class extends Date { static now(){return clock();} }, exports, console, setTimeout, clearTimeout, setInterval, clearInterval, require: () => ({ createHostAPI: () => { throw new Error('Tests must inject the API'); } }) });
   return exports;
 }
 const service = loadService();
@@ -38,6 +38,14 @@ test('service inserts captured sequence identity and preserves previous-caption 
   const data = request('applyCaptionClips', [[{ id: 'cue' }], 2, [{ id: 'old' }]]);
   await service.dispatchServiceRequest(api, data);
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[[{ id: 'cue' }], 2, 'seq-a', [{ id: 'old' }]]]);
+});
+test('font catalog service reads use no caller arguments and expire before executing stale native work',async()=>{
+  let calls=0;const catalog=[{family:'Only Real',weights:[380,617],italic:false}],api={getActiveSequenceInfo:info,getFontCatalog:async()=>{calls++;return catalog;}};
+  const data=request('getFontCatalog');data.expiresAt=data.createdAt+10000;
+  assert.equal(service.validateServiceRequest(data,data.id+'.json').action,'getFontCatalog');
+  assert.deepEqual(await service.dispatchServiceRequest(api,data),catalog);assert.equal(calls,1);
+  const injected={...data,args:['arbitrary-script']};assert.throws(()=>service.validateServiceRequest(injected,injected.id+'.json'),/arguments/);
+  assert.throws(()=>service.validateServiceRequest(data,data.id+'.json',data.expiresAt),/expired before execution/);assert.equal(calls,1);
 });
 test('track preparation uses the captured identity and automatic sentinel without accepting another sequence argument', async () => {
   const calls=[],api={getActiveSequenceInfo:info,prepareCaptionTrack:(...args)=>calls.push(args)},captions=[{id:'bundle'}],previous=[{id:'old'}];
@@ -166,4 +174,40 @@ test('existing-key patch transport preserves bounded payload and inserts only th
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[caption, patch, 'seq-a']]);
   const injected = request('patchCaptionKeyValues', [caption, patch, 'other-sequence']);
   assert.throws(() => service.validateServiceRequest(injected, injected.id + '.json'), /arguments/);
+});
+
+test('atomic request creation wakes the worker without a fallback poll and still executes each id once',async t=>{
+ let calls=0;const worker=service.startBackendService(options(t,{getActiveSequenceInfo:info,getFonts:async()=>{calls++;return ['Arial'];}}));t.after(worker.stop);
+ const data=request(),temporary=path.join(worker.root,'requests',data.id+'.tmp');fs.writeFileSync(temporary,JSON.stringify(data));fs.renameSync(temporary,path.join(worker.root,'requests',data.id+'.json'));
+ const output=path.join(worker.root,'responses',data.id+'.json'),deadline=Date.now()+2000;
+ while(!fs.existsSync(output)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,5));
+ assert.equal(fs.existsSync(output),true,'watch event must wake a worker whose fallback timer is60seconds');assert.equal(calls,1);
+ writeRequest(worker.root,data);await new Promise(resolve=>setTimeout(resolve,30));assert.equal(calls,1,'duplicate event/request id must not execute a setter twice');
+});
+test('filesystem wake does not add fast idle polling, ignores unrelated filenames and closes its watcher on stop',async t=>{
+ const configuration=options(t,{getActiveSequenceInfo:info,getFonts:async()=>['Arial']});let callback,closed=0,scans=0;
+ const watched=Object.create(fs);watched.watch=(_path,_options,listener)=>{callback=listener;return{on(){},close(){closed++;}};};watched.readdirSync=(...args)=>{scans++;return fs.readdirSync(...args);};configuration.fs=watched;
+ const worker=service.startBackendService(configuration);t.after(worker.stop);await new Promise(resolve=>setTimeout(resolve,0));const baseline=scans;
+ callback('rename','unrelated.tmp');callback('rename','not-a-nonce.json');await new Promise(resolve=>setTimeout(resolve,30));assert.equal(scans,baseline,'idle watcher must not scan or busy-poll');
+ const data=request();writeRequest(worker.root,data);callback('rename',data.id+'.json');await new Promise(resolve=>setTimeout(resolve,30));assert.ok(scans>baseline);worker.stop();const stopped=scans;assert.equal(closed,1);
+ callback('rename',data.id+'.json');await new Promise(resolve=>setTimeout(resolve,10));assert.equal(scans,stopped);
+});
+
+
+test('hidden worker clears a layout guide after idle without the visible UXP panel',async t=>{
+ let now=Date.now(),sweeps=0,edits=0;
+ const clocked=loadService(()=>now),api={getActiveSequenceInfo:info,
+  clearExpiredNativeCaptionGuides:async()=>{sweeps++;return {ok:true,pending:0,cleared:1};},
+  dispatchNativeCaptionControlRequest:async()=>{edits++;return {ok:true,layoutGuide:{active:true}};}};
+ const worker=clocked.startBackendService(options(t,api));t.after(worker.stop);await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(sweeps,1,'startup reclaims an older host lease');
+ const data=request('editNativeCaptionControl',[{locator:{}},{parameter:'width'}]);data.createdAt=now;writeRequest(worker.root,data);await worker.poll();
+ assert.equal(edits,1);assert.equal(sweeps,1);now+=799;await worker.poll();assert.equal(sweeps,1);
+ now+=2;await worker.poll();assert.equal(sweeps,2);now+=2000;await worker.poll();assert.equal(sweeps,2,'no native idle sweep after cleanup');
+});
+test('guide sweep errors retry without requiring another panel request',async t=>{
+ let now=Date.now(),sweeps=0;
+ const clocked=loadService(()=>now),worker=clocked.startBackendService(options(t,{clearExpiredNativeCaptionGuides:async()=>{if(++sweeps===1)throw new Error('host busy');return {ok:true,pending:0,cleared:1};}}));
+ t.after(worker.stop);await new Promise(resolve=>setImmediate(resolve));assert.equal(sweeps,1);
+ now+=251;await worker.poll();assert.equal(sweeps,2);now+=1000;await worker.poll();assert.equal(sweeps,2);
 });

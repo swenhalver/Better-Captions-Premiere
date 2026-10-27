@@ -11,7 +11,7 @@ const zip = path.join(dist, `Better-Captions-Swen-${manifest.version}-Windows-ma
 const client=path.join(root,'uxp/client');
 fs.rmSync(client,{recursive:true,force:true});
 fs.cpSync(path.join(root,'cep/client'),client,{recursive:true});
-writeZip(ccx, path.join(root, 'uxp'), ['manifest.json', 'index.html', 'main.js', 'api.js', 'storage.js', 'style-presets.js', 'paths.js', 'transcript.js', 'text-area.js', 'caption-track.js', 'consolidation.js', 'transcript-core.js', 'agent.js', 'client']);
+writeZip(ccx, path.join(root, 'uxp'), ['manifest.json', 'index.html', 'third-party-notices.txt', 'main.js', 'api.js', 'storage.js', 'style-presets.js', 'paths.js', 'transcript.js', 'text-area.js', 'caption-track.js', 'consolidation.js', 'native-params.js', 'transcript-core.js', 'agent.js', 'client']);
 const verification = `docs/mac-verification-${manifest.version}.md`;
 writeZip(zip, root, ['cep/CSXS', 'cep/host', 'cep/runtime.cjs', 'cep/platform.cjs', 'cep/service-client', 'scripts/install-cep.sh', 'scripts/install.cjs', 'scripts/agent.cjs', 'README.md', `docs/release-${manifest.version}.md`, ...(fs.existsSync(path.join(root, verification)) ? [verification] : []), 'SECURITY-AUDIT.md', 'security/FORK-CHANGES.md', path.relative(root, ccx)]);
 console.log(ccx); console.log(zip);

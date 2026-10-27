@@ -10,16 +10,25 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function harness(t, options = {}) {
   let active='one',projectPath='/projects/edit.prproj',counter=0;
   let projectReads=0,serviceReads=0,clockOffset=0;
+  const nativeReads={activeSequence:0,sequences:0,settings:0,frameRect:0,timebase:0,duration:0,playhead:0,tracks:0};
   const writes=[],requests=[];
-  const sequences=['one','two'].map(id=>({guid:{toString:()=>id},name:id,getSettings:async()=>({getVideoFrameRect:async()=>({width:720,height:1280})}),getTimebase:async()=>10584000000,getEndTime:async()=>({seconds:10}),getPlayerPosition:async()=>({seconds:id==='one'?2.5:7}),getVideoTrackCount:async()=>0}));
-  const project={get path(){return projectPath;},getSequences:async()=>sequences,getActiveSequence:async()=>sequences.find(s=>s.name===active)};
+  const timers=new Map();
+  const now=()=> (options.manualTimers ? options.fixedNow??1700000000000 : Date.now())+clockOffset;
+  const schedule=(callback,ms)=>{const timer=options.manualTimers?{}:setTimeout(()=>{timers.delete(timer);callback();},ms);timers.set(timer,{callback,ms});return timer;};
+  const cancel=timer=>{timers.delete(timer);if(!options.manualTimers)clearTimeout(timer);};
+  const sequences=['one','two'].map(id=>({guid:{toString:()=>options.guids?.[id]??id},name:id,
+    getSettings:async()=>{nativeReads.settings++;return{getVideoFrameRect:async()=>{nativeReads.frameRect++;return{width:720,height:1280};}};},
+    getTimebase:async()=>{nativeReads.timebase++;return 10584000000;},getEndTime:async()=>{nativeReads.duration++;return{seconds:10};},
+    getPlayerPosition:async()=>{nativeReads.playhead++;return options.playhead?options.playhead(id):{seconds:id==='one'?2.5:7};},
+    getVideoTrackCount:async()=>{nativeReads.tracks++;return 0;}}));
+  const project={get path(){return projectPath;},getSequences:async()=>{nativeReads.sequences++;return sequences;},getActiveSequence:async()=>{nativeReads.activeSequence++;return sequences.find(s=>s.name===active);}};
   const folders=new Map();
   function folder(path) {
     if(folders.has(path))return folders.get(path);
     const entries=new Map(),value={nativePath:path,getEntries:async()=>[...entries].map(([name,file])=>({...file,name})),getEntry:async name=>{if(path==='/private/service'&&name==='service.json')serviceReads++;if(!entries.has(name))throw new Error('Entry not found');return entries.get(name);},entries};
     folders.set(path,value);return value;
   }
-  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:Date.now()+clockOffset,busy:false,actions:['getFonts','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues','prepareCaptionTrack','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation']});
+  const healthyService = () => ({version:1,instanceId:'a'.repeat(24),updatedAt:now(),busy:false,actions:['getFonts','getFontCatalog','showInPremiere','beginCaption','saveCaptionFrames','finishCaption','preflightCaptionClips','applyCaptionClips','readTimeline','selectCaptionClip','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','patchCaptionKeyValues','prepareCaptionTrack','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation']});
   function setService(status) {
     const entries=folder('/private/service').entries;
     if(status===null)entries.delete('service.json');else entries.set('service.json',{data:status});
@@ -38,15 +47,15 @@ function harness(t, options = {}) {
       }else parent.entries.set(name,{data:value,delete:async()=>{}});
     },
   };
-  function respond(request= requests.at(-1),result={ok:true,cues:[]}){
+  function respond(request= requests.at(-1),result={ok:true,cues:[]},extra={}){
     const name=request.id+'.json',responses=folder('/private/service/responses');
     folder('/private/service/requests').entries.delete(name);
-    responses.entries.set(name,{data:{version:1,id:request.id,sequenceId:request.sequenceId,projectPath:request.projectPath,result},delete:async()=>responses.entries.delete(name)});
+    responses.entries.set(name,{data:{version:1,id:request.id,sequenceId:request.sequenceId,projectPath:request.projectPath,result,...extra},delete:async()=>responses.entries.delete(name)});
   }
-  const native={fetchTranscript:async sequence=>sequence.name,transcribe:async sequence=>options.transcribe?options.transcribe(sequence):sequence.name};
+  const native={transcribeRange:async(sequence,begin,end)=>options.transcribeRange?options.transcribeRange(sequence,begin,end):JSON.stringify({sequence:sequence.name,begin,end}),fetchTranscript:async sequence=>sequence.name,transcribe:async sequence=>options.transcribe?options.transcribe(sequence):sequence.name};
   const module={exports:{}};
-  const context={module,exports:module.exports,setTimeout,clearTimeout,Date:{now:()=>Date.now()+clockOffset},Map,Set,require:name=>{
-    if(name==='premierepro')return {Project:{getActiveProject:async()=>{projectReads++;return project;}},Constants:{TrackItemType:{CLIP:1}}};
+  const context={module,exports:module.exports,setTimeout:schedule,clearTimeout:cancel,Date:{now},Map,Set,require:name=>{
+    if(name==='premierepro')return {Project:{getActiveProject:async()=>{projectReads++;return options.noProject?null:project;}},Constants:{TrackItemType:{CLIP:1}}};
     if(name==='uxp')return {storage:{localFileSystem:{getDataFolder:async()=>folder('/plugin-data')}}};
     if(name==='./style-presets.js')return require('../uxp/style-presets.js');
     if(name==='./storage.js')return storage;
@@ -58,8 +67,59 @@ function harness(t, options = {}) {
   }};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/api.js',import.meta.url),'utf8'),context);
   const api=module.exports.createHostAPI({readTimeoutMs:options.readTimeoutMs??12000,serviceStartupGraceMs:options.serviceStartupGraceMs??0,serviceStartupPollMs:options.serviceStartupPollMs??5});t.after(()=>api.dispose());
-  return {api,writes,requests,respond,setService,healthyService,advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},get projectReads(){return projectReads;},get serviceReads(){return serviceReads;}};
+  return {api,writes,requests,respond,setService,healthyService,now,fireTimeout(ms){const entry=[...timers].find(([,value])=>value.ms===ms);assert.ok(entry,'Expected timer '+ms);cancel(entry[0]);entry[1].callback();},advanceTime:ms=>{clockOffset+=ms;},select:id=>{active=id;},relocate:path=>{projectPath=path;},nativeReads:()=>({...nativeReads}),get projectReads(){return projectReads;},get serviceReads(){return serviceReads;}};
 }
+
+test('idle playhead sampling reads only the active project, sequence and time without creating a session context',async t=>{
+  const h=harness(t,{service:null});
+  const position=await h.api.readPlayheadIfIdle();
+  assert.deepEqual(JSON.parse(JSON.stringify(position)),{sequenceId:'one',projectPath:'/projects/edit.prproj',time:2.5});
+  assert.equal(h.projectReads,1);assert.deepEqual(h.nativeReads(),{activeSequence:1,sequences:0,settings:0,frameRect:0,timebase:0,duration:0,playhead:1,tracks:0});
+  assert.equal(h.serviceReads,0);assert.equal(h.writes.length,0);assert.equal(h.requests.length,0);
+  await assert.rejects(h.api.loadSession('one'),/Refresh the sequence/,'a cheap sample must not pretend it captured a full session');
+  h.select('two');h.relocate('/copied/project.prproj');
+  assert.deepEqual(JSON.parse(JSON.stringify(await h.api.readPlayheadIfIdle())),{sequenceId:'two',projectPath:'/copied/project.prproj',time:7});
+});
+test('a delayed playhead read retains its captured project and GUID instead of mixing in a later active sequence',async t=>{
+  let finish;const guid='{A14706AA-93BB-74D3-A5FD-C8974E471C87}',h=harness(t,{guids:{one:guid},playhead:()=>new Promise(resolve=>{finish=resolve;})});
+  const sampling=h.api.readPlayheadIfIdle();await tick();h.select('two');h.relocate('/different/edit.prproj');finish({seconds:0});
+  assert.deepEqual(JSON.parse(JSON.stringify(await sampling)),{sequenceId:'a14706aa-93bb-74d3-a5fd-c8974e471c87',projectPath:'/projects/edit.prproj',time:0});
+  assert.equal(h.nativeReads().playhead,1);assert.equal(h.nativeReads().settings,0);assert.equal(h.requests.length,0);
+});
+test('playhead sampling returns no position for absent projects/sequences and invalid native times',async t=>{
+  const absent=harness(t,{noProject:true});assert.equal(await absent.api.readPlayheadIfIdle(),null);assert.equal(absent.nativeReads().activeSequence,0);
+  const noSequence=harness(t);noSequence.select('closed');assert.equal(await noSequence.api.readPlayheadIfIdle(),null);assert.equal(noSequence.nativeReads().playhead,0);
+  for(const seconds of [-1,NaN,Infinity,undefined]){
+    const h=harness(t,{playhead:()=>({seconds})});assert.equal(await h.api.readPlayheadIfIdle(),null);assert.equal(h.requests.length,0);assert.equal(h.nativeReads().tracks,0);
+  }
+});
+test('busy and queued native work makes the sampler skip immediately without joining the queue',async t=>{
+  let finish,entered;const started=new Promise(resolve=>{entered=resolve;});
+  const h=harness(t,{transcribe:async()=>{entered();await new Promise(resolve=>{finish=resolve;});return 'done';}});await h.api.getActiveSequenceInfo();
+  const working=h.api.transcribeSequence('one');await started;const before=h.projectReads,reads=h.nativeReads();
+  assert.equal(await h.api.readPlayheadIfIdle(),null);
+  const queued=h.api.getActiveSequenceInfo();assert.equal(await h.api.readPlayheadIfIdle(),null);
+  assert.equal(h.projectReads,before);assert.deepEqual(h.nativeReads(),reads);assert.equal(h.requests.length,0);
+  finish();assert.equal(await working,'done');await queued;assert.equal((await h.api.readPlayheadIfIdle()).time,2.5);
+});
+test('a pending sampler timeout keeps the single native lane occupied and never repeats the SDK read',async t=>{
+  let finish;const h=harness(t,{readTimeoutMs:50,playhead:()=>new Promise(resolve=>{finish=resolve;})});
+  const states=[];h.api.onTransportAvailability(state=>states.push({...state}));
+  const pending=h.api.readPlayheadIfIdle();await tick();assert.equal(await h.api.readPlayheadIfIdle(),null);h.fireTimeout(50);
+  await assert.rejects(pending,error=>error.code==='BC_NATIVE_PENDING'&&error.method==='readTimelinePlayhead'&&error.recoverable===true&&error.operationPending===true);
+  const reads=h.projectReads;assert.equal(await h.api.readPlayheadIfIdle(),null);
+  await assert.rejects(h.api.getActiveSequenceInfo(),{code:'BC_NATIVE_WAITING'});assert.equal(h.projectReads,reads);
+  assert.equal(states.at(-1).state,'waiting');assert.equal(states.at(-1).method,'readTimelinePlayhead');
+  finish({seconds:4});await tick();assert.equal(h.api.getTransportAvailability().state,'ready');assert.equal(h.nativeReads().playhead,1);
+  assert.deepEqual(states.map(state=>state.state),['ready','waiting','ready']);assert.equal(h.requests.length,0);
+});
+test('disposing before or during sampling prevents new reads and late completion cannot reopen the lane',async t=>{
+  const closed=harness(t);closed.api.dispose();assert.equal(await closed.api.readPlayheadIfIdle(),null);assert.equal(closed.projectReads,0);
+  let finish;const h=harness(t,{playhead:()=>new Promise(resolve=>{finish=resolve;})});
+  const sampling=h.api.readPlayheadIfIdle();await tick();h.api.dispose();
+  await assert.rejects(sampling,error=>error.code==='BC_NATIVE_CLOSED'&&error.operationPending===true);
+  finish({seconds:3});await tick();assert.equal(await h.api.readPlayheadIfIdle(),null);assert.equal(h.api.getTransportAvailability().state,'closed');assert.equal(h.nativeReads().playhead,1);
+});
 
 test('style preset storage works without a project or renderer and serializes stale writers', async t => {
   const h = harness(t, { service: null });
@@ -162,6 +222,21 @@ test('font loading initializes native context and accepts a renderer that claims
   assert.equal(h.requests[0].projectPath,'/projects/edit.prproj');
   assert.equal(h.requests[0].expiresAt-h.requests[0].createdAt,10000);
 });
+test('font catalog metadata crosses the captured read lane without changing installed weights or pretending it is a mutation',async t=>{
+  const catalog=[{family:'Café Display',weights:[350,380,617],italic:false,variable:{min:350,max:617}}];
+  const h=harness(t,{serviceResult:input=>{assert.equal(input.action,'getFontCatalog');return catalog;}});
+  assert.deepEqual(JSON.parse(JSON.stringify(await h.api.getFontCatalog())),catalog);
+  assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,'getFontCatalog');assert.deepEqual(Array.from(h.requests[0].args),[]);
+  assert.equal(h.requests[0].sequenceId,'one');assert.equal(h.requests[0].projectPath,'/projects/edit.prproj');assert.equal(h.requests[0].expiresAt-h.requests[0].createdAt,10000);
+});
+test('a timed-out catalog read holds the lane until its real reply and never retries itself',async t=>{
+  const h=harness(t,{autoRespond:false,readTimeoutMs:50});await h.api.getActiveSequenceInfo();
+  const catalog=h.api.getFontCatalog();await tick();h.fireTimeout(50);
+  await assert.rejects(catalog,error=>error.code==='BC_NATIVE_PENDING'&&error.method==='getFontCatalog'&&error.recoverable===true&&error.operationPending===true);
+  await assert.rejects(h.api.getActiveSequenceInfo(),{code:'BC_NATIVE_WAITING'});assert.equal(h.requests.length,1);
+  h.respond(h.requests[0],[{family:'One',weights:[400],italic:false}]);await delay(220);
+  assert.equal(h.api.getTransportAvailability().state,'ready');assert.equal(h.requests.length,1);
+});
 
 test('a changed project location cannot redirect a pending caption save or render request',async t=>{
   const h=harness(t);await h.api.getActiveSequenceInfo();h.relocate('/other/edit.prproj');
@@ -174,10 +249,56 @@ test('a native read timeout blocks later calls until the original claimed reques
   const pending=h.api.readCaptionGeometry([{id:'caption'}],'one');
   await assert.rejects(pending,/Native requests are paused/);
   assert.equal(h.requests.length,1);const reads=h.projectReads;
-  await assert.rejects(h.api.getActiveSequenceInfo(),/previous Premiere read has not finished/);
+  await assert.rejects(h.api.getActiveSequenceInfo(),{code:'BC_NATIVE_WAITING'});
   assert.equal(h.projectReads,reads,'a timeout cannot release the native lane and issue another call');
   h.respond();await delay(180);
   assert.equal((await h.api.getActiveSequenceInfo()).id,'one','the lane may resume only after the real response arrives');
+});
+test('a late native selection reply wakes observers only after real completion and never repeats its request',async t=>{
+  const h=harness(t,{autoRespond:false,readTimeoutMs:30000});await h.api.getActiveSequenceInfo();
+  const statuses=[];let resume;
+  h.api.onTransportAvailability(status=>{statuses.push(status);if(status.state==='ready'&&statuses.some(item=>item.state==='waiting'))resume=h.api.getActiveSequenceInfo();});
+  h.api.onTransportAvailability(()=>{throw new Error('An observer cannot interrupt the native lane');});
+  assert.equal(h.api.getTransportAvailability().state,'ready');
+  const read=h.api.readCaptionSelection([{id:'caption'}],'one');await tick();h.fireTimeout(30000);
+  await assert.rejects(read,error=>error.code==='BC_NATIVE_PENDING'&&error.method==='readCaptionSelection'&&error.recoverable===true&&error.operationPending===true);
+  assert.equal(statuses.at(-1).state,'waiting');assert.equal(statuses.at(-1).reason,'native-timeout');assert.equal(statuses.at(-1).method,'readCaptionSelection');
+  const nativeReads=h.projectReads;
+  await assert.rejects(h.api.getActiveSequenceInfo(),error=>error.code==='BC_NATIVE_WAITING'&&error.recoverable===true&&error.operationPending===true);
+  assert.equal(h.projectReads,nativeReads);assert.equal(resume,undefined);assert.equal(h.requests.length,1);
+  h.respond();h.fireTimeout(150);await tick();await tick();
+  assert.equal(statuses.at(-1).state,'ready');assert.ok(statuses.at(-1).revision>statuses[1].revision);
+  assert.equal((await resume).id,'one','a recovery callback can use the lane only after its real promise has settled');
+  assert.deepEqual(h.requests.map(request=>request.action),['readCaptionSelection']);
+  assert.equal(h.api.getTransportAvailability().state,'ready');
+});
+test('a late native failure also releases the availability circuit without replaying the expired read',async t=>{
+  const h=harness(t,{autoRespond:false,readTimeoutMs:30000});await h.api.getActiveSequenceInfo();
+  const statuses=[];h.api.onTransportAvailability(status=>statuses.push(status));
+  const read=h.api.readCaptionGeometry([],'one');await tick();h.fireTimeout(30000);await assert.rejects(read,{code:'BC_NATIVE_PENDING'});
+  h.respond(undefined,undefined,{error:'The original native read failed.'});h.fireTimeout(150);await tick();await tick();
+  assert.deepEqual(statuses.map(status=>status.state),['ready','waiting','ready']);assert.equal(h.requests.length,1);
+  assert.equal((await h.api.getActiveSequenceInfo()).id,'one');
+});
+test('timed-out mutations stay occupied, report an uncertain result and are never retried on recovery',async t=>{
+  const h=harness(t,{autoRespond:false,readTimeoutMs:30000});await h.api.getActiveSequenceInfo();
+  const statuses=[];h.api.onTransportAvailability(status=>statuses.push(status));
+  const write=h.api.beginCaption('caption','one');await tick();h.fireTimeout(60000);
+  await assert.rejects(write,error=>error.code==='BC_NATIVE_PENDING'&&error.method==='beginCaption'&&error.recoverable===false&&error.operationPending===true);
+  assert.equal(statuses.at(-1).state,'waiting');assert.equal(statuses.at(-1).method,'beginCaption');
+  await assert.rejects(h.api.beginCaption('caption','one'),{code:'BC_NATIVE_WAITING'});assert.equal(h.requests.length,1);
+  h.respond();h.fireTimeout(150);await tick();await tick();assert.equal(statuses.at(-1).state,'ready');
+  assert.deepEqual(h.requests.map(request=>request.action),['beginCaption']);
+});
+test('availability helpers are local snapshots, unsubscribe cleanly and never resurrect a disposed lane',async t=>{
+  const h=harness(t,{autoRespond:false,readTimeoutMs:30000});await h.api.getActiveSequenceInfo();
+  const initialReads=h.projectReads,statuses=[];
+  const unsubscribe=h.api.onTransportAvailability(status=>{statuses.push(status);status.state='closed';});
+  assert.equal(h.api.getTransportAvailability().state,'ready');assert.equal(h.projectReads,initialReads);assert.equal(h.requests.length,0);
+  const read=h.api.readCaptionSelection([],'one');await tick();h.fireTimeout(30000);await assert.rejects(read,{code:'BC_NATIVE_PENDING'});
+  unsubscribe();const count=statuses.length;h.api.dispose();h.respond();h.fireTimeout(150);await tick();await tick();
+  assert.equal(statuses.length,count);assert.equal(h.api.getTransportAvailability().state,'closed');
+  await assert.rejects(h.api.getActiveSequenceInfo(),error=>error.code==='BC_NATIVE_CLOSED'&&error.recoverable===false);
 });
 test('queued reads expire without starting native work while long transcription retains its separate deadline',async t=>{
   let finish;const gate=new Promise(resolve=>{finish=resolve;});
@@ -223,18 +344,35 @@ test('a fresh busy background renderer is available and retains the existing in-
   const h=harness(t),status=h.healthyService();status.busy=true;h.setService(status);
   assert.deepEqual(Array.from(await h.api.getFonts()),['Arial','Georgia']);assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,'getFonts');
 });
+test('a renderer outage is safe to retry only before any mutation in the serialized job was submitted',async t=>{
+  const first=harness(t,{service:null});await first.api.getActiveSequenceInfo();
+  await assert.rejects(first.api.applyCaptionClips([{id:'bundle'}],0,'one'),error=>error.code==='BC_RENDERER_UNAVAILABLE'&&error.method==='applyCaptionClips'&&error.recoverable===true&&error.operationPending===false);
+  assert.equal(first.requests.length,0);
+  let second;second=harness(t,{serviceResult:request=>{
+    assert.equal(request.action,'prepareCaptionTrack');second.setService(null);
+    return {ok:true,sequenceId:'one',projectPath:'/projects/edit.prproj',destination:{mode:'reuse',trackIndex:2}};
+  }});await second.api.getActiveSequenceInfo();
+  await assert.rejects(second.api.applyCaptionClips([{id:'bundle'}],-1,'one'),error=>error.code==='BC_RENDERER_UNAVAILABLE'&&error.method==='applyCaptionClips'&&error.recoverable===false&&error.operationPending===false);
+  assert.deepEqual(second.requests.map(request=>request.action),['prepareCaptionTrack'],'a partial job must not replay its completed preparation or start final Apply');
+});
 test('startup grace waits only for the private heartbeat and sends one request once the renderer is ready',async t=>{
-  const h=harness(t,{service:null,serviceStartupGraceMs:100});
+  const h=harness(t,{service:null,serviceStartupGraceMs:100,manualTimers:true});
   const pending=h.api.getFonts();await tick();const nativeReads=h.projectReads;
-  await delay(15);assert.equal(h.projectReads,nativeReads,'heartbeat polling must not repeat native context calls');
-  assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);assert.ok(h.serviceReads>=2);
-  h.setService(h.healthyService());assert.deepEqual(Array.from(await pending),['Arial','Georgia']);
+  assert.equal(h.now(),1700000000000);assert.equal(h.serviceReads,1);
+  for(let i=0;i<3;i++){h.advanceTime(5);h.fireTimeout(5);await tick();}
+  assert.equal(h.now(),1700000000015);assert.equal(h.projectReads,nativeReads,'heartbeat polling must not repeat native context calls');
+  assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);assert.equal(h.serviceReads,4);
+  h.setService(h.healthyService());h.advanceTime(5);h.fireTimeout(5);assert.deepEqual(Array.from(await pending),['Arial','Georgia']);
+  assert.equal(h.serviceReads,5);
   assert.equal(h.requests.length,1);assert.equal(h.requests[0].action,'getFonts');
 });
 test('a stale startup heartbeat can be replaced by a ready renderer within the grace period',async t=>{
-  const h=harness(t,{serviceStartupGraceMs:100}),old=h.healthyService();old.updatedAt-=20000;old.version=0;h.setService(old);
-  const pending=h.api.getFonts();await delay(15);assert.equal(h.requests.length,0);
-  h.setService(h.healthyService());assert.deepEqual(Array.from(await pending),['Arial','Georgia']);assert.equal(h.requests.length,1);
+  const h=harness(t,{serviceStartupGraceMs:100,manualTimers:true}),old=h.healthyService();old.updatedAt-=20000;old.version=0;h.setService(old);
+  const pending=h.api.getFonts();await tick();const nativeReads=h.projectReads;
+  for(let i=0;i<3;i++){h.advanceTime(5);h.fireTimeout(5);await tick();}
+  assert.equal(h.requests.length,0);assert.equal(h.writes.length,0);assert.equal(h.serviceReads,4);assert.equal(h.projectReads,nativeReads);
+  h.setService(h.healthyService());h.advanceTime(5);h.fireTimeout(5);assert.deepEqual(Array.from(await pending),['Arial','Georgia']);
+  assert.equal(h.serviceReads,5);assert.equal(h.requests.length,1);
 });
 for(const incompatible of ['version','action'])test(`a fresh incompatible renderer ${incompatible} fails immediately without heartbeat retries`,async t=>{
   const h=harness(t,{serviceStartupGraceMs:1000}),status=h.healthyService();
@@ -297,4 +435,36 @@ test('native key edits use the internal CEP lane without deadlock or exposing a 
   assert.deepEqual(h.requests.at(-1).args[1],patch);
   assert.equal(Object.hasOwn(h.requests.at(-1),'expiresAt'),false,'a mutation must not acquire the read-expiry contract');
   assert.equal(h.api.patchCaptionKeyValues,undefined,'only the trusted native editor gets the bounded internal callback');
+});
+
+test('range transcription dispatches the captured sequence and bounded seconds directly, without CEP service writes',async t=>{
+ const calls=[],h=harness(t,{transcribeRange:async(sequence,begin,end)=>{calls.push([sequence.name,begin,end]);return 'tail transcript';}});await h.api.getActiveSequenceInfo();
+ assert.equal(await h.api.transcribeSequenceRange(3,10),'tail transcript');assert.deepEqual(calls,[['one',3,10]]);assert.deepEqual(h.requests,[]);assert.deepEqual(h.writes,[]);
+ for(const [begin,end] of [[-1,10],[3,3],[3,11],[0,Infinity]])await assert.rejects(h.api.transcribeSequenceRange(begin,end),/valid transcript extension range|exceeds/);assert.equal(calls.length,1);
+});
+test('range transcription rejects a project/active-sequence change instead of returning tail words for another context',async t=>{
+ let finish;const h=harness(t,{transcribeRange:()=>new Promise(resolve=>{finish=resolve;})});await h.api.getActiveSequenceInfo();
+ const pending=h.api.transcribeSequenceRange(3,10);await tick();h.select('two');finish('tail transcript');await assert.rejects(pending,/sequence changed during transcription/);assert.deepEqual(h.writes,[]);
+});
+
+test('extension read and write wrappers use captured context and serialized distinct contracts',async t=>{
+ const h=harness(t,{serviceResult:request=>({ok:true,action:request.action})});await h.api.getActiveSequenceInfo();
+ const healthy=h.healthyService();healthy.actions.push('readNativeCaptionExtension','extendNativeCaptionDocument');h.setService(healthy);
+ const snapshot={locator:{clipNodeId:'caption'},revision:'original-doc'},request={revision:'range-rev',documentText:'BCDOC1:ab',endTicks:'400',outTicks:'400'};
+ assert.equal((await h.api.readNativeCaptionExtension(snapshot,'one')).action,'readNativeCaptionExtension');
+ assert.equal((await h.api.extendNativeCaptionDocument(snapshot,request,'one')).action,'extendNativeCaptionDocument');
+ assert.equal(h.requests.length,2);assert.equal(h.requests[0].expiresAt-h.requests[0].createdAt,10000);assert.equal(Object.hasOwn(h.requests[1],'expiresAt'),false);
+ assert.equal(JSON.stringify(h.requests[0].args),JSON.stringify([snapshot]));assert.equal(JSON.stringify(h.requests[1].args),JSON.stringify([snapshot,request]));assert.equal(h.requests[1].sequenceId,'one');
+});
+test('range transcription retains the hour deadline rather than the ordinary mutation timeout',async t=>{
+ let finish;const h=harness(t,{manualTimers:true,transcribeRange:()=>new Promise(resolve=>{finish=resolve;})});await h.api.getActiveSequenceInfo();
+ const pending=h.api.transcribeSequenceRange(3,10,'one');await tick();h.fireTimeout(3600000);await assert.rejects(pending,e=>e.code==='BC_NATIVE_PENDING'&&e.method==='transcribeSequenceRange'&&e.recoverable===false&&e.operationPending===true);
+ finish('tail');await tick();await tick();assert.deepEqual(h.requests,[]);
+});
+
+test('only outstanding interactive geometry responses use a16ms check; other actions retain normal polling',async t=>{
+ const h=harness(t,{manualTimers:true,autoRespond:false});await h.api.getActiveSequenceInfo();const healthy=h.healthyService();healthy.actions.push('readNativeCaptionControls');h.setService(healthy);
+ const geometry=h.api.readNativeCaptionControls({locator:{clipNodeId:'caption'},revision:'doc'},'one');await tick();assert.equal(h.requests.at(-1).action,'readNativeCaptionControls');
+ h.respond(h.requests.at(-1),{ok:true});h.fireTimeout(16);assert.equal((await geometry).ok,true);
+ const fonts=h.api.getFonts();await tick();h.respond(h.requests.at(-1),['Arial']);h.fireTimeout(150);assert.deepEqual(await fonts,['Arial']);
 });

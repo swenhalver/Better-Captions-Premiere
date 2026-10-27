@@ -74,7 +74,7 @@ function bridgeFixture(tracks,sequenceJSON=null) {
   const sandbox={module,exports:module.exports,require(name){required.push(name);if(name==='premierepro')return ppro;if(name==='./transcript-core.js')return core;throw new Error(name);}};
   vm.runInNewContext(fs.readFileSync(new URL('../uxp/transcript.js',import.meta.url),'utf8'),sandbox,{filename:'uxp/transcript.js'});
   const service=module.exports;
-  return {transcript:shouldTranscribe=>shouldTranscribe?service.transcribe(sequence):service.fetchTranscript(sequence),service,transcribed,exported,required};
+  return {range:(begin,end)=>service.transcribeRange(sequence,begin,end),transcript:shouldTranscribe=>shouldTranscribe?service.transcribe(sequence):service.fetchTranscript(sequence),service,transcribed,exported,required};
 }
 
 test('the direct native service transcribes a reused source once and maps each edit independently',async()=>{
@@ -158,4 +158,37 @@ test('a source transcript with no words inside an edit is reported without dropp
   const good=source('good.mp4',native([w('hello',0,.5)])),trimmed=source('trimmed.mp4',native([w('outside',10,.5)]));
   const f=bridgeFixture([track([clip(good,0,1),clip(trimmed,2,3)])]),result=JSON.parse(await f.transcript(false));
   assert.equal(result.segments.length,1);assert.equal(result.skippedAudioClips.length,1);assert.equal(result.skippedAudioClips[0].name,'trimmed.mp4');assert.match(result.skippedAudioClips[0].reason,/timeline range/);assert.deepEqual(f.transcribed,[]);
+});
+
+test('tail transcription bypasses a stale static sequence transcript and preserves existing source words',async()=>{
+ const old=source('old.mp4',native([w('original',0,.5)])),tail=source('tail.mp4',null,native([w('new',0,.5),w('speech',.5,.5)]));
+ const oldBytes=JSON.stringify(old.json),sequenceJSON=native([w('stale sequence',0,1)]),f=bridgeFixture([track([clip(old,0,2),clip(tail,2,4)])],sequenceJSON);
+ const result=JSON.parse(await f.range(2,4));assert.deepEqual(result.segments.flatMap(s=>s.words.map(w=>[w.text,w.start,w.duration])),[['new',2,.5],['speech',2.5,.5]]);
+ assert.deepEqual(f.transcribed,['tail.mp4']);assert.deepEqual(f.exported,['tail.mp4','tail.mp4']);assert.equal(JSON.stringify(old.json),oldBytes);assert.deepEqual(result.range,{beginSeconds:2,endSeconds:4});
+});
+test('a ranged reused/retimed source maps only intersecting tail words, clipping boundary words and keeping punctuation',async()=>{
+ const item=source('reused.mp4',native([w('earlier',22,.5),w('crossing',23.5,1),w('inside',25,1),{type:'punctuation',text:','},w('outside',28,.5)]));
+ const bytes=JSON.stringify(item.json),f=bridgeFixture([track([clip(item,0,5,20,30),clip(item,10,15,20,30)])],native([w('stale',0,1)]));
+ const result=JSON.parse(await f.range(12,14));assert.deepEqual(result.segments.flatMap(s=>s.words.map(w=>[w.text,w.start,w.duration])),[['crossing',12,.25],['inside',12.5,.5],[',',13,0]]);
+ assert.deepEqual(f.transcribed,[]);assert.equal(f.exported.filter(n=>n==='reused.mp4').length,1);assert.equal(JSON.stringify(item.json),bytes);
+});
+test('range transcription ignores outside nested/missing, muted and disabled sources without touching their transcripts',async()=>{
+ const nested=source('outside-nested');nested.isSequence=async()=>true;
+ const existing=source('speech',native([w('tail',0,.5)])),f=bridgeFixture([track([clip(nested,0,2),clip(existing,2,4)]),track([clip(source('muted'),2,4)],true),track([clip(source('disabled'),2,4,0,2,{async isDisabled(){return true;}})])]);
+ const result=JSON.parse(await f.range(2,4));assert.equal(result.segments[0].words[0].text,'tail');assert.deepEqual(f.exported,['speech']);assert.deepEqual(f.transcribed,[]);
+});
+test('invalid extension ranges fail before native exports and silent tails produce an explicit no-speech result',async()=>{
+ for(const [begin,end] of [[-1,2],[2,2],[3,2],[0,Infinity],[0,864001],['0',2]]){
+  const f=bridgeFixture([]);await assert.rejects(f.range(begin,end),/valid transcript extension range/);assert.deepEqual(f.exported,[]);assert.deepEqual(f.transcribed,[]);
+ }
+ const empty=bridgeFixture([track([clip(source('music',null,{segments:[]}),2,4)])]);await assert.rejects(empty.range(2,4),/detected no spoken words/);assert.deepEqual(empty.transcribed,['music']);
+});
+test('a changed source audio plan during range transcription refuses stale mapped words',async()=>{
+ const item=source('moving.mp4',native([w('tail',0,.5)]));let calls=0;item.getMediaFilePath=async()=>++calls===1?'/media/original.mp4':'/media/relinked.mp4';
+ const f=bridgeFixture([track([clip(item,2,4)])]);await assert.rejects(f.range(2,4),/sequence audio changed during transcription/);assert.deepEqual(f.transcribed,[]);
+});
+
+test('tail reuse retains a valid saved no-speech transcript without forcing source transcription',async()=>{
+ const music=source('music',{segments:[]}),speech=source('speech',native([w('new',0,.5)])),f=bridgeFixture([track([clip(music,2,4),clip(speech,2,4)])]);
+ const bytes=JSON.stringify(music.json),result=JSON.parse(await f.range(2,4));assert.equal(result.segments[0].words[0].text,'new');assert.deepEqual(f.transcribed,[]);assert.equal(JSON.stringify(music.json),bytes);assert.match(result.skippedAudioClips[0].reason,/no spoken words/);
 });

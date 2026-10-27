@@ -37,7 +37,7 @@ async function removeLegacyClips(ppro, project, sequence, plan, verify) {
       for(const clip of selected)if(selection.addItem(clip)===false)throw new Error('Premiere could not select the exact legacy clips.');
       committed=project.executeTransaction(compound=>{
         if(compound.addAction(editor.createRemoveItemsAction(selection,false,ppro.Constants.MediaType.VIDEO,false))===false)throw new Error('Premiere refused the legacy caption conversion.');
-      },'Better Captions: Combine legacy caption clips');
+      },'S-Captions: Combine legacy caption clips');
     });
     if(selectionStatus===false)throw new Error('Premiere could not prepare the legacy caption conversion.');
   });

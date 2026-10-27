@@ -10,9 +10,9 @@ const instances=()=>fs.existsSync(path.join(root,'instances'))?fs.readdirSync(pa
   const live=instances();
   if(action==='status'){console.log(JSON.stringify({instances:live},null,2));return;}
   const matches=live.filter(d=>(!instanceId||d.instanceId===instanceId)&&(!sequenceId||d.sequenceId===sequenceId));
-  if(matches.length!==1)throw new Error(matches.length?'Several panels match; use --instance or --sequence.':'No matching live Better Captions panel. Open Window > UXP Plugins > Better Captions.');
+  if(matches.length!==1)throw new Error(matches.length?'Several panels match; use --instance or --sequence.':'No matching live S-Captions panel. Open Window > UXP Plugins > S-Captions.');
   const instance=matches[0],payload=file?JSON.parse(fs.readFileSync(file,'utf8')):args[0]?JSON.parse(args[0]):{};
-  const allowed=['get_state','patch_style','patch_animation','set_captions','set_position','read_area','edit_area','refresh','apply'];if(!allowed.includes(action))throw new Error('Unknown action. Use '+allowed.join(', '));
+  const allowed=['get_state','patch_style','patch_animation','set_captions','set_position','read_area','edit_area','refresh','apply','test_typing','test_history'];if(!allowed.includes(action))throw new Error('Unknown action. Use '+allowed.join(', '));
   const id=crypto.randomUUID(),request={version:1,id,instanceId:instance.instanceId,sequenceId:instance.sequenceId,createdAt:Date.now(),action,payload};
   const target=path.join(root,'requests',id+'.json'),temp=target+'.tmp';fs.writeFileSync(temp,JSON.stringify(request),{mode:0o600});fs.renameSync(temp,target);
   const response=path.join(root,'responses',id+'.json'),deadline=Date.now()+timeout;

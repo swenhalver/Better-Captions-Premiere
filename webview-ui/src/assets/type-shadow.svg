@@ -1,0 +1,29 @@
+<svg clip-rule="evenodd" fill-rule="evenodd" stroke-linecap="round" stroke-linejoin="round" version="1.1" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+	<defs>
+		<filter id="filter8" x="-.0987" y="-.0987" color-interpolation-filters="sRGB">
+			<feGaussianBlur result="blur" stdDeviation="0.2 0.2"/>
+		</filter>
+	</defs>
+	<g transform="matrix(2,0,0,2,2,-8)" filter="url(#filter8)">
+		<g transform="translate(-.5 5)">
+			<path d="m12 4v15" fill="none" stroke="#808080" stroke-width="2px"/>
+		</g>
+		<g transform="translate(0 5)">
+			<path d="m4 7v-2c0-0.549 0.451-1 1-1h13c0.549 0 1 0.451 1 1v2" fill="none" stroke="#808080" stroke-width="2px"/>
+		</g>
+		<g transform="translate(-.5 4)">
+			<path d="m9 20h6" fill="none" stroke="#808080" stroke-width="2px"/>
+		</g>
+	</g>
+	<g transform="matrix(2,0,0,2,0,-10)">
+		<g transform="translate(-.5 5)">
+			<path d="m12 4v15" fill="none" stroke="#000" stroke-width="2px"/>
+		</g>
+		<g transform="translate(0 5)">
+			<path d="m4 7v-2c0-0.549 0.451-1 1-1h13c0.549 0 1 0.451 1 1v2" fill="none" stroke="#000" stroke-width="2px"/>
+		</g>
+		<g transform="translate(-.5 4)">
+			<path d="m9 20h6" fill="none" stroke="#000" stroke-width="2px"/>
+		</g>
+	</g>
+</svg>

@@ -1,7 +1,7 @@
 'use strict';
 const { privateRoot, ensureFolder, readJSON, writeJSON, randomId } = require('./storage.js');
 const MAX_BYTES = 5000000;
-const ACTIONS = ['get_state', 'patch_style', 'patch_animation', 'set_captions', 'set_position', 'read_area', 'edit_area', 'refresh', 'apply'];
+const ACTIONS = ['get_state', 'patch_style', 'patch_animation', 'set_captions', 'set_position', 'read_area', 'edit_area', 'refresh', 'apply', 'test_typing', 'test_history'];
 const NONCE = /^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i;
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function bounded(value) {
@@ -60,6 +60,9 @@ async function startAgentBridge(handler) {
       case 'edit_area':
         if(typeof handler.editArea!=='function')throw new Error('Caption area controls are unavailable.');
         return handler.editArea(payload);
+      // Test hooks only: drive the line editor, and step Premiere's history through QE.
+      case 'test_typing': if (typeof handler.testTyping !== 'function') throw new Error('The typing test hook is unavailable.'); return handler.testTyping(payload);
+      case 'test_history': if (typeof handler.testHistory !== 'function') throw new Error('The history test hook is unavailable.'); return handler.testHistory(payload);
       default: throw new Error('Unsupported caption action.');
     }
   }

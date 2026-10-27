@@ -1,6 +1,7 @@
-import type {SessionState,StyleConfig,CaptionItem,AnimationConfig} from './types';
+import {LINE_STYLE_FIELDS,type SessionState,type StyleConfig,type CaptionItem,type AnimationConfig} from './types.ts';
 import {validateCaptions} from './transcript/edit.ts';
 import {refreshCaptionGroups,validateCharacterLimit} from './transcript/parser.ts';
+import {validateLineWrap} from './native-effect/line-wrap.ts';
 import type {TextAreaEdit} from './text-area';
 
 export interface AgentHandler {
@@ -12,12 +13,15 @@ export interface AgentHandler {
   patchAnimation?:(patch:Partial<AnimationConfig>)=>unknown|Promise<unknown>;
   readArea?:(payload:unknown)=>unknown|Promise<unknown>;
   editArea?:(payload:unknown)=>unknown|Promise<unknown>;
+  /** Test hooks only (scripts/agent.cjs test_typing / test_history). */
+  testTyping?:(payload:unknown)=>unknown|Promise<unknown>;
+  testHistory?:(payload:unknown)=>unknown|Promise<unknown>;
 }
-const styleNumbers:Record<string,[number,number]>={fontSize:[8,400],fontWeight:[100,1000],strokeOpacity:[0,1],strokeWidth:[0,30],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],backgroundOpacity:[0,1],backgroundPadding:[0,100],backgroundRadius:[0,200],positionX:[0,1],positionY:[0,1],maxWidth:[.1,1],lineHeight:[.6,3]};
-const stateNumbers:Record<string,[number,number]>={fontSize:[8,1200],letterSpacing:[-10,40],strokeWidth:[0,30],strokeOpacity:[0,1],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],fontWeight:[100,1000],sizeScale:[.4,3],opacity:[0,1],bubbleOpacity:[0,1],padding:[0,100],radius:[0,200]};
+const styleNumbers:Record<string,[number,number]>={fontSize:[8,400],fontWeight:[1,1000],strokeOpacity:[0,1],strokeWidth:[0,30],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],backgroundOpacity:[0,1],backgroundPadding:[0,100],backgroundRadius:[0,200],positionX:[0,1],positionY:[0,1],maxWidth:[.1,1],lineHeight:[.6,3],wordSpacing:[0,300]};
+const stateNumbers:Record<string,[number,number]>={fontSize:[8,1200],letterSpacing:[-10,40],strokeWidth:[0,30],strokeOpacity:[0,1],shadowOpacity:[0,1],shadowBlur:[0,100],shadowOffsetX:[-100,100],shadowOffsetY:[-100,100],fontWeight:[1,1000],sizeScale:[.4,3],opacity:[0,1],bubbleOpacity:[0,1],padding:[0,100],paddingTop:[0,100],paddingRight:[0,100],paddingBottom:[0,100],paddingLeft:[0,100],radiusTL:[0,200],radiusTR:[0,200],radiusBR:[0,200],radiusBL:[0,200],marginTop:[-100,100],marginRight:[-100,100],marginBottom:[-100,100],marginLeft:[-100,100],bubblePaddingInline:[0,100],bubblePaddingBlock:[0,100],radius:[0,200]};
 function object(value:unknown):asserts value is Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Expected a JSON object.');for(const key of Object.keys(value))if(['__proto__','prototype','constructor'].includes(key))throw new Error('Invalid property name.');}
 function number(value:unknown,min:number,max:number){if(typeof value!=='number'||!Number.isFinite(value)||value<min||value>max)throw new Error(`Expected a finite number between ${min} and ${max}.`);}
-function font(value:unknown){if(typeof value!=='string'||value.length>160||/[\u0000-\u001f]/.test(value))throw new Error('Invalid font family.');}
+function font(value:unknown){if(typeof value!=='string'||value.length>4096||/[\u0000-\u001f]/.test(value))throw new Error('Invalid font family.');}
 function color(value:unknown){if(typeof value!=='string'||!/^#[0-9a-f]{6}$/i.test(value))throw new Error('Colors must be six-digit hex values.');}
 function bool(value:unknown){if(typeof value!=='boolean')throw new Error('Expected true or false.');}
 function allowedProperties(value:Record<string,unknown>,names:string[]){for(const key of Object.keys(value))if(!names.includes(key))throw new Error('Unknown caption area option: '+key);}
@@ -49,18 +53,27 @@ export function validateAreaEdit(value:unknown,current:CaptionItem[]):{captionId
   if(edit.operation==='interpolation'&&edit.interpolation===undefined)throw new Error('Choose an interpolation preset.');
   return {captionId,edit:JSON.parse(JSON.stringify(edit)) as TextAreaEdit};
 }
+function wordStyle(v:unknown,fields?:readonly string[]){
+  object(v);for(const [k,n] of Object.entries(v)){if(fields&&!fields.includes(k))throw new Error('Unknown line style: '+k);if(k==='fontWeightOffset'){if(n!==null&&n!==0&&n!==100)throw new Error('Word weight offset must be null, 0 or 100.');}else if(k in stateNumbers)number(n,...stateNumbers[k]);else if(k==='fontFamily')font(n);else if(['color','bubbleColor','strokeColor','shadowColor'].includes(k))color(n);else if(['bubble','bubbleFillSpaces','underline','italic','strokeEnabled','shadowEnabled'].includes(k))bool(n);else if(k==='textTransform'){if(!['none','uppercase','lowercase','titlecase'].includes(String(n)))throw new Error('Invalid word text transform.');}else throw new Error('Unknown word style: '+k);}
+}
+/** Line position overrides: positions 1–8, each holding only fields a line can set. */
+export function validateLineStyles(v:unknown){
+  if(v===undefined)return;
+  object(v);for(const [position,line] of Object.entries(v)){if(!/^[1-8]$/.test(position))throw new Error('Line positions are 1 to 8.');wordStyle(line,LINE_STYLE_FIELDS);}
+}
 export function validateStylePatch(value:unknown):Partial<StyleConfig>{
   object(value);
   for(const [key,v] of Object.entries(value)){
-    if(key==='activeWord'||key==='spokenWord'||key==='upcomingWord'){
-      object(v);for(const [k,n] of Object.entries(v)){if(k in stateNumbers)number(n,...stateNumbers[k]);else if(k==='fontFamily')font(n);else if(['color','bubbleColor','strokeColor','shadowColor'].includes(k))color(n);else if(['bubble','italic','strokeEnabled','shadowEnabled'].includes(k))bool(n);else if(k==='textTransform'){if(!['none','uppercase','lowercase'].includes(String(n)))throw new Error('Invalid word text transform.');}else throw new Error('Unknown word style: '+k);}
-    }else if(key==='maxChars')validateCharacterLimit(v);
+    if(key==='activeWord'||key==='spokenWord'||key==='upcomingWord')wordStyle(v);
+    else if(key==='lineStyles')validateLineStyles(v);
+    else if(key==='maxChars')validateCharacterLimit(v);
+    else if(key==='lineWrap')validateLineWrap(v);
     else if(key in styleNumbers)number(v,...styleNumbers[key]);
     else if(key==='fontFamily')font(v);
     else if(['textColor','strokeColor','shadowColor','backgroundColor'].includes(key))color(v);
     else if(['strokeEnabled','shadowEnabled','backgroundEnabled'].includes(key))bool(v);
     else if(key==='textAlign'){if(!['left','center','right'].includes(String(v)))throw new Error('Invalid text alignment.');}
-    else if(key==='textTransform'){if(!['none','uppercase','lowercase'].includes(String(v)))throw new Error('Invalid text transform.');}
+    else if(key==='textTransform'){if(!['none','uppercase','lowercase','titlecase'].includes(String(v)))throw new Error('Invalid text transform.');}
     else throw new Error('Unknown caption style: '+key);
   }
   return value as Partial<StyleConfig>;
@@ -73,11 +86,17 @@ export function validateCaptionPatch(value:unknown,current:CaptionItem[]):Captio
     object(item);if(typeof item.id!=='string'||!/^[\w-]{1,160}$/.test(item.id))throw new Error('Invalid caption identity.');
     if(typeof item.text!=='string'||item.text.length>250000)throw new Error('Invalid caption text.');
     if(!Array.isArray(item.words)||(totalWords+=item.words.length)>50000)throw new Error('Expected at most 50000 words across the caption transcript.');
-    const original=existing.get(item.id),next={...original,id:item.id,text:item.text,startTime:item.startTime,endTime:item.endTime,words:item.words.map(w=>{
+    const original=existing.get(item.id),next={...original,id:item.id,text:item.text,startTime:item.startTime,endTime:item.endTime,words:item.words.map((w,index)=>{
       object(w);if(typeof w.text!=='string'||w.text.length>500)throw new Error('Invalid word text.');
-      const endOfSentence=w.endOfSentence;
+      const previous=original?.words[index];
+      const matched=previous?.text===w.text?previous:undefined;
+      const endOfSentence=w.endOfSentence===undefined?matched?.endOfSentence:w.endOfSentence;
+      const pauseLinesRemoved=w.pauseLinesRemoved===undefined?matched?.pauseLinesRemoved:w.pauseLinesRemoved;
+      if(pauseLinesRemoved!==undefined&&(!Number.isInteger(pauseLinesRemoved)||Number(pauseLinesRemoved)<0||Number(pauseLinesRemoved)>8))throw new Error('Invalid removed pause-line count.');
+      const lineBreakBefore=w.lineBreakBefore===undefined?matched?.lineBreakBefore:w.lineBreakBefore;
+      if(lineBreakBefore!==undefined&&lineBreakBefore!=='break'&&lineBreakBefore!=='join'&&lineBreakBefore!=='edge')throw new Error('Invalid line boundary.');
       if(endOfSentence!==undefined)bool(endOfSentence);
-      return {text:w.text,startTime:w.startTime,endTime:w.endTime,isActive:false,...(typeof endOfSentence==='boolean'?{endOfSentence}:{})};
+      return {text:w.text,startTime:w.startTime,endTime:w.endTime,isActive:false,...(typeof endOfSentence==='boolean'?{endOfSentence}:{}),...(lineBreakBefore===undefined?{}:{lineBreakBefore:lineBreakBefore as 'break'|'join'|'edge'}),...(pauseLinesRemoved===undefined?{}:{pauseLinesRemoved:Number(pauseLinesRemoved)})};
     })} as CaptionItem;
     if(item.position!==undefined){object(item.position);number(item.position.x,0,1);number(item.position.y,0,1);next.position={x:item.position.x as number,y:item.position.y as number};}
     next.text=next.words.map(word=>word.text).join(' ');

@@ -1,7 +1,11 @@
 import test from 'node:test';
+import {decodeNativePanelDocument} from '../webview-ui/src/lib/native-effect/panel.ts';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import {prepareNativeCreation} from '../webview-ui/src/lib/native-effect/create.ts';
+import {DEFAULT_STYLE,DEFAULT_ANIMATION} from '../webview-ui/src/lib/types.ts';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 const require=createRequire(import.meta.url),ts=require('../webview-ui/node_modules/typescript');
@@ -9,14 +13,14 @@ const source=fs.readFileSync(new URL('../webview-ui/src/cep-api.ts',import.meta.
 function fixture(options={}){
  const nativePath=options.platform==='win32'?path.win32:options.platform==='darwin'?path.posix:path;
  const prefix=options.platform==='win32'?'C:\\Project':'/project';
- const context={id:'seq-a',projectPath:options.platform?nativePath.join(prefix,'edit.prproj'):'/project/edit.prproj',width:720,height:1280,fps:24},directory=options.platform?nativePath.join(prefix,'Better Captions','seq-a'):'/project/Better Captions/seq-a',jobs=new Map(),calls=[],probes=[];
+ const context={id:'seq-a',projectPath:options.platform?nativePath.join(prefix,'edit.prproj'):'/project/edit.prproj',width:720,height:1280,fps:24,ticksPerFrame:'10584000000',tracks:[{index:0,locked:false}]},directory=options.platform?nativePath.join(prefix,'Better Captions','seq-a'):'/project/Better Captions/seq-a',jobs=new Map(),calls=[],probes=[];
  const media=options.platform?nativePath.join(directory,'caption-bundle-run','caption.mov'):directory+'/caption-bundle-run/caption.mov';
  let current={...context};
  const runtime={path:nativePath,directory:()=>directory,writeJSON:(file,data)=>jobs.set(file,data),readJob(data){const file='/private/read-'+jobs.size+'.json';jobs.set(file,data);return file;},disposeReadJob:file=>jobs.delete(file),
   fs:{lstatSync:()=>({isFile:()=>true,isSymbolicLink:()=>options.symlink===true}),realpathSync:file=>file},
   platform:{resolveTool:name=>'/trusted/'+name},
   async run(...args){probes.push(args);if(options.afterProbe)current=options.afterProbe(current);return options.probe??JSON.stringify({streams:[{codec_type:'video'}]});}};
- const window={require:name=>name==='node:path'?nativePath:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript(expression,callback){
+ const window={require:name=>name==='node:path'?nativePath:name==='node:crypto'?crypto:runtime,__adobe_cep__:{getSystemPath:()=>'/extension',evalScript(expression,callback){
   if(expression==='"BC_NATIVE_EVAL_V1"')return callback('BC_NATIVE_EVAL_V1');
   if(expression.includes('/*better-captions-host-ready-v1*/'))return callback('{"version":1,"ok":true,"loaded":false}'); if(expression.includes('/*better-captions-host-global-v1*/'))return callback('BC_HOST_GLOBAL_READY_V1');
   const method=expression.slice('BetterCaptionsHost.'.length,expression.indexOf('(')),args=JSON.parse('['+expression.slice(expression.indexOf('(')+1,-1)+']');
@@ -25,6 +29,7 @@ function fixture(options={}){
   const payload=jobs.get(args[0]);assert.ok(payload,'host mutation must receive its own saved job');
   calls[calls.length-1].payload=payload;
   if(['readTimeline','readCaptionMotion','readCaptionGeometry','readCaptionSelection','readCaptionAreaDescriptor','selectCaptionClip','apply','preflight','readCaptionConsolidation','stageCaptionConsolidation','verifyCaptionConsolidation','rollbackCaptionConsolidation'].includes(method))return callback(JSON.stringify({ok:true,cues:[]}));
+  if(method==='createNativeCaptionDocument')return callback(JSON.stringify({ok:true,readbackVerified:true}));
   if(method!=='prepareCaptionTrack')return assert.fail('Unexpected native method '+method);
   const create=payload.track===-1&&!payload.cues.every(cue=>cue.clipNodeId);
   callback(JSON.stringify({ok:true,sequenceId:context.id,projectPath:context.projectPath,
@@ -32,7 +37,7 @@ function fixture(options={}){
    seed:create?{id:payload.cues[0].id,path:payload.cues[0].path,...options.seed}:null}));
  }}};
  const exports={},code=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
- vm.runInNewContext(code,{exports,window,console,require:name=>{assert.match(name,/style-presets/);return {};}});
+ vm.runInNewContext(code,{exports,window,console,require:name=>{if(name==='./lib/native-effect/panel.ts')return {decodeNativePanelDocument};assert.match(name,/style-presets/);return {};}});
  const caption={id:'bundle',text:'A whole caption track.',startTime:.25,endTime:5,mediaPath:media};
  return {api:exports.createHostAPI(),caption,context,directory,jobs,calls,probes,media};
 }
@@ -106,4 +111,12 @@ test('Windows and macOS adapters retain exact deleted-link receipts at every tim
   for(const call of native){assert.deepEqual(call.payload.deletedLinks,deleted);assert.equal(call.payload.sequenceId,'seq-a');assert.equal(call.payload.projectPath,f.context.projectPath);assert.equal(call.payload.cues[0].path,f.media);assert.equal(call.payload.cues[0].clipNodeId,undefined);}
   await assert.rejects(f.api.preflightCaptionClips([f.caption],-1,'seq-a','other-sequence'),/Invalid deleted/);
  }
+});
+
+ test('native creation adapter binds semantic transcript duration and captured cadence before source mutation',async()=>{
+ const f=fixture();await f.api.getActiveSequenceInfo();
+ const input={sequenceId:'seq-a',sequenceName:'Native',frameWidth:720,frameHeight:1280,frameRate:24,duration:10,style:structuredClone(DEFAULT_STYLE),animation:structuredClone(DEFAULT_ANIMATION),captions:[{id:'one',text:'Hello',words:[{text:'Hello',startTime:2,endTime:4}]}]};
+ const {document,...request}=prepareNativeCreation(input,16);
+ await assert.rejects(f.api.createNativeCaptionDocument({...request,endFrame:1},'seq-a'),/duration/);assert.equal(f.calls.some(c=>c.method==='createNativeCaptionDocument'),false);
+ await f.api.createNativeCaptionDocument(request,'seq-a');const call=f.calls.find(c=>c.method==='createNativeCaptionDocument');assert.equal(call.payload.endFrame,96);assert.equal(call.payload.ticksPerFrame,'10584000000');assert.equal(call.payload.expectedVideoTrackCount,1);assert.match(call.payload.creationId,/^[0-9a-f-]{36}$/);assert.equal(call.payload.projectPath,f.context.projectPath);
 });

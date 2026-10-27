@@ -1,0 +1,1253 @@
+{
+  "source": "artifacts/pause-line-length-0.7.80/installed-state.json",
+  "captions": [
+    {
+      "id": "caption-mvekfw6h-0",
+      "text": "Alright, This Thing's",
+      "startTime": 0.31,
+      "endTime": 1.23,
+      "manualSplit": true,
+      "words": [
+        {
+          "text": "Alright,",
+          "startTime": 0.31,
+          "endTime": 0.75,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "This",
+          "startTime": 0.75,
+          "endTime": 0.95,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "Thing's",
+          "startTime": 0.95,
+          "endTime": 1.23,
+          "endOfSentence": false,
+          "isActive": false
+        }
+      ],
+      "renderSegments": [
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-0",
+          "words": [
+            {
+              "text": "Alright,",
+              "startTime": 0.31,
+              "endTime": 0.75,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "This",
+              "startTime": 0.75,
+              "endTime": 0.95,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "Thing's",
+              "startTime": 0.95,
+              "endTime": 1.23,
+              "endOfSentence": false,
+              "isActive": false
+            }
+          ],
+          "text": "Alright, This Thing's",
+          "startTime": 0.31,
+          "endTime": 1.23
+        }
+      ]
+    },
+    {
+      "id": "caption-mvekfw6h-0-mvk4jg30-0",
+      "text": "finally going. It hasn't started in months I've just been putting it off. Got a quote from",
+      "startTime": 1.23,
+      "endTime": 9.935,
+      "manualSplit": true,
+      "words": [
+        {
+          "text": "finally",
+          "startTime": 1.23,
+          "endTime": 1.63,
+          "endOfSentence": false,
+          "lineBreakBefore": "break",
+          "isActive": false
+        },
+        {
+          "text": "going.",
+          "startTime": 1.63,
+          "endTime": 2.11,
+          "endOfSentence": true,
+          "isActive": false
+        },
+        {
+          "text": "It",
+          "startTime": 3.1,
+          "endTime": 3.4583333333333335,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "hasn't",
+          "startTime": 3.4683333333333333,
+          "endTime": 3.828333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "started",
+          "startTime": 3.828333333333333,
+          "endTime": 4.2683333333333335,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "in",
+          "startTime": 4.2683333333333335,
+          "endTime": 4.508333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "months",
+          "startTime": 4.508333333333333,
+          "endTime": 4.988333333333333,
+          "endOfSentence": true,
+          "isActive": false
+        },
+        {
+          "text": "I've",
+          "startTime": 7.068333333333333,
+          "endTime": 7.348333333329396,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "just",
+          "startTime": 7.348333333329396,
+          "endTime": 7.548333333333332,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "been",
+          "startTime": 7.548333333333332,
+          "endTime": 7.708333333333332,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "putting",
+          "startTime": 7.708333333333332,
+          "endTime": 7.988333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "it",
+          "startTime": 7.988333333333333,
+          "endTime": 8.108333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "off.",
+          "startTime": 8.108333333333333,
+          "endTime": 8.548333333333334,
+          "endOfSentence": true,
+          "isActive": false
+        },
+        {
+          "text": "Got",
+          "startTime": 8.975,
+          "endTime": 9.335,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "a",
+          "startTime": 9.335,
+          "endTime": 9.415000000000001,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "quote",
+          "startTime": 9.415000000000001,
+          "endTime": 9.655000000000001,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "from",
+          "startTime": 9.655000000000001,
+          "endTime": 9.935,
+          "endOfSentence": false,
+          "isActive": false
+        }
+      ],
+      "renderSegments": [
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvk4jg30-0-0",
+          "words": [
+            {
+              "text": "finally",
+              "startTime": 1.23,
+              "endTime": 1.63,
+              "endOfSentence": false,
+              "lineBreakBefore": "break",
+              "isActive": false
+            },
+            {
+              "text": "going.",
+              "startTime": 1.63,
+              "endTime": 2.11,
+              "endOfSentence": true,
+              "isActive": false
+            }
+          ],
+          "text": "finally going.",
+          "startTime": 1.23,
+          "endTime": 2.11
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvk4jg30-0-2",
+          "words": [
+            {
+              "text": "It",
+              "startTime": 3.1,
+              "endTime": 3.4583333333333335,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "hasn't",
+              "startTime": 3.4683333333333333,
+              "endTime": 3.828333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "started",
+              "startTime": 3.828333333333333,
+              "endTime": 4.2683333333333335,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "in",
+              "startTime": 4.2683333333333335,
+              "endTime": 4.508333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "months",
+              "startTime": 4.508333333333333,
+              "endTime": 4.988333333333333,
+              "endOfSentence": true,
+              "isActive": false
+            }
+          ],
+          "text": "It hasn't started in months",
+          "startTime": 3.1,
+          "endTime": 4.988333333333333
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvk4jg30-0-7",
+          "words": [
+            {
+              "text": "I've",
+              "startTime": 7.068333333333333,
+              "endTime": 7.348333333329396,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "just",
+              "startTime": 7.348333333329396,
+              "endTime": 7.548333333333332,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "been",
+              "startTime": 7.548333333333332,
+              "endTime": 7.708333333333332,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "putting",
+              "startTime": 7.708333333333332,
+              "endTime": 7.988333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "it",
+              "startTime": 7.988333333333333,
+              "endTime": 8.108333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "off.",
+              "startTime": 8.108333333333333,
+              "endTime": 8.548333333333334,
+              "endOfSentence": true,
+              "isActive": false
+            }
+          ],
+          "text": "I've just been putting it off.",
+          "startTime": 7.068333333333333,
+          "endTime": 8.548333333333334
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvk4jg30-0-13",
+          "words": [
+            {
+              "text": "Got",
+              "startTime": 8.975,
+              "endTime": 9.335,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "a",
+              "startTime": 9.335,
+              "endTime": 9.415000000000001,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "quote",
+              "startTime": 9.415000000000001,
+              "endTime": 9.655000000000001,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "from",
+              "startTime": 9.655000000000001,
+              "endTime": 9.935,
+              "endOfSentence": false,
+              "isActive": false
+            }
+          ],
+          "text": "Got a quote from",
+          "startTime": 8.975,
+          "endTime": 9.935
+        }
+      ]
+    },
+    {
+      "id": "caption-mvekfw6h-0-mvipobkw-0",
+      "text": "JunkYourVehicle.Net",
+      "startTime": 9.935,
+      "endTime": 12.083333333333334,
+      "manualSplit": true,
+      "words": [
+        {
+          "text": "JunkYourVehicle.Net",
+          "startTime": 9.935,
+          "endTime": 12.083333333333334,
+          "endOfSentence": false,
+          "lineBreakBefore": "break",
+          "isActive": false
+        }
+      ],
+      "renderSegments": [
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-0",
+          "words": [
+            {
+              "text": "JunkYourVehicle.Net",
+              "startTime": 9.935,
+              "endTime": 12.083333333333334,
+              "endOfSentence": false,
+              "lineBreakBefore": "break",
+              "isActive": false
+            }
+          ],
+          "text": "JunkYourVehicle.Net",
+          "startTime": 9.935,
+          "endTime": 12.083333333333334
+        }
+      ]
+    },
+    {
+      "id": "caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0",
+      "text": "and booked a pickup. All right, that's 160, and we'll get this out of your way. Didn't I just wanted it gone, but but they're actually paying paying me to get rid of it. There. Finally Got got my driveway back. back. If I should have done this months ago. around. Get",
+      "startTime": 12.083333333333334,
+      "endTime": 33.583333333333336,
+      "manualSplit": true,
+      "words": [
+        {
+          "text": "and",
+          "startTime": 12.083333333333334,
+          "endTime": 12.208333333333334,
+          "endOfSentence": false,
+          "lineBreakBefore": "break",
+          "isActive": false
+        },
+        {
+          "text": "booked",
+          "startTime": 12.226666666666667,
+          "endTime": 12.506666666666666,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "a",
+          "startTime": 12.506666666666666,
+          "endTime": 12.666666666666666,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "pickup.",
+          "startTime": 12.666666666666666,
+          "endTime": 13.106666666666666,
+          "endOfSentence": true,
+          "isActive": false
+        },
+        {
+          "text": "All",
+          "startTime": 13.586666666666666,
+          "endTime": 13.826666666666666,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "right,",
+          "startTime": 13.866666666666665,
+          "endTime": 14.066666666666666,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "that's",
+          "startTime": 14.066666666666666,
+          "endTime": 14.306666666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "160,",
+          "startTime": 14.306666666666667,
+          "endTime": 15.226666666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "and",
+          "startTime": 16.481666666666666,
+          "endTime": 17.00166666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "we'll",
+          "startTime": 17.00166666666667,
+          "endTime": 17.201666666666668,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "get",
+          "startTime": 17.201666666666668,
+          "endTime": 17.401666666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "this",
+          "startTime": 17.401666666666667,
+          "endTime": 17.561666666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "out",
+          "startTime": 17.561666666666667,
+          "endTime": 17.721666666666668,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "of",
+          "startTime": 17.721666666666668,
+          "endTime": 17.84166666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "your",
+          "startTime": 17.84166666666667,
+          "endTime": 17.961666666666666,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "way.",
+          "startTime": 17.961666666666666,
+          "endTime": 18.32166666666667,
+          "endOfSentence": true,
+          "isActive": false
+        },
+        {
+          "text": "Didn't",
+          "startTime": 18.905,
+          "endTime": 19.041666666666668,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "I",
+          "startTime": 19.458333333333332,
+          "endTime": 19.611666666666665,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "just",
+          "startTime": 19.611666666666665,
+          "endTime": 19.811666666666664,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "wanted",
+          "startTime": 19.811666666666664,
+          "endTime": 20.171666666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "it",
+          "startTime": 20.171666666666667,
+          "endTime": 20.291666666666664,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "gone,",
+          "startTime": 20.291666666666664,
+          "endTime": 20.851666666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "but",
+          "startTime": 20.931666666666665,
+          "endTime": 21.083333333333332,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "but",
+          "startTime": 21.208333333333332,
+          "endTime": 21.336666666666666,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "they're",
+          "startTime": 21.336666666666666,
+          "endTime": 21.576666666666668,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "actually",
+          "startTime": 21.576666666666668,
+          "endTime": 21.856666666666666,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "paying",
+          "startTime": 21.856666666666666,
+          "endTime": 21.875,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "paying",
+          "startTime": 21.875,
+          "endTime": 22.266666666666666,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "me",
+          "startTime": 22.266666666666666,
+          "endTime": 22.46666666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "to",
+          "startTime": 22.46666666666667,
+          "endTime": 22.546666666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "get",
+          "startTime": 22.546666666666667,
+          "endTime": 22.706666666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "rid",
+          "startTime": 22.706666666666667,
+          "endTime": 22.906666666666666,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "of",
+          "startTime": 22.94666666666667,
+          "endTime": 23.026666666666667,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "it.",
+          "startTime": 23.026666666666667,
+          "endTime": 23.25666666666273,
+          "endOfSentence": true,
+          "isActive": false
+        },
+        {
+          "text": "There.",
+          "startTime": 27.5,
+          "endTime": 27.588333333333335,
+          "endOfSentence": true,
+          "isActive": false
+        },
+        {
+          "text": "Finally",
+          "startTime": 28.333333333333332,
+          "endTime": 28.388333333333335,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "Got",
+          "startTime": 28.388333333333335,
+          "endTime": 28.416666666666668,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "got",
+          "startTime": 28.973333333333333,
+          "endTime": 29.173333333333332,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "my",
+          "startTime": 29.173333333333332,
+          "endTime": 29.333333333333332,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "driveway",
+          "startTime": 29.333333333333332,
+          "endTime": 29.773333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "back.",
+          "startTime": 29.773333333333333,
+          "endTime": 29.916666666666668,
+          "endOfSentence": true,
+          "isActive": false
+        },
+        {
+          "text": "back.",
+          "startTime": 29.916666666666668,
+          "endTime": 29.956666666666667,
+          "endOfSentence": true,
+          "isActive": false
+        },
+        {
+          "text": "If",
+          "startTime": 31.036666666666665,
+          "endTime": 31.05333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "I",
+          "startTime": 31.05333333333333,
+          "endTime": 31.293333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "should",
+          "startTime": 31.293333333333333,
+          "endTime": 31.41333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "have",
+          "startTime": 31.453333333333333,
+          "endTime": 31.61333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "done",
+          "startTime": 31.61333333333333,
+          "endTime": 31.77333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "this",
+          "startTime": 31.77333333333333,
+          "endTime": 31.93333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "months",
+          "startTime": 31.93333333333333,
+          "endTime": 32.21333333333333,
+          "endOfSentence": false,
+          "isActive": false
+        },
+        {
+          "text": "ago.",
+          "startTime": 32.21333333333333,
+          "endTime": 32.416666666666664,
+          "endOfSentence": true,
+          "isActive": false
+        },
+        {
+          "text": "around.",
+          "startTime": 32.416666666666664,
+          "endTime": 32.58833333333333,
+          "endOfSentence": true,
+          "isActive": false
+        },
+        {
+          "text": "Get",
+          "startTime": 33.54833333333333,
+          "endTime": 33.583333333333336,
+          "endOfSentence": false,
+          "isActive": false
+        }
+      ],
+      "renderSegments": [
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-0",
+          "words": [
+            {
+              "text": "and",
+              "startTime": 12.083333333333334,
+              "endTime": 12.208333333333334,
+              "endOfSentence": false,
+              "lineBreakBefore": "break",
+              "isActive": false
+            },
+            {
+              "text": "booked",
+              "startTime": 12.226666666666667,
+              "endTime": 12.506666666666666,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "a",
+              "startTime": 12.506666666666666,
+              "endTime": 12.666666666666666,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "pickup.",
+              "startTime": 12.666666666666666,
+              "endTime": 13.106666666666666,
+              "endOfSentence": true,
+              "isActive": false
+            }
+          ],
+          "text": "and booked a pickup.",
+          "startTime": 12.083333333333334,
+          "endTime": 13.106666666666666
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-4",
+          "words": [
+            {
+              "text": "All",
+              "startTime": 13.586666666666666,
+              "endTime": 13.826666666666666,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "right,",
+              "startTime": 13.866666666666665,
+              "endTime": 14.066666666666666,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "that's",
+              "startTime": 14.066666666666666,
+              "endTime": 14.306666666666667,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "160,",
+              "startTime": 14.306666666666667,
+              "endTime": 15.226666666666667,
+              "endOfSentence": false,
+              "isActive": false
+            }
+          ],
+          "text": "All right, that's 160,",
+          "startTime": 13.586666666666666,
+          "endTime": 15.226666666666667
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-8",
+          "words": [
+            {
+              "text": "and",
+              "startTime": 16.481666666666666,
+              "endTime": 17.00166666666667,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "we'll",
+              "startTime": 17.00166666666667,
+              "endTime": 17.201666666666668,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "get",
+              "startTime": 17.201666666666668,
+              "endTime": 17.401666666666667,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "this",
+              "startTime": 17.401666666666667,
+              "endTime": 17.561666666666667,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "out",
+              "startTime": 17.561666666666667,
+              "endTime": 17.721666666666668,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "of",
+              "startTime": 17.721666666666668,
+              "endTime": 17.84166666666667,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "your",
+              "startTime": 17.84166666666667,
+              "endTime": 17.961666666666666,
+              "endOfSentence": false,
+              "isActive": false
+            }
+          ],
+          "text": "and we'll get this out of your",
+          "startTime": 16.481666666666666,
+          "endTime": 17.961666666666666
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-15",
+          "words": [
+            {
+              "text": "way.",
+              "startTime": 17.961666666666666,
+              "endTime": 18.32166666666667,
+              "endOfSentence": true,
+              "isActive": false
+            }
+          ],
+          "text": "way.",
+          "startTime": 17.961666666666666,
+          "endTime": 18.32166666666667
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-16",
+          "words": [
+            {
+              "text": "Didn't",
+              "startTime": 18.905,
+              "endTime": 19.041666666666668,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "I",
+              "startTime": 19.458333333333332,
+              "endTime": 19.611666666666665,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "just",
+              "startTime": 19.611666666666665,
+              "endTime": 19.811666666666664,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "wanted",
+              "startTime": 19.811666666666664,
+              "endTime": 20.171666666666667,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "it",
+              "startTime": 20.171666666666667,
+              "endTime": 20.291666666666664,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "gone,",
+              "startTime": 20.291666666666664,
+              "endTime": 20.851666666666667,
+              "endOfSentence": false,
+              "isActive": false
+            }
+          ],
+          "text": "Didn't I just wanted it gone,",
+          "startTime": 18.905,
+          "endTime": 20.851666666666667
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-22",
+          "words": [
+            {
+              "text": "but",
+              "startTime": 20.931666666666665,
+              "endTime": 21.083333333333332,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "but",
+              "startTime": 21.208333333333332,
+              "endTime": 21.336666666666666,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "they're",
+              "startTime": 21.336666666666666,
+              "endTime": 21.576666666666668,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "actually",
+              "startTime": 21.576666666666668,
+              "endTime": 21.856666666666666,
+              "endOfSentence": false,
+              "isActive": false
+            }
+          ],
+          "text": "but but they're actually",
+          "startTime": 20.931666666666665,
+          "endTime": 21.856666666666666
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-26",
+          "words": [
+            {
+              "text": "paying",
+              "startTime": 21.856666666666666,
+              "endTime": 21.875,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "paying",
+              "startTime": 21.875,
+              "endTime": 22.266666666666666,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "me",
+              "startTime": 22.266666666666666,
+              "endTime": 22.46666666666667,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "to",
+              "startTime": 22.46666666666667,
+              "endTime": 22.546666666666667,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "get",
+              "startTime": 22.546666666666667,
+              "endTime": 22.706666666666667,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "rid",
+              "startTime": 22.706666666666667,
+              "endTime": 22.906666666666666,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "of",
+              "startTime": 22.94666666666667,
+              "endTime": 23.026666666666667,
+              "endOfSentence": false,
+              "isActive": false
+            }
+          ],
+          "text": "paying paying me to get rid of",
+          "startTime": 21.856666666666666,
+          "endTime": 23.026666666666667
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-33",
+          "words": [
+            {
+              "text": "it.",
+              "startTime": 23.026666666666667,
+              "endTime": 23.25666666666273,
+              "endOfSentence": true,
+              "isActive": false
+            }
+          ],
+          "text": "it.",
+          "startTime": 23.026666666666667,
+          "endTime": 23.25666666666273
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-34",
+          "words": [
+            {
+              "text": "There.",
+              "startTime": 27.5,
+              "endTime": 27.588333333333335,
+              "endOfSentence": true,
+              "isActive": false
+            }
+          ],
+          "text": "There.",
+          "startTime": 27.5,
+          "endTime": 27.588333333333335
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-35",
+          "words": [
+            {
+              "text": "Finally",
+              "startTime": 28.333333333333332,
+              "endTime": 28.388333333333335,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "Got",
+              "startTime": 28.388333333333335,
+              "endTime": 28.416666666666668,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "got",
+              "startTime": 28.973333333333333,
+              "endTime": 29.173333333333332,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "my",
+              "startTime": 29.173333333333332,
+              "endTime": 29.333333333333332,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "driveway",
+              "startTime": 29.333333333333332,
+              "endTime": 29.773333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            }
+          ],
+          "text": "Finally Got got my driveway",
+          "startTime": 28.333333333333332,
+          "endTime": 29.773333333333333
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-40",
+          "words": [
+            {
+              "text": "back.",
+              "startTime": 29.773333333333333,
+              "endTime": 29.916666666666668,
+              "endOfSentence": true,
+              "isActive": false
+            }
+          ],
+          "text": "back.",
+          "startTime": 29.773333333333333,
+          "endTime": 29.916666666666668
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-41",
+          "words": [
+            {
+              "text": "back.",
+              "startTime": 29.916666666666668,
+              "endTime": 29.956666666666667,
+              "endOfSentence": true,
+              "isActive": false
+            }
+          ],
+          "text": "back.",
+          "startTime": 29.916666666666668,
+          "endTime": 29.956666666666667
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-42",
+          "words": [
+            {
+              "text": "If",
+              "startTime": 31.036666666666665,
+              "endTime": 31.05333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "I",
+              "startTime": 31.05333333333333,
+              "endTime": 31.293333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "should",
+              "startTime": 31.293333333333333,
+              "endTime": 31.41333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "have",
+              "startTime": 31.453333333333333,
+              "endTime": 31.61333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "done",
+              "startTime": 31.61333333333333,
+              "endTime": 31.77333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "this",
+              "startTime": 31.77333333333333,
+              "endTime": 31.93333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            }
+          ],
+          "text": "If I should have done this",
+          "startTime": 31.036666666666665,
+          "endTime": 31.93333333333333
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-48",
+          "words": [
+            {
+              "text": "months",
+              "startTime": 31.93333333333333,
+              "endTime": 32.21333333333333,
+              "endOfSentence": false,
+              "isActive": false
+            },
+            {
+              "text": "ago.",
+              "startTime": 32.21333333333333,
+              "endTime": 32.416666666666664,
+              "endOfSentence": true,
+              "isActive": false
+            }
+          ],
+          "text": "months ago.",
+          "startTime": 31.93333333333333,
+          "endTime": 32.416666666666664
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-50",
+          "words": [
+            {
+              "text": "around.",
+              "startTime": 32.416666666666664,
+              "endTime": 32.58833333333333,
+              "endOfSentence": true,
+              "isActive": false
+            }
+          ],
+          "text": "around.",
+          "startTime": 32.416666666666664,
+          "endTime": 32.58833333333333
+        },
+        {
+          "id": "native-phrase-caption-mvekfw6h-0-mvipobkw-0-mvivfknv-0-51",
+          "words": [
+            {
+              "text": "Get",
+              "startTime": 33.54833333333333,
+              "endTime": 33.583333333333336,
+              "endOfSentence": false,
+              "isActive": false
+            }
+          ],
+          "text": "Get",
+          "startTime": 33.54833333333333,
+          "endTime": 33.583333333333336
+        }
+      ]
+    }
+  ]
+}

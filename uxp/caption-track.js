@@ -96,7 +96,7 @@ async function createCaptionTrack(ppro, project, sequence, prepared) {
     const activeSequence = activeProject && await nativeRead('active sequence read', () => activeProject.getActiveSequence(), context);
     if (!activeProject || activeProject.path !== prepared.projectPath || project.path !== prepared.projectPath
         || !activeSequence || key(activeSequence.guid) !== key(prepared.sequenceId) || key(sequence.guid) !== key(prepared.sequenceId)) {
-      throw new Error('The active project or sequence changed before creating the caption track. Refresh Better Captions.');
+      throw new Error('The active project or sequence changed before creating the caption track. Refresh S-Captions.');
     }
   }
   await guard();
@@ -125,7 +125,7 @@ async function createCaptionTrack(ppro, project, sequence, prepared) {
         const time = nativeStep('insert TickTime', () => ppro.TickTime.createWithTicks(seed.startTicks), context);
         const action = nativeStep('insert Action creation', () => editor.createInsertProjectItemAction(projectItem, time, index, 0, true), context);
         if (nativeStep('insert Action registration', () => compound.addAction(action), context) === false) throw new Error('Premiere refused the caption-track action.');
-      }, 'Better Captions: Create caption track'), context);
+      }, 'S-Captions: Create caption track'), context);
     }), context);
     if (!committed) insertionFailure = new Error('Premiere did not commit the caption-track action.');
   } catch (error) { insertionFailure = error; }
@@ -159,7 +159,7 @@ async function createCaptionTrack(ppro, project, sequence, prepared) {
           removed = nativeStep('cleanup transaction', () => project.executeTransaction(compound => {
             const action = nativeStep('cleanup Action creation', () => editor.createRemoveItemsAction(selection, false, ppro.Constants.MediaType.VIDEO, false), context);
             if (nativeStep('cleanup Action registration', () => compound.addAction(action), context) === false) throw new Error('Premiere refused caption setup cleanup.');
-          }, 'Better Captions: Finish caption track'), context);
+          }, 'S-Captions: Finish caption track'), context);
         }), context);
         if (selected === false) throw new Error('Premiere could not prepare caption setup cleanup.');
       }), context);

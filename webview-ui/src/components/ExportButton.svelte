@@ -4,6 +4,7 @@
   import { refreshProgramMonitor } from '../lib/export/program-monitor';
   import { bundleCaptionContainers, needsLegacyConsolidation, consolidationDraft } from '../lib/export/containers';
   import { restoreDeletedCaptionLinks } from '../lib/export/deleted-links';
+  import { retryableNativeRead } from '../lib/live-output';
 
   interface Props {
     captions: CaptionItem[]; style: StyleConfig; animation: AnimationConfig;
@@ -13,13 +14,18 @@
     onApplied?: (captions: CaptionItem[], sequenceId?: string,options?:{captionIds?:string[]}) => void | Promise<void>;
     currentTime?: number; selectedId?: string | null;
     onBusy?: (busy: boolean) => void; disabled?: boolean;
+    onPhase?: (phase: 'idle' | 'preparing' | 'rendering' | 'committing') => void;
+    liveStatus?: { phase: string; message: string };
   }
-  let { captions, style, animation, frameWidth, frameHeight, frameRate, duration, sequenceName, sequenceId, tracks = [], hostApi, onUpdated, onApplied, currentTime, selectedId, onBusy, disabled = false }: Props = $props();
-  const hasLinkedCaptions = $derived(captions.some(caption => !!caption.clipNodeId));
+  let { captions, style, animation, frameWidth, frameHeight, frameRate, duration, sequenceName, sequenceId, tracks = [], hostApi, onUpdated, onApplied, currentTime, selectedId, onBusy, onPhase, liveStatus, disabled = false }: Props = $props();
   let isExporting = $state(false), selectedTrack = $state(-1);
   let trackSequenceId = $state<string | null>(null);
   let progress = $state<ExportProgress | null>(null), error = $state<string | null>(null), status = $state<string | null>(null);
   let controller: AbortController | null = null;
+  let phase = $state<'idle' | 'preparing' | 'rendering' | 'committing'>('idle'), superseded = false;
+  const setPhase = (value: typeof phase) => { phase = value; onPhase?.(value); };
+  const replaced = () => Object.assign(new Error('A newer caption edit replaced this render.'), { code: 'BC_RENDER_SUPERSEDED' });
+  export function supersede() { if (isExporting && phase !== 'committing') { superseded = true; controller?.abort(); } }
   $effect(() => {
     if (trackSequenceId !== sequenceId) {
       trackSequenceId = sequenceId;
@@ -45,24 +51,27 @@
     });
   }
   const curveMatches=(expected:MotionProfile|undefined,actual:MotionProfile)=>actual.samples.every(sample=>{const value=motionScaleAt(expected,sample.time);return Math.abs(value.scaleX-sample.scaleX)<1e-6&&Math.abs(value.scaleY-sample.scaleY)<1e-6;});
-  export async function apply(options:{captionIds?:string[]}={}): Promise<CaptionItem[]> {
+  export async function apply(options:{captionIds?:string[]; automatic?:boolean}={}): Promise<CaptionItem[]> {
     if (isExporting) throw new Error('Caption generation is already running.');
     if (disabled) throw new Error('Wait for the current transcript or timeline operation to finish.');
     if (!captions.length) throw new Error('Transcribe or load captions first.');
-    if (hostApi.isDemo) throw new Error('Open the Better Captions panel in Premiere to generate timeline clips.');
+    if (hostApi.isDemo) throw new Error('Open the S-Captions panel in Premiere to generate timeline clips.');
     if (!Number.isInteger(selectedTrack) || selectedTrack < -1) throw new Error('Choose an automatic or unlocked caption track.');
     const exportStyle = clone(style), exportAnimation = clone(animation);
     const id = sequenceId, track = selectedTrack, key = sourceKey(), notify = onUpdated;
-    isExporting = true; onBusy?.(true); error = null; progress = null; controller = new AbortController();
+    let timelineWriteStarted = false, timelineWriteConfirmed = false;
+    isExporting = true; superseded = false; setPhase('preparing'); onBusy?.(true); error = null; progress = null; controller = new AbortController();
     try {
       const snapshot=clone(captions);
       const linked=snapshot.filter(caption=>caption.clipNodeId);
       const recovery=!options.captionIds && linked.length
         ? restoreDeletedCaptionLinks(snapshot,await hostApi.readTimeline(linked,id))
         : {captions:snapshot,deletedLinks:[]};
-      if(key!==sourceKey())throw new Error('The captions or active sequence changed while reading the timeline. Apply again with the current edits.');
+      if(key!==sourceKey())throw options.automatic ? replaced() : new Error('The captions or active sequence changed while reading the timeline. Try again with the current edits.');
       const previous=recovery.captions, destination=recovery.deletedLinks.length?-1:track;
-      const consolidate=!options.captionIds && needsLegacyConsolidation(previous);
+      // Automatic styling preserves existing native containers and animation.
+      // Legacy conversion remains an explicit agent action, never a side effect of typing.
+      const consolidate=!options.automatic && !options.captionIds && needsLegacyConsolidation(previous);
       const plan=consolidate?await hostApi.readCaptionConsolidation(previous,id):null;
       if(consolidate && (!plan?.ok || !plan.bounds || !plan.motionProfile))throw new Error('Premiere could not verify the legacy caption positions and sizes.');
       const source = clone(consolidate?consolidationDraft(previous,exportStyle.maxChars,plan):bundleCaptionContainers(previous, exportStyle.maxChars, recovery.deletedLinks.length > 0));
@@ -74,19 +83,25 @@
       status = 'Checking timeline space…';
       await hostApi.preflightCaptionClips(captured, consolidate?-1:destination, id, recovery.deletedLinks);
       status = 'Rendering transparent caption clips…';
+      setPhase('rendering');
       const rendered = await exportFrames(captured, exportStyle, exportAnimation, frameWidth, frameHeight, frameRate, duration, {
         begin: captionId => hostApi.beginCaption(captionId, id),
         write: (folder, frames, start) => hostApi.saveCaptionFrames(folder, frames, start, id),
         finish: (folder, fps, count,bounds) => hostApi.finishCaption(folder, fps, count, id,bounds),
       }, value => { progress = value; }, controller.signal);
+      if (superseded || options.automatic && key !== sourceKey()) throw replaced();
       if (controller.signal.aborted) throw new Error('Caption generation cancelled before timeline changes.');
-      if (key !== sourceKey()) throw new Error('The captions, style, or active sequence changed while rendering. Apply again with the current edits.');
+      if (key !== sourceKey()) throw new Error('The captions, style, or active sequence changed while rendering. Try again with the current edits.');
       const checked=await captureProfiles(captured,id);
       if(checked.some(caption=>caption.motionProfile?.signature!==captured.find(old=>old.id===caption.id)?.motionProfile?.signature))throw new Error('The caption box size or its keyframes changed while rendering. Stop resizing, then update again.');
+      if(superseded || options.automatic && key !== sourceKey())throw replaced();
       if(controller.signal.aborted)throw new Error('Caption generation cancelled before timeline changes.');
       status = 'Applying clips to Premiere…'; progress = null;
+      setPhase('committing');
+      timelineWriteStarted = true;
       const applied = consolidate?await hostApi.applyConsolidatedCaption(rendered[0],previous,plan,id):await hostApi.applyCaptionClips(rendered, destination, id, source, recovery.deletedLinks);
       if (!applied?.ok || applied.cues?.length !== rendered.length) throw new Error('Premiere did not confirm every caption clip. Review the timeline before retrying.');
+      timelineWriteConfirmed = true;
       let changed = rendered.map(caption => {
         const clip = applied.cues.find((entry: any) => entry.id === caption.id);
         if (!clip) throw new Error('A caption timeline link was missing from Premiere readback.');
@@ -119,19 +134,29 @@
         // An automatic reflow must not take selection back if the user moved
         // to another native clip while the replacement movie was rendering.
         if(selected){
-          await refreshProgramMonitor(hostApi, [selected], id, { currentTime, selectedId:selected.id, frameRate, duration });
-          if(typeof hostApi.selectCaptionClip==='function')await hostApi.selectCaptionClip(selected,id);
+          await refreshProgramMonitor(hostApi, [selected], id, { currentTime, selectedId:selected.id, frameRate, duration, preservePlayhead: options.automatic });
+          if(!options.automatic && typeof hostApi.selectCaptionClip==='function')await hostApi.selectCaptionClip(selected,id);
         }
       }
       catch (problem) { throw new Error('The captions were applied and saved, but the Program Monitor could not be refreshed. ' + (problem instanceof Error ? problem.message : String(problem))); }
       status = `${changed.length} caption ${changed.length === 1 ? 'clip' : 'clips'} updated in the Program Monitor for ${sequenceName}.`;
       return updated;
     } catch (failure) {
-      error = failure instanceof Error ? failure.message : 'Caption generation failed.';
+      if (superseded && phase !== 'committing') throw replaced();
+      if (timelineWriteStarted && (timelineWriteConfirmed || !retryableNativeRead(failure))) {
+        const detail = failure instanceof Error ? failure.message : String(failure);
+        const problem = Object.assign(new Error(timelineWriteConfirmed
+          ? 'The captions were placed, but Premiere has not confirmed the final check. Automatic updates are paused to avoid repeating that change. Your edits are saved.'
+          : 'Premiere has not confirmed the last caption update. Automatic updates are paused to prevent duplicate clips. Your edits are saved; check the timeline before reconnecting.'),
+        { code: 'BC_OUTPUT_UNCONFIRMED', recoverable: false, outputApplied: timelineWriteConfirmed, detail: detail.slice(0, 1000) });
+        error = options.automatic ? null : problem.message;
+        status = null;
+        throw problem;
+      }
+      error = options.automatic ? null : failure instanceof Error ? failure.message : 'Caption generation failed.';
       status = null; throw failure;
-    } finally { isExporting = false; progress = null; controller = null; onBusy?.(false); }
+    } finally { isExporting = false; progress = null; controller = null; setPhase('idle'); onBusy?.(false); }
   }
-  async function handleApply() { try { await apply(); } catch { /* Display the actionable error below. */ } }
   function cancel() { controller?.abort(); }
 </script>
 
@@ -147,20 +172,17 @@
     </select>
   </label>
   {/if}
-  <button class="caption-button caption-button--primary caption-export__apply" onclick={handleApply} disabled={disabled || isExporting || !captions.length || hostApi.isDemo || selectedTrack < -1}>
-    {isExporting ? `${status ?? 'Generating…'}${progress ? ` ${progress.percent}%` : ''}` : hasLinkedCaptions ? 'Update Program Monitor' : 'Apply to Program Monitor'}
-  </button>
+  {#if captions.length && liveStatus?.phase !== 'error'}<p class="caption-export__live" role="status" aria-live="polite">{hostApi.isDemo ? 'Live captions · available in Premiere' : isExporting ? `${phase === 'committing' ? 'Updating video…' : 'Rendering…'}${progress ? ` ${progress.percent}%` : ''}` : liveStatus?.message || 'Live captions'}</p>{/if}
   {#if isExporting && progress}
     <progress class="caption-export__progress" value={progress.current} max={progress.total} aria-label="Caption rendering progress"></progress>
     <button class="caption-button" onclick={cancel}>Cancel before applying</button>
   {/if}
   {#if error}<p class="caption-message caption-message--error" role="alert">{error}</p>{/if}
-  {#if status && !isExporting}<p class="caption-message" role="status">{status}</p>{/if}
 </div>
 
 <style>
   .caption-export { display: flex; flex-direction: column; gap: var(--caption-space-s); padding: var(--caption-space-m) var(--caption-space-l); }
-  .caption-export__apply { min-block-size: 2.5rem; }
+  .caption-export__live { color: var(--color-panel-secondary); font-size: var(--caption-type-xs); margin: 0; }
   .caption-export__track { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--caption-space-m); }
   .caption-export__progress { inline-size: 100%; block-size: .35rem; accent-color: var(--color-accent); }
 </style>

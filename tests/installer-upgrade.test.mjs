@@ -57,7 +57,7 @@ function fixture(t, hooks = {}) {
       if (name === 'node:fs') return filesystem;
       if (name === 'node:os') return { homedir: () => home };
       if (name === '../cep/platform.cjs') return platform;
-      if (name === 'node:child_process') return { execFileSync: (exe, args, options) => { calls.push({ exe, args: [...args], options }); if (exe === upia) return hooks.upia ? hooks.upia() : 'Installation Successful'; return 'fixture version'; } };
+      if (name === 'node:child_process') return { execFileSync: (exe, args, options) => { calls.push({ exe, args: [...args], options }); if (exe === upia && args[0] === '--list') return hooks.list ? hooks.list() : ''; if (exe === upia && args[0] === '--remove') return hooks.remove ? hooks.remove() : 'Removal Successful for extension S-Captions'; if (exe === upia) return hooks.upia ? hooks.upia() : 'Installation Successful'; return 'fixture version'; } };
       return require(name);
     }
   };
@@ -88,7 +88,7 @@ test('migrates the legacy source symlink itself, preserving its permanent source
     assert.equal(fs.statSync(path.join(f.destination, 'better-captions-install.json')).mode & 0o777, 0o600);
   }
   assert.ok(!f.backups()[0].startsWith(f.extensions)); assert.deepEqual(f.stages(), []);
-  assert.equal(f.calls.filter(call => call.exe === upia).length, 1);
+  assert.equal(f.calls.filter(call => call.exe === upia && call.args[0] === '--install').length, 1);
   assert.ok(f.calls.every(call => call.options.timeout === 120000 && !call.options.shell));
 });
 
@@ -189,4 +189,25 @@ test('fresh and repeated owned installations publish validated copies with recov
   const first = snapshot(f.destination); assert.deepEqual(f.backups(), []);
   f.install(['--service-only']); assert.equal(f.backups().length, 1); assert.deepEqual(snapshot(f.backups()[0]), first);
   assert.deepEqual(snapshot(f.destination), first); assert.deepEqual(f.stages(), []);
+});
+
+test('installation removes every stale S-Captions registration before installing, because Premiere loads the first one', t => {
+  let registered = 3;
+  const f = fixture(t, {
+    list: () => Array.from({ length: registered }, (_, n) => ` Enabled    S-Captions                 0.7.${50 + n}`).join('\n'),
+    remove: () => { registered--; return 'Removal Successful for extension S-Captions'; },
+  });
+  f.link(); f.install([]);
+  const order = f.calls.filter(call => call.exe === upia).map(call => call.args[0]);
+  assert.equal(registered, 0);
+  assert.deepEqual(order.filter(arg => arg === '--remove').length, 3);
+  assert.ok(order.lastIndexOf('--remove') < order.indexOf('--install'), 'cleanup finishes before the new install');
+  assert.equal(order.filter(arg => arg === '--install').length, 1);
+});
+
+test('installation stops instead of installing when Adobe cannot remove an old registration', t => {
+  const f = fixture(t, { list: () => ' Enabled    S-Captions                 0.7.50', remove: () => 'Operation pending' });
+  f.link();
+  assert.throws(() => f.install([]), /could not remove the previous S-Captions registration/);
+  assert.equal(f.calls.filter(call => call.exe === upia && call.args[0] === '--install').length, 0);
 });

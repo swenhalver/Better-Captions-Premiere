@@ -1,0 +1,7 @@
+# 0.7.102: The line list stays put when an edit is confirmed
+
+**Typing at the bottom of the line list no longer moves it.** After Premiere confirmed an edit, the line list could still jump about 25 pixels. Every confirmed edit gives the caption layer a new revision. The Pause Line Length, Position & size, Alignment and Scrolling controls then dropped their values until they re-read them from Premiere, and for that short moment those controls disappeared from the panel. The panel got shorter, the browser pulled the scroll position up, and the controls then came back. Those controls now keep the values they last confirmed for the same caption layer, so nothing above the list collapses.
+
+Kept values are only shown. They are never used to change anything: an edit made during the re-read waits for the fresh values from Premiere and is then sent against them. A change already sent is never sent again, and a keyframe step started at that moment is cancelled. Switching to another clip, sequence or project still clears the controls straight away.
+
+**Tests.** New controller tests cover this: values kept across a revision change, edits waiting for the fresh read, old replies ignored, no repeated reads while the panel is hidden or a read fails, and clearing on a layer switch. `npm test` and `npm run check` pass. The native effect is unchanged from 0.7.101. The steady line list still needs to be checked inside Premiere.

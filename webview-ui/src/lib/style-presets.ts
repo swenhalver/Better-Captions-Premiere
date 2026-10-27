@@ -5,7 +5,7 @@ import { validateStylePatch } from './agent-bridge.ts';
 export const PRESET_STORAGE_KEY = 'better-captions-style-presets-v1';
 export const PRESET_LIMIT = 200;
 export const PRESET_BYTES = 2 * 1024 * 1024;
-export type PresetStyle = Omit<StyleConfig, 'positionX' | 'positionY' | 'maxChars'>;
+export type PresetStyle = Omit<StyleConfig, 'positionX' | 'positionY' | 'maxChars' | 'lineWrap'>;
 export interface PresetLook { style: PresetStyle; animation: AnimationConfig; }
 export interface StylePreset extends PresetLook { id: string; name: string; createdAt: number; updatedAt: number; }
 export interface PresetLibrary { version: 1; revision: number; presets: StylePreset[]; }
@@ -14,8 +14,8 @@ export const emptyPresetLibrary = (): PresetLibrary => ({ version: 1, revision: 
 const styleKeys = ['fontFamily', 'fontSize', 'fontWeight', 'textColor', 'strokeEnabled', 'strokeColor', 'strokeOpacity', 'strokeWidth', 'shadowEnabled', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY', 'backgroundEnabled', 'backgroundColor', 'backgroundOpacity', 'backgroundPadding', 'backgroundRadius', 'textAlign', 'maxWidth', 'lineHeight', 'textTransform', 'activeWord', 'spokenWord', 'upcomingWord'];
 const wordKeys = ['fontFamily', 'fontWeight', 'fontSize', 'sizeScale', 'color', 'opacity', 'italic', 'letterSpacing', 'textTransform', 'bubble', 'bubbleColor', 'bubbleOpacity', 'padding', 'radius', 'strokeEnabled', 'strokeColor', 'strokeOpacity', 'strokeWidth', 'shadowEnabled', 'shadowColor', 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'];
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
-function exact(value: unknown, keys: string[], label: string): asserts value is Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== keys.length || keys.some(key => !Object.hasOwn(value, key))) throw new Error(`Invalid ${label}. The saved preset has missing or unsupported fields.`);
+function exact(value: unknown, keys: string[], label: string, optional: string[] = []): asserts value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !keys.includes(key) && !optional.includes(key)) || keys.some(key => !Object.hasOwn(value, key))) throw new Error(`Invalid ${label}. The saved preset has missing or unsupported fields.`);
 }
 export function presetName(value: string): string {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > 80 || /[\x00-\x1f\x7f]/.test(value)) throw new Error('Enter a preset name of 1–80 characters.');
@@ -23,8 +23,8 @@ export function presetName(value: string): string {
 }
 export function validatePresetLook(value: unknown): PresetLook {
   exact(value, ['style', 'animation'], 'preset');
-  exact(value.style, styleKeys, 'preset style');
-  for (const state of ['spokenWord', 'activeWord', 'upcomingWord']) exact(value.style[state], wordKeys, 'word style');
+  exact(value.style, styleKeys, 'preset style', ['wordSpacing', 'lineStyles']);
+  for (const state of ['spokenWord', 'activeWord', 'upcomingWord']) exact(value.style[state], wordKeys, 'word style', ['fontWeightOffset', 'bubbleFillSpaces', 'bubblePaddingInline', 'bubblePaddingBlock', 'underline', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft']);
   validateStylePatch(value.style);
   exact(value.animation, ['preset', 'fadeInDuration', 'fadeOutDuration', 'highlightColor'], 'preset animation');
   const a = value.animation;
@@ -33,9 +33,10 @@ export function validatePresetLook(value: unknown): PresetLook {
       [a.fadeInDuration, a.fadeOutDuration].some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 5)) throw new Error('Invalid saved animation settings.');
   return clone(value) as unknown as PresetLook;
 }
-/** Resolve inheritance so a saved look fully replaces all three word appearances. */
+/** Resolve inheritance so a saved look fully replaces all three word appearances.
+ * Line position styles stay sparse overrides, so they keep inheriting from them. */
 export function capturePresetLook(style: StyleConfig, animation: AnimationConfig): PresetLook {
-  const { positionX: _x, positionY: _y, maxChars: _count, ...look } = style;
+  const { positionX: _x, positionY: _y, maxChars: _count, lineWrap: _wrap, ...look } = style;
   return validatePresetLook({ style: { ...look, spokenWord: resolveAppearance(style, 'spokenWord'), activeWord: resolveAppearance(style, 'activeWord'), upcomingWord: resolveAppearance(style, 'upcomingWord') }, animation });
 }
 export function validatePresetLibrary(value: unknown): PresetLibrary {
@@ -63,5 +64,7 @@ export function changeStylePreset(library: PresetLibrary, id: string, change: { 
 }
 export function applyPresetLook(style: StyleConfig, look: PresetLook): { style: StyleConfig; animation: AnimationConfig } {
   const validated = validatePresetLook(look);
-  return { style: { ...style, ...validated.style }, animation: validated.animation };
+  // A look replaces the line position styles too, clearing them when it has none.
+  const { wordSpacing: _previousSpacing, lineStyles: _previousLines, ...current } = style;
+  return { style: { ...current, ...validated.style }, animation: validated.animation };
 }

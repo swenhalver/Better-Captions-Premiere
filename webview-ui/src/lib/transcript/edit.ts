@@ -1,18 +1,54 @@
 import type {CaptionItem,CaptionWord} from '../types';
 let nextSplitId=0;
+/** An empty word is a blank line: a timed row with no visible text. It always
+ * stands alone as its own line and keeps the time its deleted words had. */
+export const isBlankWord=(w:CaptionWord)=>w.text==='';
+/** Earliest allowed start: 0, or a native layer's (possibly negative) source zero. */
+const timeFloor=(c:CaptionItem)=>Number.isFinite(c.timelineFloor)?Math.min(0,c.timelineFloor!):0;
 export function validateCaptions(captions:CaptionItem[]){
   if(!captions.length)throw new Error('Transcribe or load captions first.');
   const ids=new Set<string>();
   captions.forEach((c,i)=>{
     if(ids.has(c.id))throw new Error('Duplicate caption ID.');ids.add(c.id);
-    if(!Number.isFinite(c.startTime)||!Number.isFinite(c.endTime)||c.startTime<0||c.endTime<=c.startTime)throw new Error(`Caption ${i+1}: end must be after start.`);
+    const floor=timeFloor(c),native=c.timelineFloor!==undefined;
+    if(!Number.isFinite(c.startTime)||!Number.isFinite(c.endTime)||c.startTime<floor||c.endTime<=c.startTime)throw new Error(`Caption ${i+1}: end must be after start.`);
     if(i&&c.startTime<captions[i-1].endTime-.0001)throw new Error(`Caption ${i+1} overlaps the previous caption.`);
     if(!c.words.length)throw new Error(`Caption ${i+1} needs at least one word.`);
-    c.words.forEach((w,j)=>{if(!w.text.trim()||!Number.isFinite(w.startTime)||!Number.isFinite(w.endTime)||w.startTime<c.startTime-.0001||w.endTime>c.endTime+.0001||w.endTime<=w.startTime)throw new Error(`Caption ${i+1}, word ${j+1}: keep word timing inside the caption.`);if(j&&w.startTime<c.words[j-1].endTime-.0001)throw new Error(`Caption ${i+1}: word timings overlap.`);});
+    c.words.forEach((w,j)=>{if(w.text!==''&&!w.text.trim()||!Number.isFinite(w.startTime)||!Number.isFinite(w.endTime)||w.startTime<c.startTime-.0001||native&&w.startTime<floor||w.endTime>c.endTime+.0001||w.endTime<=w.startTime)throw new Error(`Caption ${i+1}, word ${j+1}: keep word timing inside the caption.`);if(j&&w.startTime<c.words[j-1].endTime-.0001)throw new Error(`Caption ${i+1}: word timings overlap.`);});
   });return true;
 }
 export function replaceText(c:CaptionItem,text:string):CaptionItem{
-  const tokens=text.trim().split(/\s+/).filter(Boolean);if(!tokens.length)throw new Error('A caption cannot be empty.');
+  const tokens=text.trim().split(/\s+/).filter(Boolean);
+  if(!tokens.length){
+    // Deleting every word leaves a blank line over the same time, with the
+    // line's own boundary and pause metadata. An empty range stays empty.
+    if(!c.words.length||c.words.length===1&&isBlankWord(c.words[0]))return c;
+    const first=c.words[0];
+    const blank:CaptionWord={text:'',startTime:first.startTime,endTime:Math.max(...c.words.map(w=>w.endTime)),isActive:false,
+      ...(first.lineBreakBefore&&first.lineBreakBefore!=='join'?{lineBreakBefore:first.lineBreakBefore}:{}),
+      ...(first.pauseLinesRemoved!==undefined?{pauseLinesRemoved:first.pauseLinesRemoved}:{})};
+    return {...c,text:'',words:[blank]};
+  }
+  const keepLine=(words:CaptionWord[]):CaptionWord[]=>{
+    const removed=c.words[0]?.pauseLinesRemoved;
+    // Pause deletion belongs to the boundary before this line, including when
+    // its first spoken word is replaced, removed or preceded by new typing.
+    const bounded=words.map((word,index)=>{
+      const next={...word};
+      if(removed!==undefined){
+        if(index===0)next.pauseLinesRemoved=removed;
+        else if(word.startTime===c.words[0].startTime)delete next.pauseLinesRemoved;
+      }
+      return next;
+    });
+    const first=c.words[0]?.lineBreakBefore;
+    if(first!=='break'&&first!=='edge')return bounded;
+    // The line keeps its leading boundary even when its first word is retimed.
+    // A merged line (two or more words, the rest joined) stays one joined row;
+    // the new words of any other line, such as a refilled blank, still wrap.
+    const merged=c.words.length>1&&c.words.slice(1).every(word=>word.lineBreakBefore==='join');
+    return bounded.map((word,index)=>index===0?{...word,lineBreakBefore:first}:merged?{...word,lineBreakBefore:'join'}:word);
+  };
   if(tokens.length===c.words.length)return {...c,text:tokens.join(' '),words:c.words.map((w,i)=>({...w,text:tokens[i]}))};
   const last=c.words[c.words.length-1]?.endTime??c.endTime;
   const estimate=(items:string[],start:number,end:number):CaptionWord[]=>{
@@ -41,10 +77,10 @@ export function replaceText(c:CaptionItem,text:string):CaptionItem{
   }
   // Inserting speech into a gap with no duration necessarily changes timing.
   // Mark estimates visibly, and let the timing editor provide exact corrections.
-  return {...c,text:tokens.join(' '),timingEstimated:true,words:canPreserve?words:estimate(tokens,c.startTime,last)};
+  return {...c,text:tokens.join(' '),timingEstimated:true,words:keepLine(canPreserve?words:estimate(tokens,c.startTime,last))};
 }
 export function retime(c:CaptionItem,start:number,end:number):CaptionItem{
-  if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start)throw new Error('Caption end must be after its nonnegative start.');
+  if(!Number.isFinite(start)||!Number.isFinite(end)||start<timeFloor(c)||end<=start)throw new Error('Line end must be after its nonnegative start.');
   validateCaptions([c]);const scale=(end-start)/(c.endTime-c.startTime);
   const updated={...c,startTime:start,endTime:end,words:c.words.map(w=>({...w,startTime:start+(w.startTime-c.startTime)*scale,endTime:start+(w.endTime-c.startTime)*scale}))};
   validateCaptions([updated]);return updated;

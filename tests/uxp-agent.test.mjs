@@ -74,7 +74,7 @@ test('UXP agent discovers the same private CLI root and publishes resolved async
   assert.deepEqual(f.required,['./storage.js']);assert.ok(f.entries.has(ROOT+'/requests'));assert.ok(f.entries.has(ROOT+'/responses'));
   const initial=JSON.parse((await f.instances.getEntries())[0].text);
   assert.equal(initial.version,1);assert.match(initial.instanceId,/^[a-f0-9]{32}$/);assert.equal(initial.sequenceId,'sequence-a');assert.equal(initial.busy,false);
-  assert.deepEqual(initial.capabilities,['get_state','patch_style','patch_animation','set_captions','set_position','read_area','edit_area','refresh','apply']);
+  assert.deepEqual(initial.capabilities,['get_state','patch_style','patch_animation','set_captions','set_position','read_area','edit_area','refresh','apply','test_typing','test_history']);
   f.state.sequenceName='New name';f.advance(5000);await f.tick(5000);
   const latest=JSON.parse((await f.instances.getEntries())[0].text);assert.equal(latest.sequenceName,'New name');assert.equal(latest.updatedAt,initial.updatedAt+5000);assert.equal(f.errors.length,0);
 });
