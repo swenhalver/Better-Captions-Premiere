@@ -627,34 +627,48 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    // Plain vertical scrolling that waits for lines moves at one rate. A run
    // eases in like an ordinary scroll, cruises at that scroll's peak speed and
    // eases out like it, so one row is exactly an ordinary scroll and every
-   // further row adds the same 2/3 of one. Blank rows (authored, derived or
-   // the opening's virtual ones) never hold the run, so it glides through
-   // them and stops on the next text line.
-   // Each run is timed back from the line it stops on: it settles arrivalLead
-   // before that line's first word, so a pause holds the line in the current
-   // slot rather than the next one. It never departs before the line it
+   // further row adds the same 2/3 of one. A run glides through blank rows
+   // (authored, derived or the opening's virtual ones) without stopping
+   // between them.
+   // A run is timed back from the line it stops on: it settles arrivalLead
+   // before that line's first word. It never departs before the line it
    // leaves has ended (or the stream starts), nor before the previous run has
    // settled. When those come later, it departs then at the same rate and the
    // line arrives after its first word, whose highlighting keeps its own time.
    // A run that arrives at a line already ended carries on past it, unless
    // that would bring the next line in early. Trailing blanks go at once.
+   // Blank rows after a text line take the wait instead of that line: the
+   // run leaves as soon as the line ends and stops on the last blank, which
+   // holds the current slot, then one ordinary scroll brings the next line
+   // in on time. The opening has no line to leave, so its run just waits.
+   // When the gap is too short to stop on the blank first, the run carries
+   // straight on and settles at most pace/3 before its usual arrival, so up
+   // to arrivalLead+pace/3 before that line's first word.
    constexpr double arrivalLead=.1;
    struct Run{double start,count;};std::vector<Run> runs;
    auto runLength=[&](double count){return pace*(1+2*(count-1)/3);};
-   double departure=rows.front().start,count=opening?double(lead-1):0;
+   auto schedule=[&](double departure,double count,double arrival){
+    auto* previous=runs.empty()?nullptr:&runs.back();
+    const double settled=previous?previous->start+runLength(previous->count):departure;
+    // The run would pass the row it now stops on pace/6 before its end.
+    if(previous&&departure<=settled-pace/6&&previous->start+runLength(previous->count+count)>=arrival)previous->count+=count;
+    else runs.push_back({std::max({departure,settled,arrival-runLength(count)}),count});
+   };
+   constexpr double now=-std::numeric_limits<double>::infinity();
+   double departure=rows.front().start,count=opening?double(lead-1):0;bool leavingText=false;
    for(std::size_t index=0;index<blocks;++index){
     if(index>0)++count;
     const auto& row=rows[index];const bool text=!row.words.empty();
     if(!text&&index+1<blocks)continue;
     if(count>0){
-     const double arrival=text?row.start-arrivalLead:-std::numeric_limits<double>::infinity();
-     auto* previous=runs.empty()?nullptr:&runs.back();
-     const double settled=previous?previous->start+runLength(previous->count):departure;
-     // The run would pass the row it now stops on pace/6 before its end.
-     if(previous&&departure<=settled-pace/6&&previous->start+runLength(previous->count+count)>=arrival)previous->count+=count;
-     else runs.push_back({std::max({departure,settled,arrival-runLength(count)}),count});
+     const double arrival=text?row.start-arrivalLead:now;
+     if(leavingText&&text&&count>1){
+      schedule(departure,count-1,now);
+      auto& early=runs.back();const double waited=early.start+runLength(early.count);
+      if(waited+pace<=arrival)runs.push_back({arrival-pace,1});else ++early.count;
+     }else schedule(departure,count,arrival);
     }
-    departure=row.end;count=0;
+    departure=row.end;count=0;leavingText=text;
    }
    for(const auto& run:runs){
     const double elapsed=time-run.start,cruise=pace*2*(run.count-1)/3;
