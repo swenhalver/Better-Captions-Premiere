@@ -623,6 +623,8 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    }
    return rowTops[index]+fraction*rows[index].advance(d.style.lineHeight);
   };
+  // Rows from a boundary on go no further than its cap (in rows of progress).
+  std::vector<std::pair<std::size_t,double>> caps;
   if(!horizontal&&settings.waitForLine&&settings.transition==1){
    // Plain vertical scrolling that waits for lines moves at one rate. A run
    // eases in like an ordinary scroll, cruises at that scroll's peak speed and
@@ -637,24 +639,41 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    // line arrives after its first word, whose highlighting keeps its own time.
    // A run that arrives at a line already ended carries on past it, unless
    // that would bring the next line in early. Trailing blanks go at once.
-   // Blank rows after a text line take the wait instead of that line: the
-   // run leaves as soon as the line ends and stops on the last blank, which
-   // holds the current slot, then one ordinary scroll brings the next line
-   // in on time. The opening has no line to leave, so its run just waits.
-   // When the gap is too short to stop on the blank first, the run carries
-   // straight on and settles at most pace/3 before its usual arrival, so up
-   // to arrivalLead+pace/3 before that line's first word.
+   // Blank rows between two text lines take a pause by stretching. The line
+   // that ended, and every row before it, makes the run as soon as it ends.
+   // The next line, and every row after it, waits out of sight at least
+   // outside rows from the current slot (just beyond the new-line edge, its
+   // whole paint outside the window) and enters from there on its own run at
+   // the same rate, settling arrivalLead before its first word. Entering
+   // rows are placed by their own slots (see enteringRows), never by what
+   // the rows before them measure. When the gap is shorter than that entry,
+   // the entry starts while the line before is still in place, so the next
+   // line is already moving when it comes into view. It never gets closer to
+   // the rows before it than their settled spacing, so it settles no sooner
+   // than they do (a gap too short for that arrives late, never early or
+   // parked), and it does not set off before the run before has settled. The
+   // opening has no line to leave, so it just waits.
    constexpr double arrivalLead=.1;
-   struct Run{double start,count;};std::vector<Run> runs;
+   // Rows from the current slot at which an entering row's paint, outsets
+   // included, is wholly beyond the new-line edge. Past that edge a row
+   // moves by the edge slot's height. Scrolling down, the part that crosses
+   // first is the row's bottom, ascent+descent below its top: more than one
+   // slot when line height is under 1 (the slot's reserved extent bounds it).
+   const bool up=settings.direction==1;
+   const double edgeHeight=positioned?(up?slotTop[lines]-slotTop[lines-1]:slotTop[1]-slotTop[0]):rowHeight;
+   const auto& outset=result.directionalPaintOutset;
+   const double outside=double(lead)+(up?outset[0]/edgeHeight:std::max(0.0,(edgeHeight/d.style.lineHeight+outset[1])/edgeHeight-1));
+   // A stretched run's rows from boundary on wait at its start progress
+   // plus count minus entry rows, then make an entry-row run from entryStart.
+   struct Run{double start,count;std::size_t boundary;double entry,entryStart;};std::vector<Run> runs;
    auto runLength=[&](double count){return pace*(1+2*(count-1)/3);};
-   auto schedule=[&](double departure,double count,double arrival){
-    auto* previous=runs.empty()?nullptr:&runs.back();
-    const double settled=previous?previous->start+runLength(previous->count):departure;
-    // The run would pass the row it now stops on pace/6 before its end.
-    if(previous&&departure<=settled-pace/6&&previous->start+runLength(previous->count+count)>=arrival)previous->count+=count;
-    else runs.push_back({std::max({departure,settled,arrival-runLength(count)}),count});
-   };
+   auto settledAt=[&](const Run& run){return run.boundary?run.entryStart+runLength(run.entry):run.start+runLength(run.count);};
    constexpr double now=-std::numeric_limits<double>::infinity();
+   // Times the entry of rows from boundary on, after the run before settles at floor.
+   auto stretch=[&](Run& run,std::size_t boundary,double arrival,double floor){
+    run.boundary=boundary;run.entry=std::max(run.count,outside);
+    run.entryStart=std::max({arrival,run.start+runLength(run.count),floor+runLength(run.entry)})-runLength(run.entry);
+   };
    double departure=rows.front().start,count=opening?double(lead-1):0;bool leavingText=false;
    for(std::size_t index=0;index<blocks;++index){
     if(index>0)++count;
@@ -662,23 +681,38 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
     if(!text&&index+1<blocks)continue;
     if(count>0){
      const double arrival=text?row.start-arrivalLead:now;
-     if(leavingText&&text&&count>1){
-      schedule(departure,count-1,now);
-      auto& early=runs.back();const double waited=early.start+runLength(early.count);
-      if(waited+pace<=arrival)runs.push_back({arrival-pace,1});else ++early.count;
-     }else schedule(departure,count,arrival);
+     const bool pause=leavingText&&text&&count>1;
+     auto* previous=runs.empty()?nullptr:&runs.back();
+     const double settled=previous?settledAt(*previous):departure;
+     // The run would pass the row it now stops on pace/6 before its end.
+     // Passing it never brings a line in early when the next rows wait.
+     if(previous&&!previous->boundary&&departure<=settled-pace/6&&(pause||previous->start+runLength(previous->count+count)>=arrival)){
+      previous->count+=count;
+      if(pause)stretch(*previous,index,arrival,runs.size()>1?settledAt(runs[runs.size()-2]):now);
+     }else{
+      Run run{std::max(departure,settled),count,0,0,0};
+      if(pause)stretch(run,index,arrival,previous?settled:now);
+      else run.start=std::max(run.start,arrival-runLength(count));
+      runs.push_back(run);
+     }
     }
     departure=row.end;count=0;leavingText=text;
    }
-   for(const auto& run:runs){
-    const double elapsed=time-run.start,cruise=pace*2*(run.count-1)/3;
+   auto moved=[&](double elapsed,double count){
     // A zero Transition duration steps instantly when the run is due.
-    if(!(pace>0)){if(elapsed>=0)steps+=run.count;continue;}
-    if(elapsed<=0)continue;
-    if(elapsed>=pace+cruise)steps+=run.count;
-    else if(elapsed<pace/2)steps+=rollCurve(elapsed/pace,2);
-    else if(elapsed<pace/2+cruise)steps+=.5+1.5*(elapsed-pace/2)/pace;
-    else steps+=run.count-1+rollCurve(.5+(elapsed-pace/2-cruise)/pace,2);
+    if(!(pace>0))return elapsed>=0?count:0.0;
+    const double cruise=pace*2*(count-1)/3;
+    if(elapsed<=0)return 0.0;
+    if(elapsed>=pace+cruise)return count;
+    if(elapsed<pace/2)return rollCurve(elapsed/pace,2);
+    if(elapsed<pace/2+cruise)return .5+1.5*(elapsed-pace/2)/pace;
+    return count-1+rollCurve(.5+(elapsed-pace/2-cruise)/pace,2);
+   };
+   double before=steps;
+   for(const auto& run:runs){
+    // Rows from a boundary wait entry rows short of where the run ends.
+    if(run.boundary&&time<run.entryStart+runLength(run.entry))caps.push_back({run.boundary,before+run.count-run.entry+moved(time-run.entryStart,run.entry)});
+    steps+=moved(time-run.start,run.count);before+=run.count;
    }
   }else{
    if(opening)steps+=double(lead-1)*rollCurve((time-rows.front().start)/pace,2);
@@ -695,10 +729,10 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
   }
   // Each drawn row at one scroll progress, with its left/top in the frame.
   using Visit=std::function<void(const ComposedRow&,double left,double top)>;
-  auto legacyRows=[&](double progress,const Visit& visit){
+  auto legacyRows=[&](double progress,const Visit& visit,std::size_t from,std::size_t to){
    const double offset=initialOffset+(horizontal?distance*progress:authoredOffset(progress));
    const double legacyOffset=initialOffset+distance*progress;
-   for(std::size_t index=0;index<rows.size();++index){
+   for(std::size_t index=from;index<std::min(to,rows.size());++index){
     const auto& line=rows[index];
     double left=box.x,top=viewportTop,eligibilityTop=viewportTop;
     if(horizontal){const auto block=index/lines;const double shift=block*box.width-offset;left+=settings.direction==3?shift:-shift;top+=rowTops[index]-rowTops[block*lines];eligibilityTop+=(index%lines)*rowHeight;}
@@ -735,7 +769,7 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
    const auto index=static_cast<std::size_t>(std::max(0.0,std::min(double(lines-1),std::floor(slot))));
    return slotTop[index]+(slot-double(index))*(slotTop[index+1]-slotTop[index]);
   };
-  auto positionedRows=[&](double progress,const Visit& visit){
+  auto positionedRows=[&](double progress,const Visit& visit,std::size_t from,std::size_t to){
    const auto count=rows.size();
    if(horizontal){
     // Pages slide sideways whole; a row keeps the slot it has in its page.
@@ -779,7 +813,41 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
     for(auto index=anchor+1;index<=last;++index)tops[index-first]=tops[index-1-first]-advance(index);
     for(auto index=anchor;index>first;--index)tops[index-1-first]=tops[index-first]+advance(index);
    }
-   for(auto index=first;index<=last;++index)if(drawn(index))visit(composed[index-first],box.x,viewportTop+tops[index-first]);
+   for(auto index=std::max(first,from);index<=last&&index<to;++index)if(drawn(index))visit(composed[index-first],box.x,viewportTop+tops[index-first]);
+  };
+  // Rows [boundary,to) still entering after a pause, the boundary row
+  // boundary-progress rows short of the current slot. It sits at that
+  // slot's place in the window (past the new-line edge it carries on at the
+  // edge slot's height) and the rows after it stack on it by their own
+  // advances, as they will settle. Rows before it, leaving at their own
+  // progress, never move it. Only rows that settle in view are drawn, each
+  // from when its slot reaches the window or its paint, outsets included,
+  // crosses the new-line edge, whichever comes first, so none pops in.
+  auto enteringRows=[&](double progress,const Visit& visit,std::size_t boundary,std::size_t to){
+   const bool up=settings.direction==1;
+   const double anchorSlot=double(up?lines-lead:lead-1),remaining=double(boundary)-progress;
+   // Without line position styles every slot is rowHeight, the bottom one
+   // ending at the viewport's bottom.
+   auto windowY=[&](double slot){return positioned?slotY(slot):slot*rowHeight+(up?0:viewportHeight-double(lines)*rowHeight);};
+   const auto& outset=result.directionalPaintOutset;
+   const double bottom=viewportTop+viewportHeight;
+   const double edgeTolerance=std::numeric_limits<double>::epsilon()*64*std::max({1.0,std::abs(viewportTop),box.width,viewportHeight});
+   double top=viewportTop+windowY(up?anchorSlot+remaining:anchorSlot-remaining);
+   // Waiting wholly beyond the new-line edge. Rows past it take the edge
+   // slot's style, so its reserved extent bounds their paint.
+   const double edgeExtent=(positioned?slotTop[1]-slotTop[0]:rowHeight)/d.style.lineHeight;
+   if(remaining>=double(lead)&&(up?top-outset[0]>=bottom-edgeTolerance:top+edgeExtent+outset[1]<=viewportTop+edgeTolerance))return;
+   double advance=0;
+   for(auto index=boundary;index<std::min(to,rows.size())&&index-boundary<lead;++index){
+    const double away=double(index-boundary)+remaining,slot=up?anchorSlot+away:anchorSlot-away;
+    ComposedRow restyled;if(positioned)restyled=positionedRow(index,slot);
+    const auto& row=positioned?restyled:rows[index];
+    if(index>boundary)top=up?top+advance:top-row.advance(d.style.lineHeight);
+    advance=row.advance(d.style.lineHeight);
+    const bool slotted=slot>-1+1e-9&&slot<double(lines)-1e-9;
+    const bool painted=top-outset[0]<bottom-edgeTolerance&&top+row.ascent+row.descent+outset[1]>viewportTop+edgeTolerance;
+    if(slotted||painted)visit(row,box.x,top);
+   }
   };
   // Crossfade neighbouring settled windows for creative transitions. Reusing
   // the cumulative smooth progress also handles overlapping short-line events
@@ -788,7 +856,9 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
   auto wordId=[](const DrawWord& word){return WordId{word.containerId,word.wordIndex};};
   // Authored (pre-fade) opacity of every pushed run, index-aligned with result.words.
   std::vector<double> authoredOpacity;
-  auto paint=[&](double progress,double alpha,double scale,double shiftX,double shiftY,std::map<WordId,DrawWord>* settled=nullptr){
+  // Rows [from,to) only, each at the place it has with every row at
+  // progress, or as rows entering from from (see enteringRows).
+  auto paint=[&](double progress,double alpha,double scale,double shiftX,double shiftY,std::map<WordId,DrawWord>* settled=nullptr,std::size_t from=0,std::size_t to=std::numeric_limits<std::size_t>::max(),bool entering=false){
    if(alpha<=0)return;
    const double centerX=box.x+box.width/2,centerY=viewportTop+viewportHeight/2;
    const Visit visit=[&](const ComposedRow& line,double left,double top){
@@ -803,9 +873,15 @@ Frame rollingFrame(const Document& d,double time,const LayoutBox& box,const Meas
      result.words.push_back(std::move(run));
     }
    };
-   if(positioned)positionedRows(progress,visit);else legacyRows(progress,visit);
+   if(entering)enteringRows(progress,visit,from,to);else if(positioned)positionedRows(progress,visit,from,to);else legacyRows(progress,visit,from,to);
   };
-  if(settings.transition==1)paint(steps,1,1,0,0);
+  if(settings.transition==1){
+   // Rows from a boundary whose entry is still to finish enter by their own
+   // slots, even while their run keeps pace with the rows before.
+   std::size_t from=0;double progress=steps;
+   for(const auto& [boundary,cap]:caps){paint(progress,1,1,0,0,nullptr,from,boundary,from>0);from=boundary;progress=std::min(progress,cap);}
+   paint(progress,1,1,0,0,nullptr,from,std::numeric_limits<std::size_t>::max(),from>0);
+  }
   else{
    if(std::abs(steps-std::round(steps))<1e-9)steps=std::round(steps);
    const double previous=std::floor(steps),progress=steps-previous;

@@ -186,6 +186,57 @@ int main(){
   check(entry.pixels==renderOpening(10,settings).pixels,"Backward seek changed the opening pixels");
  }
  check(encode(opening)==openingBytes,"Leading blanks changed word timing or saved caption data");
+ // A line entering after a pause comes in over the new-line edge in real
+ // CoreText pixels, whatever the rows leaving before it measure: Current
+ // 60 px red, Next 30 px green, Past 30 px red, line height 1, four slots,
+ // current line 2 scrolling up and 3 scrolling down (three slots from the
+ // edge either way), 0.18 s at 0.7x as stored. "After." follows "Before."
+ // (0-10 s) after one blank row, briefly (its entry starts while "Before."
+ // is still in place) or after a long pause (the window first waits still).
+ // Its green ink shows nowhere before the entry, first reaches the window at
+ // the edge, then comes in at most a frame's travel at a time, every frame.
+ // A second pass gives Next a green outline, shadow and background with a
+ // negative top margin, whose paint reaches past the row.
+ for(bool decorated:{false,true})for(double afterStart:{10.614285744,12.})for(int direction:{1,2}){
+  Document entering;entering.containers.push_back({"entry-pixels",false,{{"Before.",0,10,true},{"",10,afterStart,true},{"After.",afterStart,afterStart+1,true}}});
+  for(auto* style:{&entering.style.current,&entering.style.spoken,&entering.style.upcoming}){style->fontFamily="Arial";style->fontSize=30;style->padding=0;style->bubble=false;style->shadowColor.a=0;style->color={1,0,0,1};}
+  entering.style.current.fontSize=60;entering.style.lineHeight=1;
+  auto& next=entering.style.upcoming;next.color={0,1,0,1};
+  if(decorated){next.outlineWidth=4;next.outlineColor={0,.6,0,1};next.shadowColor={0,.8,0,1};next.shadowBlur=3;next.shadowY=2;next.bubble=true;next.bubbleColor={0,.4,.4,1};next.paddingTop=5;next.paddingBottom=3;next.marginTop=-6;}
+  const auto enteringBytes=encode(entering);
+  RollUpSettings settings;settings.enabled=true;settings.boundaryEnabled=false;settings.direction=direction;settings.visibleLines=4;settings.currentLine=direction==1?2:3;settings.scrollDuration=.180000007;settings.speed=.699999988;
+  // The bitmap has room beyond both edges of the window for unclipped paint.
+  const LayoutBox enteringBox{0,70,220,280,1};const std::size_t width=220,height=430;
+  const auto viewport=layoutFrame(entering,5,enteringBox,nativeMeasure,56,.6,{},1,settings).viewport;
+  const double pace=settings.scrollDuration/settings.speed,every=1./240,edge=direction==1?viewport.y+viewport.height:viewport.y;
+  // One frame's travel at the shared rate in whole pixels, plus antialiasing.
+  const int step=int(std::ceil(1.5*viewport.height/4/pace*every))+1;
+  check(viewport.height>=240&&viewport.y>60&&viewport.y+viewport.height+60<height&&step<=3,"Entering-line fixture lost its four slots or the room around them");
+  auto render=[&](double time){return macos::rasterize(entering,time,enteringBox,width,height,56,.6,1,settings);};
+  // How many pixel rows into the window green ink reaches from the edge
+  // (zero or less while it is all outside), or -1000 with no green ink.
+  // Rows are searched from the far side of the window, so the first green
+  // row found is the deepest.
+  auto greenDepth=[&](const macos::Bitmap& pixels){
+   for(std::size_t row=0;row<pixels.height;++row){const auto y=direction==1?row:pixels.height-1-row;
+    for(std::size_t x=0;x<pixels.width;++x){const auto* pixel=&pixels.pixels[y*pixels.stride+x*4];
+     if(pixel[3]&&pixel[1])return direction==1?int(std::floor(edge-double(y))):int(std::ceil(double(y)+1-edge));}}
+   return -1000;};
+  const double settle=10+pace*5/3,arrival=afterStart-.1;
+  for(double time:{5.,9.,9.5})check(greenDepth(render(time))==-1000,"Next line showed before its entry");
+  if(afterStart>11){const auto waiting=render(settle);for(double time:{settle,10.7,11.15}){const auto pixels=render(time);check(greenDepth(pixels)==-1000&&pixels.pixels==waiting.pixels,"Window moved or showed the next line while waiting out the pause");}}
+  // Every frame while it crosses the edge, then every fourth.
+  int previous=-1000;double first=-1,stride=every;
+  for(double time=afterStart>11?11.15:9.8;time<arrival;time+=stride){
+   const int depth=greenDepth(render(time));
+   if(depth==-1000){check(first<0,"Entering line vanished before it settled");continue;}
+   if(first<0){first=time;check(depth<=step,"Entering line popped into the window instead of crossing its edge");}
+   else check(depth-previous<=int(std::ceil(1.5*viewport.height/4/pace*stride))+1&&depth>=previous-1,"Entering line jumped instead of coming in at the shared rate");
+   previous=depth;if(time>first+.05)stride=4*every;
+  }
+  check(first>0&&previous>100&&(afterStart<11||first>11.1),"Entering line never came into the window, or came in early");
+  check(encode(entering)==enteringBytes,"Entering line changed saved caption data");
+ }
  // Authored padding determines row height even with backgrounds disabled.
  // Toggling paint alone retains glyphs, blank-row advances and capacity.
  Document background; background.containers.push_back({"background-lines",false,{{"One.",0,1,true},{"Two.",1,2,true},{"After.",4,5,true},{"Four.",5,6,true},{"Six.",6,7,true}}});background.style.lineHeight=1.3;

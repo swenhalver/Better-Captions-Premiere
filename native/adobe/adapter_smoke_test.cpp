@@ -180,15 +180,16 @@ int main(int argc,char** argv){try{
  check(greenCurrent>20,"Compiled Fade did not keep the currently spoken word legible");
  const auto savedFixture=fixture;
  fixture=better_captions::Document{};fixture.containers.push_back({"blank-length",false,{{"First.",0,1,true},{"Second.",1,2,true},{"Third.",2,3,true},{"After.",5.49,6.49,true}}});
- // Third leaves as soon as it ends at 3s: Auto runs through two blank rows
- // (until 3.3s) and 2s through one (until 3.18s), so at 3.2s they show
- // different row counts. Both then wait on their last blank for After.
- in.current_time=320;values[RollUpLines].u.fs_d.value=3;values[LineTransition].u.fs_d.value=1;
+ // With the current line at the bottom, Third leaves as soon as it ends at
+ // 3s, through three rows with Auto (two blank rows) and two with 2s (one).
+ // At 4s Auto has taken it out of the window while 2s holds it in the top
+ // slot; After is still out of sight beyond the edge in both.
+ in.current_time=400;values[RollUpLines].u.fs_d.value=3;values[RollUpCurrentLine].u.fs_d.value=3;values[LineTransition].u.fs_d.value=1;
  const auto autoBlankPixels=typographyFrame();values[RollUpBlankLineSeconds].u.fs_d.value=0;
  check(!differs(autoBlankPixels,typographyFrame()),"explicit Auto must render byte-identical pixels to the default");
  values[RollUpBlankLineSeconds].u.fs_d.value=2;
  check(differs(autoBlankPixels,typographyFrame()),"compiled Pause Line Length did not change ordinary pause-line cadence");
- values[RollUpBlankLineSeconds].u.fs_d.value=0;values[RollUpLines].u.fs_d.value=2;fixture=savedFixture;
+ values[RollUpBlankLineSeconds].u.fs_d.value=0;values[RollUpLines].u.fs_d.value=2;values[RollUpCurrentLine].u.fs_d.value=1;fixture=savedFixture;
  values[RollUpEnabled].u.fs_d.value=0;in.current_time=150;values[TextAlignment].u.fs_d.value=2;const auto centerAligned=typographyFrame();
  for(int alignment:{1,3}){values[TextAlignment].u.fs_d.value=alignment;check(differs(centerAligned,typographyFrame()),"Compiled text-alignment scalar did not change actual glyph placement");}
  dlclose(binary);std::cout<<"Compiled adapter smoke passed: ARGB/determinism/reflow/half-resolution and pixel-equal persisted adjustment-origin Razor frames; not host acceptance.\n";return 0;
